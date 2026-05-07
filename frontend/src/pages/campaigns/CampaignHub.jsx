@@ -660,7 +660,7 @@ function AgentsTab({ campaign }) {
         )
       })()}
 
-      {repairNick && <CookieRepairModal nick={repairNick} onClose={() => setRepairNick(null)} />}
+      {repairNick && <CookieRepairModal account={repairNick} onClose={() => setRepairNick(null)} />}
 
       {pickerOpen && (
         <div
