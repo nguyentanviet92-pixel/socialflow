@@ -50,6 +50,16 @@ async function checkAccountStatus(page, supabase, account_id) {
     if (document.querySelector('form#login_form, input[name="email"][type="email"], #loginform'))
       return { blocked: true, reason: 'session_expired', detail: 'Login form detected — session expired' }
 
+    // "Continue as X" / saved-login chooser page — FB remembers profile but
+    // session cookie expired. Marker: "Tạo tài khoản mới" / "Create new account"
+    // button only appears when logged OUT. Combined with "Tiếp tục" / "Continue"
+    // it's unambiguous (the regular logged-in feed never shows these together).
+    const hasCreateAccount = /tạo tài khoản mới|create new account/i.test(text)
+    const hasContinue = /tiếp tục|continue|dùng trang cá nhân khác|use another profile/i.test(text)
+    const hasLoggedInNav = !!document.querySelector('[aria-label="Your profile"], [aria-label="Trang cá nhân của bạn"], [aria-label="Account"], [aria-label="Tài khoản"], [data-pagelet="LeftRail"]')
+    if (hasCreateAccount && hasContinue && !hasLoggedInNav)
+      return { blocked: true, reason: 'session_expired', detail: 'Saved-login chooser shown — cookie expired' }
+
     // "Not Found" on a sparse FB page = session expired, FB refused to serve content
     const bodyLen = text.trim().length
     if (bodyLen < 300 && /not found/i.test(text))
