@@ -4,7 +4,7 @@
  * Uses 3-layer extraction: GraphQL interception → Regex fallback → DOM links
  */
 
-const { getPage, releaseSession } = require('../../browser/session-pool')
+const { getPage, releaseSession, closeSession } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove, humanClick } = require('../../browser/human')
 const { saveDebugScreenshot } = require('./post-utils')
 const { checkHardLimit, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
@@ -259,6 +259,23 @@ async function campaignDiscoverGroups(payload, supabase) {
       console.log(`[CAMPAIGN-SCOUT] Searching groups: "${keyword}"`)
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
       await R.sleepRange(3000, 5000)
+
+      // Detect login page / Not Found after navigate — session died
+      const pageStatus = await page.evaluate(() => {
+        const url = window.location.href
+        const text = (document.body?.innerText || '').trim()
+        const isLogin = url.includes('/login') || url.includes('/checkpoint') ||
+          !!document.querySelector('form#login_form, input[name="email"][type="email"]')
+        const isNotFound = text.length < 300 && /not found/i.test(text)
+        return { isLogin, isNotFound, url }
+      }).catch(() => ({ isLogin: false, isNotFound: false }))
+
+      if (pageStatus.isLogin || pageStatus.isNotFound) {
+        console.log(`[CAMPAIGN-SCOUT] 🔴 Session expired for ${account_id.slice(0, 8)} — login/NotFound at ${pageStatus.url}`)
+        await supabase.from('accounts').update({ status: 'dead', last_error: 'Session expired detected during group search' }).eq('id', account_id)
+        await closeSession(account_id).catch(() => {})
+        throw new Error('SKIP_session_not_logged_in')
+      }
 
       // Scroll to load more results + trigger more GraphQL responses
       const scrollCount = R.randInt(3, 6)
@@ -885,12 +902,16 @@ async function campaignDiscoverGroups(payload, supabase) {
       topic,
     }
   } catch (err) {
+    if (err.message === 'SKIP_session_not_logged_in') {
+      // Browser already closed inside loop — just rethrow for job runner to mark failed
+      throw err
+    }
     if (page) await saveDebugScreenshot(page, `campaign-scout-${account_id}`)
     throw err
   } finally {
     await logger.flush().catch(() => {})
-    // DON'T navigate to about:blank — keep page on FB for session reuse
-    await releaseSession(account_id, supabase)
+    // closeSession already called if session died; otherwise keep page for reuse
+    await releaseSession(account_id, supabase).catch(() => {})
   }
 }
 

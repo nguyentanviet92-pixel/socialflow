@@ -45,6 +45,15 @@ async function checkAccountStatus(page, supabase, account_id) {
     if (url.includes('/login/') || url.includes('/login?') || url.includes('/login.php'))
       return { blocked: true, reason: 'session_expired', detail: 'Session expired, need re-login' }
 
+    // Login form present without URL change (FB renders login without redirect)
+    if (document.querySelector('form#login_form, input[name="email"][type="email"], #loginform'))
+      return { blocked: true, reason: 'session_expired', detail: 'Login form detected — session expired' }
+
+    // "Not Found" on a sparse FB page = session expired, FB refused to serve content
+    const bodyLen = text.trim().length
+    if (bodyLen < 300 && /not found/i.test(text))
+      return { blocked: true, reason: 'session_expired', detail: 'Page shows Not Found — session expired' }
+
     if (/your account has been disabled|tài khoản.{0,20}bị vô hiệu hóa/i.test(text))
       return { blocked: true, reason: 'disabled', detail: 'Account disabled' }
 
@@ -63,8 +72,10 @@ async function checkAccountStatus(page, supabase, account_id) {
   if (status.blocked) {
     console.log(`[POST] Account ${account_id} BLOCKED: ${status.reason} - ${status.detail}`)
 
+    const dbStatus = status.reason === 'session_expired' ? 'dead' : 'checkpoint'
     await supabase.from('accounts').update({
-      status: status.reason === 'session_expired' ? 'dead' : 'checkpoint',
+      status: dbStatus,
+      last_error: status.detail,
     }).eq('id', account_id)
 
     // Save debug screenshot
