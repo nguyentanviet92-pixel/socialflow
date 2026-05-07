@@ -135,7 +135,8 @@ async function campaignPost(payload, supabase) {
     await humanMouseMove(page)
 
     // Check account status
-    await checkAccountStatus(page, supabase, account)
+    const _accStatus = await checkAccountStatus(page, supabase, account_id)
+    if (_accStatus.blocked) throw new Error(`Account blocked: ${_accStatus.detail}`)
 
     // Setup post ID interceptor
     const interceptor = setupPostIdInterceptor(page)

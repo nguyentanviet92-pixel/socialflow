@@ -4,6 +4,7 @@
  */
 const { delay, humanClick, humanType, humanBrowse, humanMouseMove } = require('../../browser/human')
 const { downloadFromR2 } = require('../../lib/r2')
+const { closeSession } = require('../../browser/session-pool')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -78,12 +79,17 @@ async function checkAccountStatus(page, supabase, account_id) {
       last_error: status.detail,
     }).eq('id', account_id)
 
-    // Save debug screenshot
+    // Save debug screenshot BEFORE closing browser
     try {
       const debugDir = path.join(__dirname, '..', '..', 'debug')
       if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true })
       await page.screenshot({ path: path.join(debugDir, `post-blocked-${account_id}-${Date.now()}.png`), fullPage: false })
     } catch {}
+
+    // Close the browser session — keeping a dead session alive causes the next
+    // job picked up by this nick to inherit the same expired cookie and waste
+    // a job slot. Caller's finally() will see no live session and skip releaseSession.
+    await closeSession(account_id).catch(() => {})
   }
 
   return status
