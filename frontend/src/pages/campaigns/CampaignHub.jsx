@@ -1364,7 +1364,7 @@ function ActivityTab({ campaignId, campaign }) {
   const pages = pageNumbers(page, totalPages)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col">
       {/* ── Toolbar ── */}
       <div
         className="flex items-center gap-2 px-4 py-2.5 flex-wrap"
@@ -1431,7 +1431,7 @@ function ActivityTab({ campaignId, campaign }) {
       </div>
 
       {/* ── Feed grouped by date ── */}
-      <div className="flex-1 overflow-auto">
+      <div>
         {isLoading ? (
           <div className="p-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>Đang tải…</div>
         ) : rows.length === 0 ? (
@@ -2308,8 +2308,8 @@ export default function CampaignHub() {
         )}
         {tab === 'runtime' && (
           <MergedTab>
-            <ExecutionTab campaignId={id} />
             <ActivityTab campaignId={id} campaign={campaign} />
+            <ExecutionTab campaignId={id} />
           </MergedTab>
         )}
         {tab === 'assets' && (
