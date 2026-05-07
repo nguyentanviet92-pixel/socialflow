@@ -632,7 +632,7 @@ Chỉ trả về COMMENT, không giải thích.`
     let comment = (await callAI({
       taskType: 'comment_gen',
       prompt,
-      maxTokens: 120,
+      maxTokens: 300,
       temperature: 0.85,
       ownerId,
       accountId: accId,
