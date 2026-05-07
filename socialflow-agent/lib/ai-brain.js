@@ -620,8 +620,9 @@ ${langInstr}
 - Hỏi ngược câu không liên quan khi bài đang nói chuyện khác
 - Lái sang chủ đề không có trong bài
 
-=== ĐỘ DÀI ===
-1-2 câu là đủ cho bài chia sẻ/update. 2-3 câu nếu trả lời câu hỏi kỹ thuật cụ thể.
+=== ĐỘ DÀI & CẤU TRÚC ===
+Luôn viết 2 câu riêng biệt. Câu 1: ý chính (react/kể/hỏi). Câu 2: bổ trợ (giải thích/kể thêm/hỏi thêm).
+KHÔNG dùng dấu phẩy nối 2 ý thành 1 câu dài. 3 câu nếu trả lời kỹ thuật.
 Dùng từ đệm: ạ, nhé, nha, á, thôi, mà, nè, luôn, đấy. Xưng mình/bạn/bác.
 
 Chỉ trả về COMMENT, không giải thích.`
