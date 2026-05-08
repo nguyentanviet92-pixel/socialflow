@@ -127,13 +127,14 @@ function detectAdPost(post) {
 async function evaluatePosts({ posts, campaign, nick, group, topic, maxPicks, ownerId, adConfig, brandConfig, groupLanguage }) {
   if (!posts?.length) return []
 
-  // Phase 8 Fix 1: tag ad posts upfront so downstream never comments on them.
-  // We keep them in the array (so indices stay stable) but mark is_ad_post=true
-  // and the AI prompt is instructed to return action=skip for those indices.
+  // Phase 8 Fix 1: We used to manually tag ad posts (via detectAdPost) but this
+  // caused false positives where legitimate users asking "cài VPS ở đâu giá rẻ"
+  // were skipped because of keywords like "giá".
+  // Now, we let the AI read the FULL batch of posts and their UIDs, and the AI
+  // alone decides if it's a competitor ad (action: "skip") or a brand opportunity.
   for (const p of posts) {
-    if (p.is_ad_post === undefined) p.is_ad_post = detectAdPost(p)
+    p.is_ad_post = false // Let AI decide contextually
   }
-  const adIdxSet = new Set(posts.map((p, i) => p.is_ad_post ? i + 1 : null).filter(Boolean))
 
   const context = buildContext({ campaign, nick, group, topic })
 
@@ -141,10 +142,8 @@ async function evaluatePosts({ posts, campaign, nick, group, topic, maxPicks, ow
   const lang = groupLanguage || detectGroupLanguage(posts)
 
   // Fix 2: include thread comments per post so AI scores against the discussion.
-  // Fix 1: mark ad posts visibly in the prompt so AI enforces action=skip for them.
   const postList = posts.map((p, i) => {
-    const adTag = p.is_ad_post ? ' [AD_POST=true → BỎ QUA]' : ''
-    const head = `${i + 1}. [${p.author || '?'}]${adTag} "${(p.body || p.text || '').substring(0, 250)}"`
+    const head = `${i + 1}. [${p.author || '?'}] "${(p.body || p.text || '').substring(0, 250)}"`
     const tc = Array.isArray(p.threadComments) ? p.threadComments.slice(0, 3) : []
     if (tc.length === 0) return head
     const threadStr = tc.map(c => `     ↳ ${c.author || '?'}: "${(c.text || '').substring(0, 150)}"`).join('\n')
@@ -223,10 +222,12 @@ ${langBlock}${adSection}
 5. Nếu THẬT SỰ không có gì để nói → score 3. Nhưng ĐỪNG quá khắt khe — bài trong nhóm "${topic}" thường ít nhất liên quan gián tiếp.
 
 === BẮT BUỘC BỎ QUA ===
-- Bài có [AD_POST=true] trong header → action: "skip", score ≤ 2 (đây là quảng cáo của người khác)
-- Bài quảng cáo từ ĐỐI THỦ
+- Bài quảng cáo từ ĐỐI THỦ hoặc thương hiệu khác → action: "skip", score ≤ 2
 - Bài spam, chỉ có link không nội dung
 - Bài mà thread đã có câu trả lời đầy đủ
+
+=== CƠ HỘI QUẢNG CÁO ===
+- Nếu bài viết hỏi về giải pháp/sản phẩm mà thương hiệu của chúng ta cung cấp (ví dụ "cài VPS ở đâu", "cách dùng an toàn") → BẮT BUỘC set ad_opportunity: true và đánh score cao (8-10) để lập tức bình luận quảng cáo. Đừng nhầm lẫn bài hỏi mua với bài quảng cáo của đối thủ.
 
 Trả về JSON array:
 [{"index": 1, "score": 8, "reason": "...", "action": "comment", "comment_angle": "...", "comment_language": "vi", "ad_opportunity": false, "ad_reason": "...", "lead_potential": false}]

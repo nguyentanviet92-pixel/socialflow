@@ -2242,59 +2242,47 @@ async function campaignNurture(payload, supabase) {
               let commentBox = null
               let openMethod = null
 
-              // S1 — data-nurture-comment fast path
-              let commentBtn = await page.$(`[data-nurture-comment="${post.index}"]`)
-              if (commentBtn) openMethod = 's1_dataattr'
+              // S5 (Direct Visit) is now the PRIMARY method as requested:
+              // "khi ai chấm điểm kèm uid chúng ta sẽ chỉ cần vào trực tiếp bài đó cmt"
+              // Only fallback to S1-S4 if postUrl is missing (rare).
+              if (!post.postUrl) {
+                // Legacy S1-S4 fallbacks for posts missing URLs
+                let commentBtn = await page.$(`[data-nurture-comment="${post.index}"]`)
+                if (commentBtn) openMethod = 's1_dataattr'
 
-              // S2 — re-find via URL match
-              if (!commentBtn && post.postUrl) {
-                if (await tagViaUrl(post.postUrl)) {
-                  commentBtn = await page.$('[data-nurture-refound="1"]')
-                  if (commentBtn) openMethod = 's2_url_refind'
-                }
-              }
-
-              // S3 — re-find via like-button anchor + body match
-              if (!commentBtn) {
-                // Clear any prior tag
-                await page.evaluate(() => document.querySelectorAll('[data-nurture-refound]').forEach(e => e.removeAttribute('data-nurture-refound'))).catch(() => {})
-                if (await tagViaLikeAnchor(postText.substring(0, 60))) {
-                  commentBtn = await page.$('[data-nurture-refound="1"]')
-                  if (commentBtn) openMethod = 's3_likeanchor'
-                }
-              }
-
-              // S4 — re-find via raw body text match (last desperate DOM search)
-              if (!commentBtn) {
-                await page.evaluate(() => document.querySelectorAll('[data-nurture-refound]').forEach(e => e.removeAttribute('data-nurture-refound'))).catch(() => {})
-                if (await tagViaBodyMatch(postText.substring(0, 60))) {
-                  commentBtn = await page.$('[data-nurture-refound="1"]')
-                  if (commentBtn) openMethod = 's4_bodymatch'
-                }
-              }
-
-              // Try clicking the comment btn (S1-S4 all converge here)
-              const urlBeforeClick = page.url()
-              if (commentBtn) {
-                try {
-                  await commentBtn.scrollIntoViewIfNeeded()
-                  await R.sleepRange(500, 1000)
-                  await commentBtn.click({ force: true, timeout: 5000 })
-                  await R.sleepRange(1500, 2800)
-                  // DIAGNOSTIC: did the click kill the page?
-                  if (page.isClosed()) {
-                    const t = new Date().toISOString().slice(11, 23)
-                    console.error(`[NURTURE-DBG ${t}] page CLOSED after commentBtn.click (${openMethod}) post #${post.index} — FB likely force-closed tab`)
+                if (!commentBtn) {
+                  await page.evaluate(() => document.querySelectorAll('[data-nurture-refound]').forEach(e => e.removeAttribute('data-nurture-refound'))).catch(() => {})
+                  if (await tagViaLikeAnchor(postText.substring(0, 60))) {
+                    commentBtn = await page.$('[data-nurture-refound="1"]')
+                    if (commentBtn) openMethod = 's3_likeanchor'
                   }
-                  commentBox = await findCommentBox()
-                  // Some FB layouts navigate to permalink page on click → textbox usually visible there
-                  if (!commentBox && !page.isClosed() && page.url() !== urlBeforeClick) {
-                    await R.sleepRange(1500, 2500)
+                }
+
+                if (!commentBtn) {
+                  await page.evaluate(() => document.querySelectorAll('[data-nurture-refound]').forEach(e => e.removeAttribute('data-nurture-refound'))).catch(() => {})
+                  if (await tagViaBodyMatch(postText.substring(0, 60))) {
+                    commentBtn = await page.$('[data-nurture-refound="1"]')
+                    if (commentBtn) openMethod = 's4_bodymatch'
+                  }
+                }
+
+                // Try clicking the comment btn (legacy)
+                const urlBeforeClick = page.url()
+                if (commentBtn) {
+                  try {
+                    await commentBtn.scrollIntoViewIfNeeded()
+                    await R.sleepRange(500, 1000)
+                    await commentBtn.click({ force: true, timeout: 5000 })
+                    await R.sleepRange(1500, 2800)
+                    if (page.isClosed()) console.error(`[NURTURE] page CLOSED after commentBtn.click (${openMethod})`)
                     commentBox = await findCommentBox()
+                    if (!commentBox && !page.isClosed() && page.url() !== urlBeforeClick) {
+                      await R.sleepRange(1500, 2500)
+                      commentBox = await findCommentBox()
+                    }
+                  } catch (e) {
+                    console.warn(`[NURTURE] click failed: ${e.message}`)
                   }
-                } catch (clickErr) {
-                  const t = new Date().toISOString().slice(11, 23)
-                  console.warn(`[NURTURE-DBG ${t}] click commentBtn failed (${openMethod}): ${clickErr.message} | page.isClosed()=${page.isClosed()}`)
                 }
               }
 
