@@ -1,4 +1,4 @@
-const { extractCUserId, generateFingerprint, normalizeCookieInput } = require('../services/facebook/fb-auth')
+const { extractCUserId, generateFingerprint, normalizeCookieInput, validateCookie } = require('../services/facebook/fb-auth')
 const { fetchPersonalInbox, replyPersonalMessage } = require('../services/facebook/fb-inbox')
 const { getAccessibleIds, canAccess } = require('../lib/access-check')
 const { buildInitialBudget } = require('../services/warmup-budget')
@@ -1030,7 +1030,38 @@ Không markdown wrapper. Chỉ JSON.`
 
     if (error) return reply.code(500).send({ error: error.message })
 
-    // Queue check_health job with high priority — agent will pick up + verify
+    // Immediate server-side validation — don't make user wait 3 min for agent
+    // when a 2s HTTP check can already tell us if the cookie is good.
+    let immediateStatus = null
+    try {
+      const v = await validateCookie(data)
+      if (v.valid === true) {
+        immediateStatus = 'healthy'
+        await supabase.from('accounts').update({
+          status: 'healthy',
+          last_checked_at: new Date().toISOString(),
+          last_error: null,
+        }).eq('id', req.params.id)
+      } else if (v.valid === false) {
+        const reasonMap = { CHECKPOINT: 'checkpoint', SESSION_EXPIRED: 'expired', DISABLED: 'disabled' }
+        const mapped = reasonMap[v.reason]
+        if (mapped) {
+          immediateStatus = mapped
+          await supabase.from('accounts').update({
+            status: mapped,
+            last_checked_at: new Date().toISOString(),
+            last_error: v.reason,
+            is_active: false,
+          }).eq('id', req.params.id)
+        }
+      }
+      // valid: null (AMBIGUOUS) → leave as 'unknown', let agent verify
+    } catch (e) {
+      fastify.log.warn({ err: e.message }, '[UPDATE-COOKIE] immediate validate failed — falling back to agent')
+    }
+
+    // Queue check_health job — agent does deep verify (DOM + dtsg + avatar) even
+    // if immediate check passed, so the nick gets a complete profile snapshot.
     const { data: job } = await supabase.from('jobs').insert({
       type: 'check_health',
       priority: 1,
@@ -1049,7 +1080,17 @@ Không markdown wrapper. Chỉ JSON.`
       fastify.log.warn({ err: e.message }, '[ACTIVE-HOURS] redistribute failed after cookie_refreshed')
     }
 
-    return { ...data, health_check_job_id: job?.id, message: 'Cookie updated — health check queued' }
+    return {
+      ...data,
+      status: immediateStatus || 'unknown',
+      health_check_job_id: job?.id,
+      immediate_validation: immediateStatus ? { passed: immediateStatus === 'healthy', status: immediateStatus } : null,
+      message: immediateStatus === 'healthy'
+        ? 'Cookie verified — nick active'
+        : immediateStatus
+          ? `Cookie issue: ${immediateStatus}`
+          : 'Cookie updated — health check queued',
+    }
   })
 
   // ─── PATCH /accounts/:id/status ──────────────────────────
