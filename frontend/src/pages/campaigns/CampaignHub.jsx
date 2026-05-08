@@ -1365,22 +1365,41 @@ function ActivityTab({ campaignId, campaign }) {
 
   return (
     <div className="flex flex-col">
-      {/* ── Toolbar ── */}
+      {/* ── Toolbar: action type as tab pills ── */}
       <div
-        className="flex items-center gap-2 px-4 py-2.5 flex-wrap"
+        className="flex items-center gap-1 px-4 pt-2 pb-0 flex-wrap"
         style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}
       >
-        <span className="font-semibold text-sm">Hoạt động</span>
+        <span className="font-semibold text-sm mr-2">Hoạt động</span>
+        {FILTERABLE_TYPES.map(t => {
+          const active = filterType === t.value
+          return (
+            <button
+              key={t.value || 'all'}
+              onClick={() => setFilterType(t.value)}
+              className="px-2.5 py-1 text-xs whitespace-nowrap"
+              style={{
+                borderTop: '1px solid ' + (active ? 'var(--hermes)' : 'transparent'),
+                borderLeft: '1px solid ' + (active ? 'var(--border)' : 'transparent'),
+                borderRight: '1px solid ' + (active ? 'var(--border)' : 'transparent'),
+                borderBottom: 'none',
+                marginBottom: '-1px',
+                background: active ? 'var(--bg)' : 'transparent',
+                color: active ? 'var(--hermes)' : 'var(--text-muted)',
+                fontWeight: active ? 600 : 400,
+              }}
+            >
+              {t.label}
+            </button>
+          )
+        })}
+      </div>
 
-        <select
-          className="px-2 py-1 rounded text-xs"
-          style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
-          value={filterType}
-          onChange={e => setFilterType(e.target.value)}
-        >
-          {FILTERABLE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-        </select>
-
+      {/* ── Toolbar row 2: date + nick + count + CSV ── */}
+      <div
+        className="flex items-center gap-2 px-4 py-2 flex-wrap"
+        style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}
+      >
         <select
           className="px-2 py-1 rounded text-xs"
           style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
