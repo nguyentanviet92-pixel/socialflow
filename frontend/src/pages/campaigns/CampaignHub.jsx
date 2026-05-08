@@ -22,6 +22,36 @@ const asArray = (d) => Array.isArray(d) ? d
   : Array.isArray(d?.data) ? d.data
   : []
 
+// ─── System Alert Banner ─────────────────────────────────────
+function SystemAlertBanner() {
+  const { data: alerts } = useQuery({
+    queryKey: ['system-alerts-urgent'],
+    queryFn: async () => {
+      try { return (await api.get('/notifications?limit=5&level=urgent&is_read=false')).data } catch { return null }
+    },
+    refetchInterval: 15000,
+  })
+
+  const unreadAlerts = alerts?.data || []
+  if (unreadAlerts.length === 0) return null
+
+  return (
+    <div className="m-6 p-4 rounded" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
+      <div className="flex items-center gap-2 text-danger font-semibold mb-2 text-sm uppercase tracking-wider">
+        <span>⚠</span> System Alerts ({unreadAlerts.length})
+      </div>
+      <div className="space-y-2">
+        {unreadAlerts.map(a => (
+          <div key={a.id} className="text-xs text-app-primary">
+            <span className="font-medium mr-2">{a.title}</span>
+            <span className="text-app-muted">{a.body}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Tab: Overview ─────────────────────────────────────────
 // Daily report card — shows latest narrative + today's KPI totals. The
 // narrative is optional (LLM might be blocked); fallback is a bullet
@@ -176,6 +206,7 @@ function OverviewTab({ campaign, campaignId }) {
 
   return (
     <div className="overflow-auto font-mono-ui">
+      <SystemAlertBanner />
       <DailyReportCard campaignId={campaignId} />
       <div className="p-6">
       {/* Empty state — prompt to configure Hermes */}
@@ -1007,6 +1038,32 @@ function GroupsTab({ campaignId }) {
                     <a href={g.url} target="_blank" rel="noopener noreferrer" className="text-info hover:text-hermes text-[10px]">
                       [Xem ↗]
                     </a>
+                  )}
+                </div>
+
+                {/* AI Evaluation / Health Monitor */}
+                <div className="mt-1.5 flex items-center gap-3 text-[10px] text-app-muted">
+                  {g.score_tier && (
+                    <span className={
+                      g.score_tier === 'tier1_potential' ? 'text-hermes' : 
+                      g.score_tier === 'tier2_prospect' ? 'text-info' : 'text-app-muted'
+                    }>
+                      💎 {g.score_tier.replace('_', ' ')}
+                    </span>
+                  )}
+                  {g.risk_level && (
+                    <span className={
+                      g.risk_level === 'high' ? 'text-danger' : 
+                      g.risk_level === 'medium' ? 'text-warn' : 'text-hermes'
+                    }>
+                      🛡 risk: {g.risk_level}
+                    </span>
+                  )}
+                  {g.global_score > 0 && <span>⭐ score: {g.global_score}</span>}
+                  {g.ai_relevance && Object.values(g.ai_relevance).some(v => v.note || v.reason) && (
+                    <span className="truncate flex-1">
+                      📝 {Object.values(g.ai_relevance).find(v => v.note || v.reason)?.note || Object.values(g.ai_relevance).find(v => v.note || v.reason)?.reason}
+                    </span>
                   )}
                 </div>
 

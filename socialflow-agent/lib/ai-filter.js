@@ -226,10 +226,11 @@ async function expandSearchKeywords(topic, mission, ownerId) {
   const baseKeywords = (topic || '').split(/[,;]+/).map(k => k.trim()).filter(k => k.length > 1)
 
   try {
-    const kwPrompt = `Tìm nhóm Facebook về: "${topic}"
-${mission ? `Chi tiết: ${mission}` : ''}
-Tạo 4-6 từ khóa tìm kiếm (tiếng Việt hoặc Anh).
-Trả về CHỈ JSON array. VD: ["vps hosting", "thuê server"]`
+    const kwPrompt = `Bạn cần tìm các nhóm Facebook (Facebook Groups) có chứa khách hàng tiềm năng cho: "${topic}"
+${mission ? `Mục tiêu: ${mission}` : ''}
+Hãy tạo 5-8 từ khóa tìm kiếm NGẮN GỌN (1-3 chữ) sát với cộng đồng, vấn đề, hoặc sở thích liên quan đến chủ đề này (Tiếng Việt hoặc Anh). 
+Lưu ý: Không chỉ tìm tên sản phẩm, hãy tìm cả MỤC ĐÍCH SỬ DỤNG hoặc NGÀNH NGHỀ của khách hàng.
+Trả về CHỈ JSON array. VD: ["vps hosting", "thuê server", "cộng đồng mmo", "chạy ads"]`
 
     const text = await callAI({
       taskType: 'generic',

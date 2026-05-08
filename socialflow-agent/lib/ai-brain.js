@@ -539,7 +539,7 @@ ${langInstr}
 2. NEVER write generic comments that could paste into any post
 3. If post asks technical question → answer with technical detail (config, command, numbers)
 4. If post shares experience → respond to THAT specific experience
-5. Write 1-2 sentences, short, casual abbreviations OK
+5. Viết ngắn gọn, tự nhiên, có thể dùng slang/viết tắt, được phép viết 2-4 câu nếu cần thiết.
 6. AVOID: "I'm also looking into...", "Have you tried X?", "Very useful", "Thanks for sharing"
 7. Read the post carefully and respond SPECIFICALLY, don't drift to other topics
 
@@ -567,7 +567,7 @@ ${langInstr}
 2. KHÔNG ĐƯỢC viết comment chung chung có thể paste vào bất kỳ bài nào
 3. Nếu bài hỏi kỹ thuật → trả lời kỹ thuật (config, command, số liệu)
 4. Nếu bài chia sẻ kinh nghiệm → phản hồi ĐÚNG kinh nghiệm đó
-5. Viết 1-2 câu, ngắn gọn, có thể dùng slang/viết tắt
+5. Viết tự nhiên như người bình thường, ngắn gọn nhưng đầy đủ ý (2-4 câu), KHÔNG dùng văn phong trang trọng, có thể dùng slang/viết tắt.
 6. KHÔNG dùng: "Mình cũng đang...", "Bạn đã thử X chưa?", "Rất hay/bổ ích", "Cảm ơn chia sẻ"
 7. PHẢI đọc kỹ bài viết và phản hồi CỤ THỂ, KHÔNG lái sang chủ đề khác
 
@@ -599,7 +599,7 @@ Chỉ trả về COMMENT, không giải thích.`
       // Clean up: remove quotes, URLs, excessive length
       comment = comment.replace(/^["']|["']$/g, '').trim()
       comment = comment.replace(/https?:\/\/\S+/gi, '').trim()
-      if (comment.length > 200) comment = comment.substring(0, 200).replace(/\s\S*$/, '')
+      if (comment.length > 400) comment = comment.substring(0, 400).replace(/\s\S*$/, '')
 
       // REJECT generic comments that don't reference post content
       const genericPatterns = [
