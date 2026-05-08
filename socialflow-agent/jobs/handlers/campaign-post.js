@@ -12,6 +12,7 @@ const {
   updateAccountStats, saveDebugScreenshot,
   ensureDailyReset, checkDailyLimit,
   setupPostIdInterceptor, getInterceptedPostId,
+  friendlyError,
 } = require('./post-utils')
 const { checkHardLimit } = require('../../lib/hard-limits')
 const { getActionParams } = require('../../lib/plan-executor')
@@ -218,7 +219,7 @@ async function campaignPost(payload, supabase) {
       campaign_id,
     }).catch(() => {})
 
-    logger.log('post', { target_type: targetType, target_id: targetFbId, target_name: targetName, result_status: 'failed', details: { error: err.message, content_id: contentId } })
+    logger.log('post', { target_type: targetType, target_id: targetFbId, target_name: targetName, result_status: 'failed', details: { error: friendlyError(err), content_id: contentId } })
     throw err
   } finally {
     await logger.flush().catch(() => {})

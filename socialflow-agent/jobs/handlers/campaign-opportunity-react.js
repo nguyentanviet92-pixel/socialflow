@@ -6,7 +6,7 @@
 
 const { getPage, releaseSession } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove } = require('../../browser/human')
-const { checkAccountStatus, saveDebugScreenshot } = require('./post-utils')
+const { checkAccountStatus, saveDebugScreenshot, friendlyError } = require('./post-utils')
 const { checkHardLimit, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
 const { qualityGateComment } = require('../../lib/ai-brain')
 const { generateOpportunityComment } = require('../../lib/ai-comment')
@@ -231,7 +231,7 @@ async function campaignOpportunityReact(payload, supabase) {
       target_name: mg?.group_name,
       target_id: opp.post_fb_id,
       result_status: 'failed',
-      details: { error: err.message, comment_text: commentText },
+      details: { error: friendlyError(err), comment_text: commentText },
     })
     await logger.flush()
 

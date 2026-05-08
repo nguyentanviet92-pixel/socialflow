@@ -5,7 +5,7 @@
 
 const { getPage, releaseSession } = require('../../browser/session-pool')
 const { humanScroll, humanMouseMove, humanClick } = require('../../browser/human')
-const { saveDebugScreenshot } = require('./post-utils')
+const { saveDebugScreenshot, friendlyError } = require('./post-utils')
 const { checkHardLimit } = require('../../lib/hard-limits')
 const R = require('../../lib/randomizer')
 const { getActionParams } = require('../../lib/plan-executor')
@@ -160,7 +160,7 @@ async function campaignInteractProfile(payload, supabase) {
             }
           } catch (err) {
             console.warn(`[CAMPAIGN-INTERACT] Comment failed: ${err.message}`)
-            logger.log('comment', { target_type: 'profile', target_id: targetFbId, target_url: profileUrl, result_status: 'failed', details: { error: err.message } })
+            logger.log('comment', { target_type: 'profile', target_id: targetFbId, target_url: profileUrl, result_status: 'failed', details: { error: friendlyError(err) } })
           }
         }
       }

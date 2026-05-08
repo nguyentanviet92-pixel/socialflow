@@ -5,7 +5,7 @@
 
 const { getPage, releaseSession } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove, humanClick } = require('../../browser/human')
-const { saveDebugScreenshot } = require('./post-utils')
+const { saveDebugScreenshot, friendlyError } = require('./post-utils')
 const { checkHardLimit, applyAgeFactor } = require('../../lib/hard-limits')
 const R = require('../../lib/randomizer')
 const { getActionParams } = require('../../lib/plan-executor')
@@ -189,7 +189,7 @@ async function campaignSendFriendRequest(payload, supabase) {
           error_message: err.message.substring(0, 200),
         }).eq('id', target.id)
         results.push({ fb_user_id: target.fb_user_id, status: 'failed', error: err.message })
-        logger.log('friend_request', { target_type: 'profile', target_id: target.fb_user_id, target_name: target.fb_user_name, result_status: 'failed', details: { error: err.message } })
+        logger.log('friend_request', { target_type: 'profile', target_id: target.fb_user_id, target_name: target.fb_user_name, result_status: 'failed', details: { error: friendlyError(err) } })
       }
 
       // Gap between friend requests (45-90s)

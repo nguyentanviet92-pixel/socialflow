@@ -6,7 +6,7 @@
 
 const { getPage, releaseSession, closeSession } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove, humanClick } = require('../../browser/human')
-const { saveDebugScreenshot } = require('./post-utils')
+const { saveDebugScreenshot, friendlyError } = require('./post-utils')
 const { checkHardLimit, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
 const R = require('../../lib/randomizer')
 const { getActionParams } = require('../../lib/plan-executor')
@@ -885,7 +885,7 @@ async function campaignDiscoverGroups(payload, supabase) {
         }
       } catch (err) {
         console.warn(`[CAMPAIGN-SCOUT] Failed to join ${group.name}: ${err.message}`)
-        logger.log('join_group', { target_type: 'group', target_id: group.fb_group_id, target_name: group.name, target_url: group.url, result_status: 'failed', details: { error: err.message } })
+        logger.log('join_group', { target_type: 'group', target_id: group.fb_group_id, target_name: group.name, target_url: group.url, result_status: 'failed', details: { error: friendlyError(err) } })
       }
     }
 

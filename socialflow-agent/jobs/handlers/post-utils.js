@@ -862,8 +862,31 @@ async function ensureNotCancelled(jobId, supabase, context = '') {
   }
 }
 
+// Translate Playwright cascade errors into user-readable Vietnamese messages.
+// "Target page, context or browser has been closed" — common after a checkpoint
+// causes our session pool to close the browser mid-action, OR FB redirects
+// (login/checkpoint) while we're typing/clicking. Either way, the underlying
+// reason is the cookie died — that's logged separately by checkAccountStatus.
+function friendlyError(err) {
+  const msg = String(err?.message || err || 'Unknown error')
+  if (/Target page,? context or browser has been closed/i.test(msg)) {
+    return 'Phiên hết hạn giữa chừng (browser bị đóng — checkpoint/login redirect)'
+  }
+  if (/Execution context was destroyed/i.test(msg)) {
+    return 'Trang FB chuyển hướng giữa thao tác (có thể do checkpoint)'
+  }
+  if (/Timeout \d+ms exceeded/i.test(msg)) {
+    return 'Trang FB load quá chậm — quá ' + (msg.match(/Timeout (\d+)ms/)?.[1] || '?') + 'ms'
+  }
+  if (/net::ERR_PROXY_CONNECTION_FAILED|net::ERR_TUNNEL_CONNECTION_FAILED/i.test(msg)) {
+    return 'Proxy lỗi — không kết nối được'
+  }
+  return msg.length > 250 ? msg.substring(0, 250) + '…' : msg
+}
+
 module.exports = {
   checkAccountStatus,
+  friendlyError,
   openComposer,
   typeCaption,
   uploadMedia,
