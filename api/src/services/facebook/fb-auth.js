@@ -34,26 +34,46 @@ async function validateCookie(account, proxyConfig = null) {
     const res = await axios.get('https://www.facebook.com/', {
       headers: { Cookie: account.cookie_string, 'User-Agent': account.user_agent || getDefaultUA(), ...FB_HEADERS },
       ...(proxyConfig && { proxy: buildAxiosProxy(proxyConfig) }),
-      timeout: 10000
+      timeout: 10000,
+      maxRedirects: 5,
+      validateStatus: () => true,
     })
 
-    const isLoggedIn = res.data.includes('"is_logged_in":true') ||
-                       !res.data.includes('"is_logged_in":false')
+    const html = String(res.data || '')
+    const finalUrl = (res.request?.res?.responseUrl || res.config?.url || '').toLowerCase()
 
-    const ERROR_PATTERNS = {
-      CHECKPOINT: ['checkpoint', 'security check', 'verify your identity'],
-      SESSION_EXPIRED: ['session expired', 'please log in'],
-      RATE_LIMIT: ['try again later', 'too many requests'],
-      DISABLED: ['account disabled']
+    // Hard checkpoint markers
+    if (finalUrl.includes('/checkpoint') || /checkpoint|security check|verify your identity|xác nhận danh tính/i.test(html)) {
+      return { valid: false, reason: 'CHECKPOINT' }
+    }
+    if (/account disabled|tài khoản.{0,20}bị vô hiệu hóa/i.test(html)) {
+      return { valid: false, reason: 'DISABLED' }
+    }
+    if (/try again later|too many requests/i.test(html)) {
+      return { valid: false, reason: 'RATE_LIMIT' }
     }
 
-    for (const [type, checks] of Object.entries(ERROR_PATTERNS)) {
-      if (checks.some(c => res.data.toLowerCase().includes(c))) {
-        return { valid: false, reason: type }
-      }
+    // Strong logged-in markers (positive signals only — don't trust absence)
+    const hasUserIdJson = /"USER_ID"\s*:\s*"\d+"/.test(html) || /"actorID"\s*:\s*"\d+"/.test(html)
+    const hasLoggedInTrue = /"is_logged_in"\s*:\s*true/.test(html)
+    const hasDtsg = /"DTSGInitialData"|name="fb_dtsg"/.test(html)
+    if (hasUserIdJson || hasLoggedInTrue || hasDtsg) return { valid: true }
+
+    // Saved-login chooser ("Tiếp tục as X" / "Create new account") = logged out
+    const hasCreateAccount = /tạo tài khoản mới|create new account/i.test(html)
+    const hasContinue = /tiếp tục|continue|dùng trang cá nhân khác|use another profile/i.test(html)
+    if (hasCreateAccount && hasContinue) return { valid: false, reason: 'SESSION_EXPIRED' }
+
+    // Login URL or login form
+    if (finalUrl.includes('/login') || /form[^>]+id="?login_form"?|name="email"[^>]*type="email"/i.test(html)) {
+      return { valid: false, reason: 'SESSION_EXPIRED' }
+    }
+    if (/"is_logged_in"\s*:\s*false/.test(html) || /please log in|session expired/i.test(html)) {
+      return { valid: false, reason: 'SESSION_EXPIRED' }
     }
 
-    return { valid: isLoggedIn }
+    // Ambiguous — don't lie. Caller should fall back to agent verify.
+    return { valid: null, reason: 'AMBIGUOUS' }
   } catch {
     return { valid: false, reason: 'NETWORK_ERROR' }
   }

@@ -54,7 +54,32 @@ export default function CookieRepairModal({ account, onClose, onSuccess }) {
       })
       return res.data
     },
-    onSuccess: () => {
+    onSuccess: async (data) => {
+      // Server-side immediate validation already happened — act on result instantly
+      if (data?.status === 'healthy') {
+        try {
+          const actRes = await api.post(`/accounts/${account.id}/activate`)
+          const jobInfo = actRes.data?.assigned_job
+            ? `— đã giao ${actRes.data.assigned_job.type}`
+            : '— nick sẵn sàng'
+          toast.success(`✓ Cookie hợp lệ ${jobInfo}`)
+        } catch {
+          toast.success('✓ Cookie hợp lệ — nick đã active')
+        }
+        setPhase('success')
+        qc.invalidateQueries({ queryKey: ['accounts'] })
+        qc.invalidateQueries({ queryKey: ['jobs'] })
+        setTimeout(() => { onSuccess?.(); onClose() }, 1500)
+        return
+      }
+      if (data?.status && ['checkpoint', 'expired', 'disabled', 'banned'].includes(data.status)) {
+        setPhase('failed')
+        setError(`Cookie ${data.status} — thử cookie khác`)
+        toast.error(`✗ Cookie ${data.status}`)
+        qc.invalidateQueries({ queryKey: ['accounts'] })
+        return
+      }
+      // Ambiguous (status='unknown') → fall back to polling agent verification
       setPhase('checking')
       startPolling()
     },

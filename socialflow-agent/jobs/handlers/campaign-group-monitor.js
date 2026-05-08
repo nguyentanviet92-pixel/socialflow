@@ -37,7 +37,7 @@ async function campaignGroupMonitor(payload, supabase) {
     .single()
   if (!account) throw new Error('Account not found')
 
-  await checkAccountStatus(account, supabase)
+  // Status check happens after page acquired (needs page.evaluate)
 
   // Load existing post IDs to dedup (last 24h)
   const { data: existing } = await supabase
@@ -58,6 +58,10 @@ async function campaignGroupMonitor(payload, supabase) {
     // Navigate to group
     const url = group_url || `https://www.facebook.com/groups/${group_fb_id}`
     console.log(`[GROUP-MONITOR] Scanning "${group_name}" (${url})`)
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+    const status = await checkAccountStatus(page, supabase, account_id)
+    if (status.blocked) throw new Error(`Account blocked: ${status.detail}`)
 
     // Scan group feed — reuse existing scanGroupPosts from ai-brain
     const posts = await scanGroupPosts(page, {

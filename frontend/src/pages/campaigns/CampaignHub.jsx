@@ -6,11 +6,13 @@
  * Existing section components are reused as tab bodies (no logic rewrite).
  */
 import { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Play, Pause, Edit, Loader, Brain, X, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
+import CookieRepairModal from '../../components/hermes/CookieRepairModal'
 import DenseStat from '../../components/hermes/DenseStat'
 import HermesCaller from '../../components/hermes/HermesCaller'
 import JobRow from '../../components/hermes/JobRow'
@@ -346,7 +348,7 @@ function OverviewTab({ campaign, campaignId }) {
                 type="button"
                 onClick={() => {
                   // Jump to Hoạt động tab filtered by this nick
-                  setSearchParams({ tab: 'activity', account_id: row.account_id })
+                  setSearchParams({ tab: 'runtime', account_id: row.account_id })
                 }}
                 className="w-full flex items-center gap-3 px-4 py-2 text-xs hover:bg-app-muted/10 text-left"
                 style={{ borderBottom: '1px solid var(--border)' }}
@@ -488,6 +490,8 @@ function HermesCentralToggle({ campaign }) {
 function AgentsTab({ campaign }) {
   const qc = useQueryClient()
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [selectedNick, setSelectedNick] = useState(null)
+  const [repairNick, setRepairNick] = useState(null)
 
   const campaignId = campaign?.id
   const roles = campaign?.campaign_roles || []
@@ -587,9 +591,12 @@ function AgentsTab({ campaign }) {
                 className="flex items-center gap-3 px-4 py-2 text-xs"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
-                <span className="flex-1 text-app-primary truncate">
+                <button
+                  className="flex-1 text-app-primary truncate text-left hover:text-hermes cursor-pointer"
+                  onClick={() => setSelectedNick({ acc, k: kpiByAccount[acc.id] })}
+                >
                   {acc.username || acc.id.slice(0, 8)}
-                </span>
+                </button>
                 <span className="w-28 text-app-muted truncate hidden md:inline">
                   {accRoles.map(r => r.role_type || r.name).filter(Boolean).join(', ') || 'hermes'}
                 </span>
@@ -617,6 +624,43 @@ function AgentsTab({ campaign }) {
           })}
         </div>
       )}
+
+      {selectedNick && (() => {
+        const { acc, k } = selectedNick
+        const done = k?.total_done || 0
+        const target = k?.total_target || 0
+        const pct = k?.progress_pct || 0
+        return createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setSelectedNick(null)}>
+            <div className="w-full max-w-sm" style={{ background: 'var(--bg-base)', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+                <span className="text-app-primary text-sm font-semibold">{acc.username}</span>
+                <button onClick={() => setSelectedNick(null)} className="text-app-muted hover:text-app-primary"><X size={16} /></button>
+              </div>
+              <div className="px-4 py-3 text-xs space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-app-muted">Status</span>
+                  <span className={acc.status === 'healthy' ? 'text-hermes' : acc.status === 'checkpoint' ? 'text-danger' : 'text-warn'}>● {acc.status || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-app-muted">KPI hôm nay</span>
+                  <span className="text-app-primary">{done}/{target} ({pct}%)</span>
+                </div>
+                {k?.comment_done != null && <div className="flex justify-between"><span className="text-app-muted">Comment</span><span>{k.comment_done}/{k.comment_target}</span></div>}
+                {k?.like_done != null && <div className="flex justify-between"><span className="text-app-muted">Like</span><span>{k.like_done}/{k.like_target}</span></div>}
+              </div>
+              <div className="flex gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+                <button className="btn-ghost text-xs flex-1" onClick={async () => { try { await api.post(`/accounts/${acc.id}/check-health`); toast.success('Health check queued') } catch(e) { toast.error(e.message) } }}>HEALTH CHECK</button>
+                <button className="btn-ghost text-xs flex-1" onClick={() => { setRepairNick(acc); setSelectedNick(null) }}>🍪 COOKIE</button>
+                <a href={`/accounts/${acc.id}`} className="btn-ghost text-xs flex-1 text-center">FULL DETAIL</a>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      })()}
+
+      {repairNick && <CookieRepairModal account={repairNick} onClose={() => setRepairNick(null)} />}
 
       {pickerOpen && (
         <div
@@ -1320,7 +1364,7 @@ function ActivityTab({ campaignId, campaign }) {
   const pages = pageNumbers(page, totalPages)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col">
       {/* ── Toolbar ── */}
       <div
         className="flex items-center gap-2 px-4 py-2.5 flex-wrap"
@@ -1387,7 +1431,7 @@ function ActivityTab({ campaignId, campaign }) {
       </div>
 
       {/* ── Feed grouped by date ── */}
-      <div className="flex-1 overflow-auto">
+      <div>
         {isLoading ? (
           <div className="p-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>Đang tải…</div>
         ) : rows.length === 0 ? (
@@ -2264,8 +2308,8 @@ export default function CampaignHub() {
         )}
         {tab === 'runtime' && (
           <MergedTab>
-            <ExecutionTab campaignId={id} />
             <ActivityTab campaignId={id} campaign={campaign} />
+            <ExecutionTab campaignId={id} />
           </MergedTab>
         )}
         {tab === 'assets' && (

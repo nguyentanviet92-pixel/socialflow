@@ -5,7 +5,7 @@
  * Comments use mobile Facebook URL per-post (proven in comment-post.js)
  */
 
-const { getPage, releaseSession } = require('../../browser/session-pool')
+const { getPage, releaseSession, closeSession } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove } = require('../../browser/human')
 const { checkAccountStatus, saveDebugScreenshot } = require('./post-utils')
 const { checkHardLimit, SessionTracker, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
@@ -465,6 +465,7 @@ async function campaignNurture(payload, supabase) {
     let totalComments = 0
     const groupResults = []
     let aiGroupEvalsThisRun = 0
+    let sessionDied = false  // set true when checkpoint/login detected → break loop + close browser
     // 2026-05-04: bumped 2→5. With 8 visited groups per session and most
     // junction members having NO ai_relevance cache (or stale 4+ days),
     // 2 fresh evals/run left 6 groups bypassing eval with undefined
@@ -2012,11 +2013,15 @@ async function campaignNurture(payload, supabase) {
             },
           })
         } catch {}
-        if (err.message.includes('blocked') || err.message.includes('checkpoint')) {
+        if (err.message.includes('blocked') || err.message.includes('checkpoint') || err.message.includes('session_expired')) {
           if (page) await saveDebugScreenshot(page, `nurture-blocked-${account_id}`)
-          throw err
+          console.log(`[NURTURE] 🔴 Session died (${account_id.slice(0, 8)}): ${err.message} — closing browser, stopping groups loop`)
+          sessionDied = true
+          break
         }
       }
+
+      if (sessionDied) break
 
       // Opportunistic friend request — if plan has send_friend_request, scan active members in this group
       const hasFriendTask = (parsed_plan || []).some(s => s.action === 'send_friend_request')
@@ -2382,8 +2387,12 @@ Chỉ trả JSON.` }],
       }
     } catch {}
 
-    if (page) // Keep page on FB for session reuse
-    await releaseSession(account_id, supabase)
+    if (sessionDied) {
+      // Cookie dead/checkpoint — close browser entirely, don't reuse
+      await closeSession(account_id).catch(() => {})
+    } else if (page) {
+      await releaseSession(account_id, supabase)
+    }
   }
 }
 

@@ -4,6 +4,7 @@
  */
 const { delay, humanClick, humanType, humanBrowse, humanMouseMove } = require('../../browser/human')
 const { downloadFromR2 } = require('../../lib/r2')
+const { closeSession } = require('../../browser/session-pool')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -45,6 +46,25 @@ async function checkAccountStatus(page, supabase, account_id) {
     if (url.includes('/login/') || url.includes('/login?') || url.includes('/login.php'))
       return { blocked: true, reason: 'session_expired', detail: 'Session expired, need re-login' }
 
+    // Login form present without URL change (FB renders login without redirect)
+    if (document.querySelector('form#login_form, input[name="email"][type="email"], #loginform'))
+      return { blocked: true, reason: 'session_expired', detail: 'Login form detected — session expired' }
+
+    // "Continue as X" / saved-login chooser page — FB remembers profile but
+    // session cookie expired. Marker: "Tạo tài khoản mới" / "Create new account"
+    // button only appears when logged OUT. Combined with "Tiếp tục" / "Continue"
+    // it's unambiguous (the regular logged-in feed never shows these together).
+    const hasCreateAccount = /tạo tài khoản mới|create new account/i.test(text)
+    const hasContinue = /tiếp tục|continue|dùng trang cá nhân khác|use another profile/i.test(text)
+    const hasLoggedInNav = !!document.querySelector('[aria-label="Your profile"], [aria-label="Trang cá nhân của bạn"], [aria-label="Account"], [aria-label="Tài khoản"], [data-pagelet="LeftRail"]')
+    if (hasCreateAccount && hasContinue && !hasLoggedInNav)
+      return { blocked: true, reason: 'session_expired', detail: 'Saved-login chooser shown — cookie expired' }
+
+    // "Not Found" on a sparse FB page = session expired, FB refused to serve content
+    const bodyLen = text.trim().length
+    if (bodyLen < 300 && /not found/i.test(text))
+      return { blocked: true, reason: 'session_expired', detail: 'Page shows Not Found — session expired' }
+
     if (/your account has been disabled|tài khoản.{0,20}bị vô hiệu hóa/i.test(text))
       return { blocked: true, reason: 'disabled', detail: 'Account disabled' }
 
@@ -63,16 +83,23 @@ async function checkAccountStatus(page, supabase, account_id) {
   if (status.blocked) {
     console.log(`[POST] Account ${account_id} BLOCKED: ${status.reason} - ${status.detail}`)
 
+    const dbStatus = status.reason === 'session_expired' ? 'dead' : 'checkpoint'
     await supabase.from('accounts').update({
-      status: status.reason === 'session_expired' ? 'dead' : 'checkpoint',
+      status: dbStatus,
+      last_error: status.detail,
     }).eq('id', account_id)
 
-    // Save debug screenshot
+    // Save debug screenshot BEFORE closing browser
     try {
       const debugDir = path.join(__dirname, '..', '..', 'debug')
       if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true })
       await page.screenshot({ path: path.join(debugDir, `post-blocked-${account_id}-${Date.now()}.png`), fullPage: false })
     } catch {}
+
+    // Close the browser session — keeping a dead session alive causes the next
+    // job picked up by this nick to inherit the same expired cookie and waste
+    // a job slot. Caller's finally() will see no live session and skip releaseSession.
+    await closeSession(account_id).catch(() => {})
   }
 
   return status

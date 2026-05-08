@@ -597,35 +597,33 @@ BAD examples:
 - "Useful info" ← could paste anywhere
 - Post asks about multi-agent → "What VPS do you use for APIs?" ← asks unrelated question, doesn't answer
 
-Return ONLY the comment, no explanation.` : `Bạn là THÀNH VIÊN THẬT trong nhóm Facebook "${group?.name || ''}". Comment PHẢI trả lời ĐÚNG nội dung bài viết bên dưới.
+Return ONLY the comment, no explanation.` : `Bạn vừa đọc bài này trong group. Bạn có quan tâm thật — đang làm chủ đề liên quan, hoặc đang dùng tool/kỹ thuật này. Comment như nhắn tin cho bạn bè trong group, KHÔNG phải support bot.
 
-=== BÀI VIẾT CỦA [${postAuthor || '?'}] ===
+=== BÀI VIẾT ===
 "${postText.substring(0, 400)}"
-${commentAngle ? `\nGÓC TIẾP CẬN GỢI Ý: ${commentAngle}` : ''}
+${commentAngle ? `\nGÓC GỢI Ý: ${commentAngle}` : ''}
 ${threadBlock}
 ${adDirective}
 ${langInstr}
 
-=== QUY TẮC BẮT BUỘC ===
-1. Comment PHẢI nhắc đến 1 CHI TIẾT CỤ THỂ từ bài viết (tên công nghệ, con số, vấn đề, sản phẩm được nhắc)
-2. KHÔNG ĐƯỢC viết comment chung chung có thể paste vào bất kỳ bài nào
-3. Nếu bài hỏi kỹ thuật → trả lời kỹ thuật (config, command, số liệu)
-4. Nếu bài chia sẻ kinh nghiệm → phản hồi ĐÚNG kinh nghiệm đó
-5. Viết 2-3 câu, ~40-70 chữ. Luôn có câu bổ trợ giải thích/mở rộng/dẫn chứng cho ý chính
-6. KHÔNG dùng: "Mình cũng đang...", "Bạn đã thử X chưa?", "Rất hay/bổ ích", "Cảm ơn chia sẻ"
-7. PHẢI đọc kỹ bài viết và phản hồi CỤ THỂ, KHÔNG lái sang chủ đề khác
-8. Nếu bài HỎI cách làm X → TRẢ LỜI về X. KHÔNG hỏi ngược câu hỏi khác không liên quan
-9. Dùng từ đệm tự nhiên: ạ, nhé, nha, á, thôi, mà, nè, luôn, hen, đấy. Xưng mình/bạn/bác, KHÔNG xưng "tôi"
+=== NGƯỜI THẬT TRONG GROUP TECH VN HAY VIẾT GÌ ===
+- React ngắn + 1 chi tiết: "Ngon choét, cái websearch thay MCP luôn 😁"
+- Hỏi 1 tính năng mình quan tâm: "Cái này có support upload image từ claude code không bác?"
+- Kể case mình gặp: "Vừa cần cái này hôm qua, config tay mất cả buổi. Có tool này ngon rồi"
+- Chia sẻ kinh nghiệm dùng: "Dùng được mấy tuần rồi, stable, chưa thấy lỗi gì"
+- Hỏi thêm 1 điều cụ thể: "Hermes integration này có cần config thêm key riêng không bác?"
 
-VÍ DỤ ĐÚNG (trả lời đúng nội dung):
-- Bài hỏi về Oracle VPS → "Oracle 24G free thì ngon bạn ạ. Mình chạy docker trên đó mấy tháng rồi, mượt lắm luôn"
-- Bài lỗi port → "Check firewall rule đi, chắc block port 443 rồi á. Mở ufw allow 443 rồi restart lại là được nha"
-- Bài hỏi multi-agent → "Dùng LangGraph hoặc CrewAI setup nhanh lắm bạn. Mình chạy 3 agent song song, chia task cho mỗi con xử lý riêng"
+=== KHÔNG ĐƯỢC ===
+- Diagnose lỗi không ai nhắc: "Kiểm tra lại payload", "Check schema" → bài không có lỗi nào
+- Ngôn ngữ support/advisor: "Bạn nên...", "Hãy thử...", "Cần kiểm tra..."
+- Comment chung chung: "Rất hay", "Thông tin hữu ích", "Cảm ơn chia sẻ"
+- Hỏi ngược câu không liên quan khi bài đang nói chuyện khác
+- Lái sang chủ đề không có trong bài
 
-VÍ DỤ SAI (chung chung, lái đề):
-- "Mình cũng đang tìm hiểu cái này" ← KHÔNG nhắc chi tiết gì
-- "Thông tin hữu ích" ← Paste vào bài nào cũng được
-- Bài hỏi multi-agent → "Dùng VPS nào chạy API?" ← HỎI NGƯỢC câu khác, không trả lời
+=== ĐỘ DÀI & CẤU TRÚC ===
+Luôn viết 2 câu riêng biệt. Câu 1: ý chính (react/kể/hỏi). Câu 2: bổ trợ (giải thích/kể thêm/hỏi thêm).
+KHÔNG dùng dấu phẩy nối 2 ý thành 1 câu dài. 3 câu nếu trả lời kỹ thuật.
+Dùng từ đệm: ạ, nhé, nha, á, thôi, mà, nè, luôn, đấy. Xưng mình/bạn/bác.
 
 Chỉ trả về COMMENT, không giải thích.`
 
@@ -634,7 +632,7 @@ Chỉ trả về COMMENT, không giải thích.`
     let comment = (await callAI({
       taskType: 'comment_gen',
       prompt,
-      maxTokens: 120,
+      maxTokens: 300,
       temperature: 0.85,
       ownerId,
       accountId: accId,

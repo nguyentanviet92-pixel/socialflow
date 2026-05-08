@@ -48,7 +48,7 @@ async function campaignOpportunityReact(payload, supabase) {
     .single()
   if (!account) throw new Error('Account not found')
 
-  await checkAccountStatus(account, supabase)
+  // Status check happens after page acquired (needs page.evaluate)
 
   const nickAge = getNickAgeDays(account)
 
@@ -154,6 +154,9 @@ async function campaignOpportunityReact(payload, supabase) {
 
     await page.goto(mobileUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
     await delay(R.between(2000, 4000))
+
+    const status = await checkAccountStatus(page, supabase, account_id)
+    if (status.blocked) throw new Error(`Account blocked: ${status.detail}`)
 
     // Find comment input
     let commentInput = null
