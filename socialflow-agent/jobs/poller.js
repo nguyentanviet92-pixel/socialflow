@@ -374,9 +374,18 @@ async function poll() {
           const startH = cached.active_hours_start ?? 7
           const endH = cached.active_hours_end ?? 23
           const is247 = startH === 0 && endH === 24
+          const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
+          const vnHour = vnNow.getUTCHours()
+
+          // Giảm tương tác 0h - 5h sáng (skip 85% công việc)
+          if (vnHour >= 0 && vnHour < 5) {
+            if (Math.random() < 0.85) {
+              _dbgSkip(job, `sleep hour 0-5h (reduced interaction)`)
+              continue
+            }
+          }
+
           if (!is247) {
-            const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
-            const vnHour = vnNow.getUTCHours()
             if (vnHour < startH || vnHour >= endH) {
               _dbgSkip(job, `active_hours ${startH}-${endH}h, now ${vnHour}h`)
               continue
