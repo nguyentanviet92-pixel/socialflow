@@ -59,9 +59,16 @@ function buildWhere(filters, startIdx = 1) {
     } else if (f.type === 'filter') {
       // Generic .filter(column, op, value). Supports JSON ops like
       // "payload->>account_id" which Supabase passes literally.
+      // PG requires the JSON key to be a quoted string literal:
+      //   payload->>'account_id'  (not payload->>account_id)
+      // Supabase JS clients sometimes send the unquoted form, so normalize.
       const op = OP_MAP[f.op]
       if (!op) continue
-      clauses.push(`${f.column} ${op} $${idx++}`)
+      const col = f.column.replace(
+        /(->>?|->)([a-zA-Z_][a-zA-Z0-9_]*)(?![a-zA-Z0-9_'])/g,
+        "$1'$2'"
+      )
+      clauses.push(`${col} ${op} $${idx++}`)
       args.push(f.value)
     } else if (f.type === 'is_null') {
       clauses.push(`${quoteCol(f.column)} IS NULL`)
@@ -270,7 +277,7 @@ module.exports = async (fastify) => {
 
       return reply.code(400).send({ error: `Unknown op: ${op}` })
     } catch (err) {
-      req.log.warn({ err: err.message, table, op }, '[AGENT-DB] query failed')
+      req.log.warn({ err: err.message, table, op, filters, cols }, "[AGENT-DB] query failed")
       return { data: null, error: { message: err.message, code: err.code || null } }
     }
   })
