@@ -7,7 +7,7 @@
 
 const { getPage, releaseSession, closeSession } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove } = require('../../browser/human')
-const { checkAccountStatus, saveDebugScreenshot } = require('./post-utils')
+const { checkAccountStatus, saveDebugScreenshot, friendlyError } = require('./post-utils')
 const { checkHardLimit, SessionTracker, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
 const R = require('../../lib/randomizer')
 const { getActionParams } = require('../../lib/plan-executor')
@@ -1988,8 +1988,9 @@ async function campaignNurture(payload, supabase) {
 
               await R.sleepRange(90000, 180000) // 90-180 seconds gap
             } catch (err) {
-              result.errors.push(`comment: ${err.message}`)
-              logger.log('comment', { target_type: 'group', target_name: group.name, result_status: 'failed', details: { error: err.message } })
+              const friendly = friendlyError(err)
+              result.errors.push(`comment: ${friendly}`)
+              logger.log('comment', { target_type: 'group', target_name: group.name, result_status: 'failed', details: { error: friendly } })
             }
           }
         }
