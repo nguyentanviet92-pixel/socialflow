@@ -22,7 +22,11 @@ const AGENT_SECRET = process.env.AGENT_SECRET
 async function callHermes(taskType, userContent, maxTokens = 1500) {
   if (!AGENT_SECRET) throw new Error('AGENT_SECRET not configured')
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 60000)
+  // 120s timeout (was 60s): when Moonshot 429s, fallback chain (DeepSeek →
+  // NVIDIA → Gemini) adds 20-40s. Big skills (orchestrator 2000 tokens,
+  // self_reviewer 2500) on DeepSeek-chat regularly take 35-50s. 60s caused
+  // false aborts mid-fallback that blocked assign_job emission entirely.
+  const timer = setTimeout(() => controller.abort(), 120000)
   try {
     const res = await fetch(`${HERMES_URL}/generate`, {
       method: 'POST',
@@ -114,6 +118,22 @@ async function buildOrchestrationContext(campaignId, supabase) {
       else if (j.status === 'failed') entry.failed++
       else if (['claimed', 'running'].includes(j.status)) entry.active = j.id
       jobsByNick.set(accId, entry)
+    }
+
+    // Pending-cap signal: how many user-facing pending/claimed/running jobs
+    // each nick has across ALL campaigns. Hermes uses this to skip emitting
+    // assign_job when a nick is already at MAX_PENDING_PER_NICK (3) — without
+    // this signal, the orchestrator emits assign_job repeatedly and every
+    // run is rejected by the executeAction guard ("nick at pending cap"),
+    // generating 6+ "Lỗi" rows per nick per hour.
+    let pendingByNick = new Map()
+    let pendingCap = 3
+    try {
+      const { getNickPendingCounts, MAX_PENDING_PER_NICK } = require('../lib/nick-lock')
+      pendingByNick = await getNickPendingCounts([...allAccountIds])
+      pendingCap = MAX_PENDING_PER_NICK
+    } catch (err) {
+      console.warn(`[ORCHESTRATOR] pending count compute failed: ${err.message}`)
     }
 
     const roleByAcc = new Map()
@@ -208,6 +228,7 @@ async function buildOrchestrationContext(campaignId, supabase) {
       const idleMs = a.last_used_at ? Date.now() - new Date(a.last_used_at).getTime() : Infinity
       const idleMinutes = isFinite(idleMs) ? Math.floor(idleMs / 60000) : 999
       const risk = riskByNick.get(a.id) || {}
+      const pendingCount = pendingByNick.get(a.id) || 0
       return {
         id: a.id,
         username: a.username,
@@ -217,6 +238,12 @@ async function buildOrchestrationContext(campaignId, supabase) {
         jobs_today: jobStats.done,
         jobs_failed: jobStats.failed,
         active_job: jobStats.active,
+        // Pending cap (cross-campaign). Hermes MUST NOT emit assign_job when
+        // pending_jobs_count >= pending_cap — guard at executeAction would
+        // reject and the decision row gets logged as a fake error.
+        pending_jobs_count: pendingCount,
+        pending_cap: pendingCap,
+        at_pending_cap: pendingCount >= pendingCap,
         idle_minutes: idleMinutes,
         hermes_score: null, // filled by score service if present
         checkpoint_risk: {
@@ -390,6 +417,31 @@ function orchestratorPayload(context, extras = {}) {
     orchestrator: true,
     ...extras,
   }
+}
+
+// ─── Outcome classification ────────────────────────────────
+// executeAction returns { ok: false, detail: '...' } in two scenarios:
+//   1. Real failure — DB error, API timeout, unexpected exception
+//   2. Defensive guard rejection — nick at pending cap, already running,
+//      already queued, paused, resting. Not a real "error", just a no-op.
+// We map (2) to outcome='skipped' so the UI doesn't render it as red "X Lỗi"
+// (orchestrator runs every 5min → without this, healthy nicks at cap accrue
+// 6+ "Lỗi" rows per hour, drowning real failures in noise).
+const GUARD_REJECT_PATTERNS = [
+  /pending cap/i,
+  /already has active job/i,
+  /is paused/i,
+  /resting/i,
+  /already queued/i,
+  /nick not found in context/i,
+  /nick is checkpoint/i,
+  /budget exhausted/i,
+]
+function classifyOutcome(r) {
+  if (r?.ok) return 'success'
+  const detail = r?.detail || ''
+  if (GUARD_REJECT_PATTERNS.some(p => p.test(detail))) return 'skipped'
+  return 'failed'
 }
 
 // ─── Action executors ──────────────────────────────────────
@@ -899,7 +951,7 @@ async function runKpiWatcherPhase(context, campaignId, orchestrationId, supabase
     let outcome = 'pending', detail = null, appliedAt = null
     try {
       const r = await executeAction(b.action, campaignId, context, supabase)
-      outcome = r.ok ? 'success' : 'failed'
+      outcome = classifyOutcome(r)
       detail = r.detail
       appliedAt = new Date().toISOString()
       if (r.ok) out.bumps_applied++
@@ -928,7 +980,7 @@ async function runKpiWatcherPhase(context, campaignId, orchestrationId, supabase
     let outcome = 'pending', detail = null, appliedAt = null
     try {
       const r = await executeAction(n.action, campaignId, context, supabase)
-      outcome = r.ok ? 'success' : 'failed'
+      outcome = classifyOutcome(r)
       detail = r.detail
       appliedAt = new Date().toISOString()
       if (r.ok) out.nerfs_applied++
@@ -1045,7 +1097,7 @@ async function runAutopilotPhase(context, campaignId, orchestrationId, supabase)
     if (action.auto_apply) {
       try {
         const r = await executeAction(action, campaignId, context, supabase)
-        outcome = r.ok ? 'success' : 'failed'
+        outcome = classifyOutcome(r)
         detail = r.detail
         appliedAt = new Date().toISOString()
         if (r.ok) out.applied++
@@ -1237,7 +1289,7 @@ async function runPreOrchestrationPipeline(context, campaignId, orchestrationId,
       let outcome = 'pending', detail = null, appliedAt = null
       try {
         const r = await executeAction(action, campaignId, context, supabase)
-        outcome = r.ok ? 'success' : 'failed'
+        outcome = classifyOutcome(r)
         detail = r.detail
         appliedAt = new Date().toISOString()
         if (r.ok) out.predictor_actions_applied++
@@ -1347,7 +1399,7 @@ async function runOrchestration(campaignId, supabase) {
     if (action.auto_apply) {
       try {
         const r = await executeAction(action, campaignId, context, supabase)
-        outcome = r.ok ? 'success' : 'failed'
+        outcome = classifyOutcome(r)
         detail = r.detail
         appliedAt = new Date().toISOString()
       } catch (err) {
@@ -1770,6 +1822,202 @@ async function runDailyReview(supabase) {
   }
 }
 
+// ─── KPI Coordinator ──────────────────────────────────────────
+// Gọi skill `kpi_coordinator` để Hermes tự nghĩ cách phân bổ KPI gap cho nicks
+// chất lượng khác nhau. Output lưu vào hermes_decisions; runOrchestration đọc
+// recommendation gần nhất và inject vào context như signal — không tự apply
+// trực tiếp để tránh chồng chéo với traffic_conductor / spreader.
+
+async function buildKpiCoordinatorContext(campaignId, supabase) {
+  const { data: campaign } = await supabase.from('campaigns')
+    .select('id, name, topic, start_at, kpi_config')
+    .eq('id', campaignId).single()
+  if (!campaign) throw new Error(`Campaign ${campaignId} not found`)
+
+  const startedDays = campaign.start_at
+    ? Math.floor((Date.now() - new Date(campaign.start_at).getTime()) / 86400000) : 0
+
+  const nowVn = new Date(Date.now() + 7 * 3600000)
+  const hourVn = nowVn.getUTCHours()
+  const todayVn = nowVn.toISOString().split('T')[0]
+  const minutesUntilCutoff = Math.max(0, (23 - hourVn) * 60 - nowVn.getUTCMinutes())
+
+  // KPI today + 3-day trend — aggregated from nick_kpi_daily (per-nick rows)
+  // Targets come from campaigns.kpi_config (daily_X) which kpi-calculator splits
+  // across nicks during nightly rebalance. We sum done_X back up to campaign level.
+  const kpiConfig = campaign.kpi_config || {}
+  const kpi = {}
+  const metrics = ['comment', 'like', 'friend_request', 'group_join']
+  const DONE_FIELD = { comment: 'done_comments', like: 'done_likes', friend_request: 'done_friend_requests', group_join: 'done_group_joins' }
+  const TARGET_FIELD = { comment: 'target_comments', like: 'target_likes', friend_request: 'target_friend_requests', group_join: 'target_group_joins' }
+  const CONFIG_FIELD = { comment: 'daily_comments', like: 'daily_likes', friend_request: 'daily_friend_requests', group_join: 'daily_group_joins' }
+
+  const since4d = new Date(Date.now() - 4 * 86400000).toISOString().split('T')[0]
+  const { data: progress } = await supabase.from('nick_kpi_daily')
+    .select('date, target_likes, target_comments, target_friend_requests, target_group_joins, done_likes, done_comments, done_friend_requests, done_group_joins')
+    .eq('campaign_id', campaignId).gte('date', since4d).order('date', { ascending: true })
+
+  for (const m of metrics) {
+    // Prefer summed targets from nick_kpi_daily (post-rebalance, accurate per nick).
+    // Fall back to raw kpi_config if nick rows haven't been seeded yet today.
+    const todayRows = (progress || []).filter(p => p.date === todayVn)
+    const summedTarget = todayRows.reduce((s, p) => s + (p[TARGET_FIELD[m]] || 0), 0)
+    const target = summedTarget > 0 ? summedTarget : (kpiConfig[CONFIG_FIELD[m]] || 0)
+    const actualToday = todayRows.reduce((s, p) => s + (p[DONE_FIELD[m]] || 0), 0)
+    const byDay = {}
+    for (const row of (progress || [])) {
+      byDay[row.date] = (byDay[row.date] || 0) + (row[DONE_FIELD[m]] || 0)
+    }
+    const trend = Object.keys(byDay).sort().slice(-3).map(d => byDay[d])
+    kpi[m] = { target, actual: actualToday, trend_3day_actual: trend }
+  }
+
+  // Comment rejection (comment_rejected events today)
+  const dayStart = todayVn + 'T00:00:00+07:00'
+  const { count: rejected } = await supabase.from('campaign_activity_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId).eq('action_type', 'comment_rejected').gte('created_at', dayStart)
+  kpi.comment.rejected_by_fb = rejected || 0
+
+  // Nicks
+  const { data: roles } = await supabase.from('campaign_roles')
+    .select('account_ids').eq('campaign_id', campaignId)
+  const accountIds = new Set()
+  for (const r of roles || []) (r.account_ids || []).forEach(id => accountIds.add(id))
+  if (accountIds.size === 0) {
+    const { data: c } = await supabase.from('campaigns').select('account_ids').eq('id', campaignId).single()
+    for (const id of c?.account_ids || []) accountIds.add(id)
+  }
+  if (!accountIds.size) return { campaign: { id: campaignId, name: campaign.name, started_days_ago: startedDays }, kpi, nicks: [], now_iso: new Date().toISOString(), now_hour_vn: hourVn, minutes_until_cutoff: minutesUntilCutoff }
+
+  const { data: accounts } = await supabase.from('accounts')
+    .select('id, username, status, is_active, last_used_at, daily_budget, created_at, notes')
+    .in('id', [...accountIds])
+
+  // Per-nick history 30d aggregates
+  const since30 = new Date(Date.now() - 30 * 86400000).toISOString()
+  const { data: hist } = await supabase.from('campaign_activity_log')
+    .select('account_id, action_type, result_status, details, created_at')
+    .in('account_id', [...accountIds]).gte('created_at', since30)
+
+  // Normalize created_at to ISO string once (pg client returns Date objects,
+  // supabase-js returns strings — handle both).
+  const histByNick = new Map()
+  const dayStartMs = new Date(dayStart).getTime()
+  for (const r of hist || []) {
+    const ts = r.created_at instanceof Date ? r.created_at.getTime() : new Date(r.created_at).getTime()
+    r._ts = ts
+    r._dateKey = new Date(ts).toISOString().slice(0, 10)
+    const arr = histByNick.get(r.account_id) || []
+    arr.push(r); histByNick.set(r.account_id, arr)
+  }
+
+  const nicks = (accounts || []).map(a => {
+    const ageDays = a.created_at ? Math.floor((Date.now() - new Date(a.created_at).getTime()) / 86400000) : 0
+    const minSinceLast = a.last_used_at ? Math.floor((Date.now() - new Date(a.last_used_at).getTime()) / 60000) : null
+    const todayActions = (histByNick.get(a.id) || []).filter(r => r._ts >= dayStartMs)
+    const byType = {}
+    for (const r of todayActions) byType[r.action_type] = (byType[r.action_type] || 0) + 1
+    const budget = a.daily_budget || {}
+    const remaining = {}
+    for (const k of ['comment', 'like', 'friend_request', 'join_group']) {
+      const b = budget[k] || { used: 0, max: 0 }
+      remaining[k] = Math.max(0, (b.max || 0) - (b.used || 0))
+    }
+    // 30d aggregates
+    const all = histByNick.get(a.id) || []
+    const days = new Set(all.map(r => r._dateKey))
+    const avgPerDay = days.size > 0 ? Math.round(all.length / days.size) : 0
+    const checkpointCount = all.filter(r => (r.details?.error || '').toLowerCase().includes('checkpoint')).length
+    const commentRejected = all.filter(r => r.action_type === 'comment_rejected').length
+    const commentTotal = all.filter(r => r.action_type === 'comment').length
+    const rejectionRate = commentTotal + commentRejected > 0 ? +(commentRejected / (commentTotal + commentRejected)).toFixed(2) : 0
+    const engChecks = all.filter(r => r.action_type === 'comment_engagement_check')
+    const engScores = engChecks.map(r => r.details?.score).filter(s => typeof s === 'number')
+    const avgEngagement = engScores.length > 0 ? +(engScores.reduce((a, b) => a + b, 0) / engScores.length).toFixed(2) : null
+
+    return {
+      id: a.id, username: a.username,
+      age_days: ageDays,
+      status: a.status, is_active: a.is_active,
+      minutes_since_last_action: minSinceLast,
+      today: { actions_done: todayActions.length, by_type: byType, budget_remaining: remaining },
+      history_30d: {
+        avg_actions_per_day: avgPerDay,
+        checkpoint_count: checkpointCount,
+        comment_avg_engagement_score: avgEngagement,
+        comment_rejection_rate: rejectionRate,
+        kpi_contribution_pct: null, // optional — orchestrator can compute
+      },
+    }
+  })
+
+  return {
+    now_iso: new Date().toISOString(),
+    now_hour_vn: hourVn,
+    minutes_until_cutoff: minutesUntilCutoff,
+    campaign: { id: campaign.id, name: campaign.name, topic: campaign.topic, started_days_ago: startedDays, kpi_window: 'daily' },
+    kpi, nicks,
+  }
+}
+
+async function runKpiCoordinator(campaignId, supabase) {
+  const started = Date.now()
+  const orchestrationId = randomUUID()
+  const context = await buildKpiCoordinatorContext(campaignId, supabase)
+  if (!context.nicks.length) {
+    console.log(`[KPI-COORD] ${campaignId}: no nicks, skip`)
+    return { orchestration_id: orchestrationId, skipped: true }
+  }
+
+  let decision
+  try {
+    const raw = await callHermes('kpi_coordinator', JSON.stringify(context), 2000)
+    decision = extractJson(raw)
+  } catch (err) {
+    console.error(`[KPI-COORD] ${campaignId}: skill call failed: ${err.message}`)
+    return { orchestration_id: orchestrationId, error: err.message }
+  }
+  if (!decision) {
+    console.warn(`[KPI-COORD] ${campaignId}: unparseable JSON`)
+    return { orchestration_id: orchestrationId, error: 'unparseable_json' }
+  }
+
+  // Persist for orchestrator to pick up next cycle
+  try {
+    await supabase.from('hermes_decisions').insert({
+      campaign_id: campaignId,
+      orchestration_id: orchestrationId,
+      decision_type: 'kpi_coordination',
+      action_type: 'kpi_allocate',
+      context_summary: decision.summary || null,
+      decision: { ...decision, _context_kpi: context.kpi, elapsed_ms: Date.now() - started },
+      auto_apply: false,
+      auto_applied: false,
+      outcome: 'pending',
+    })
+  } catch (insErr) {
+    console.warn(`[KPI-COORD] persist hermes_decisions failed: ${insErr.message}`)
+  }
+
+  const alerts = (decision.alerts || []).length
+  const allocs = (decision.allocations || []).length
+  console.log(`[KPI-COORD] ${campaignId}: ${allocs} allocations, ${alerts} alerts (${Date.now() - started}ms)`)
+
+  return { orchestration_id: orchestrationId, decision, elapsed_ms: Date.now() - started }
+}
+
+async function runKpiCoordinatorAllRunning(supabase) {
+  const { data: campaigns } = await supabase.from('campaigns')
+    .select('id, name').eq('status', 'running').eq('is_active', true)
+  let ok = 0, fail = 0
+  for (const c of campaigns || []) {
+    try { await runKpiCoordinator(c.id, supabase); ok++ }
+    catch (err) { fail++; console.error(`[KPI-COORD] ${c.name || c.id}: ${err.message}`) }
+  }
+  console.log(`[KPI-COORD] cycle done: ${ok} ok, ${fail} failed`)
+}
+
 module.exports = {
   buildOrchestrationContext,
   runOrchestration,
@@ -1785,4 +2033,8 @@ module.exports = {
   runPreOrchestrationPipeline,
   runAutopilotPhase,
   runKpiWatcherPhase,
+  // KPI coordinator
+  buildKpiCoordinatorContext,
+  runKpiCoordinator,
+  runKpiCoordinatorAllRunning,
 }

@@ -218,7 +218,12 @@ function keywordFilter(groups, topic) {
  * Uses DeepSeek cheap model
  */
 async function expandSearchKeywords(topic, mission, ownerId) {
-  const baseKeywords = topic.split(/[,;]+/).map(k => k.trim()).filter(k => k.length > 1)
+  // 2026-05-04: callers used to pass undefined here when scout jobs were
+  // queued without a `topic` payload, crashing with "Cannot read properties
+  // of undefined (reading 'split')". The discover-groups handler now
+  // back-fills topic from campaign row, but keep this guard so future
+  // call-sites don't reintroduce the crash.
+  const baseKeywords = (topic || '').split(/[,;]+/).map(k => k.trim()).filter(k => k.length > 1)
 
   try {
     const kwPrompt = `Tìm nhóm Facebook về: "${topic}"

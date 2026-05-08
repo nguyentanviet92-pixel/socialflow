@@ -92,10 +92,19 @@ async function humanScrollToBottom(page, { maxScrolls = 50, onScroll, onBeforeCh
 }
 
 /**
- * Click vào element với mouse move tự nhiên
+ * Click vào element với mouse move tự nhiên.
+ *
+ * Accepts EITHER a CSS selector string OR a Playwright ElementHandle.
+ * 2026-05-04: scout (campaign-discover-groups.js) passes the ElementHandle
+ * it just resolved, which used to crash here with "page.$: selector
+ * expected string, got object" because we always re-queried via page.$.
+ * Re-querying defeats the point of resolving the handle (button can move
+ * or be re-rendered) so accept both shapes.
  */
-async function humanClick(page, selector) {
-  const el = await page.$(selector)
+async function humanClick(page, selectorOrEl) {
+  const el = typeof selectorOrEl === 'string'
+    ? await page.$(selectorOrEl)
+    : selectorOrEl
   if (!el) return false
 
   const box = await el.boundingBox()

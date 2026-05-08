@@ -16,7 +16,17 @@ const api = getApiClient()
 
 const AGENT_ID = process.env.AGENT_ID || `${os.hostname()}-${process.pid}`
 const AGENT_USER_ID = process.env.AGENT_USER_ID || null  // set when user logs in via Electron
-const POLL_MS = process.env.DATABASE_URL ? 5000 : 15000 // Self-hosted: 5s (no Realtime), Cloud: 15s (Realtime handles instant)
+// 2026-05-04: switched from fixed-interval polling (15s) to randomized
+// 1-5 min cadence. Constant 15s pings show up as a perfectly periodic
+// traffic pattern at the API edge — easy to fingerprint as automation.
+// Random interval makes the agent look more like a human checking in,
+// while still draining the queue fast enough for nurture/scout work
+// (jobs are scheduled hours in advance so 5min lag is negligible).
+// POLL_MS still exists for log messages; the actual delay is computed
+// per-tick by scheduleNextPoll().
+const POLL_MIN_MS = parseInt(process.env.POLL_MIN_MS) || 60 * 1000        // 1 min
+const POLL_MAX_MS = parseInt(process.env.POLL_MAX_MS) || 5 * 60 * 1000    // 5 min
+const POLL_MS = Math.round((POLL_MIN_MS + POLL_MAX_MS) / 2) // avg, used in error logs only
 const MEM_PER_NICK_MB = 350 // ~350MB per Chromium instance
 const MIN_CONCURRENT = 1
 const MAX_CONCURRENT_CAP = 2 // Max 2 browser cùng lúc — match MAX_SESSIONS in session-pool
@@ -151,9 +161,17 @@ const randBetween = (min, max) => Math.floor(min + Math.random() * (max - min))
 const randSessionMax = () => randBetween(25, 45) * 60 * 1000   // 25-45 min
 const randRestMs = () => randBetween(45, 120) * 60 * 1000      // 45-120 min
 
+// 2026-05-04: campaign_nurture maps to 'comment', not 'like'.
+//   Reason: nurture session does likes + comments + browse together; comment
+//   is the KPI driver (we want substantive comments). Mapping to 'like' meant
+//   when a nick hit the like cap (e.g. used=16/max=11), the WHOLE session
+//   was skipped pre-claim — comment budget could still have 7/8 left, but
+//   never got used. Now: claim if comment has room. In-session, each like
+//   call still hits increment_budget('like') and short-circuits on its own
+//   when the per-action cap fills, so we never over-like.
 const JOB_ACTION_MAP = {
   post_page: 'post', post_page_graph: 'post', post_group: 'post', post_profile: 'post',
-  campaign_post: 'post', campaign_nurture: 'like', campaign_discover_groups: 'join_group',
+  campaign_post: 'post', campaign_nurture: 'comment', campaign_discover_groups: 'join_group',
   campaign_send_friend_request: 'friend_request', campaign_interact_profile: 'like',
   campaign_scan_members: 'scan', campaign_group_monitor: 'scan',
   campaign_opportunity_react: 'comment', comment_post: 'comment',
@@ -252,6 +270,9 @@ async function poll() {
       return
     }
 
+    // 2026-05-04 DEBUG: agent has been polling /pending every 30s for 15+ min
+    // and rejecting all returned jobs locally — log which gate kills each one.
+    const _dbgSkip = (job, reason) => console.log(`[POLLER-DBG] skip ${job.type} ${(job.payload?.account_id || '?').slice(0,8)} — ${reason}`)
     for (const job of jobs) {
       const accId = job.payload?.account_id
       const isPostJob = POST_TYPES.includes(job.type)
@@ -259,7 +280,7 @@ async function poll() {
       // 1 nick = 1 browser = 1 job tại 1 thời điểm
       // Job sau ĐỢI job trước xong — không skip, không cancel, chỉ defer
       const isUtility = UTILITY_TYPES.includes(job.type)
-      if (accId && pool.isRunning(accId)) continue // sẽ được pick up ở poll cycle tiếp theo
+      if (accId && pool.isRunning(accId)) { _dbgSkip(job, 'pool.isRunning'); continue }
 
       // Per-nick post cooldown (not global — each nick tracks independently)
       if (isPostJob && accId) {
@@ -267,7 +288,8 @@ async function poll() {
         if (cd && cd.lastPostAt > 0) {
           const elapsed = Date.now() - cd.lastPostAt
           if (elapsed < cd.cooldownMs) {
-            continue // this nick is cooling down, try next job
+            _dbgSkip(job, `post cooldown (${Math.round((cd.cooldownMs - elapsed) / 1000)}s left)`)
+            continue
           }
         }
       }
@@ -279,7 +301,10 @@ async function poll() {
         const lastAt = nickActionTimestamps.get(gapKey)
         if (lastAt) {
           const minGap = getMinGapMs(actionType)
-          if (Date.now() - lastAt < minGap) continue
+          if (Date.now() - lastAt < minGap) {
+            _dbgSkip(job, `action gap ${actionType} (${Math.round((minGap - (Date.now() - lastAt)) / 1000)}s left)`)
+            continue
+          }
         }
       }
 
@@ -307,6 +332,7 @@ async function poll() {
             }
           } catch {}
           console.log(`[POLLER] Nick ${accId.slice(0,8)} not active — CANCELLED ${job.type} job ${job.id}`)
+          _dbgSkip(job, 'checkAccountActive=false → cancelled')
           continue
         }
       }
@@ -352,7 +378,8 @@ async function poll() {
             const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
             const vnHour = vnNow.getUTCHours()
             if (vnHour < startH || vnHour >= endH) {
-              continue // outside active hours — job stays pending
+              _dbgSkip(job, `active_hours ${startH}-${endH}h, now ${vnHour}h`)
+              continue
             }
           }
         }
@@ -371,6 +398,7 @@ async function poll() {
               nickWarmupBlockedLog.add(warmupKey)
               console.log(`[POLLER] Nick ${accId.slice(0,8)} warm-up blocked: ${warmup.reason} (suppressing further logs)`)
             }
+            _dbgSkip(job, `warmup ${warmup.reason}`)
             continue
           }
         }
@@ -403,6 +431,7 @@ async function poll() {
             const hasTargets = (kpiRow.target_likes || 0) > 0 || (kpiRow.target_comments || 0) > 0
             if (kpiRow.kpi_met && hasTargets) {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} KPI met today — yielding slot`)
+              _dbgSkip(job, 'KPI met today')
               continue
             }
             // Action-specific check
@@ -412,6 +441,7 @@ async function poll() {
             const done = kpiRow[doneField] || 0
             if (tgt > 0 && done >= tgt) {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} ${kpiField} KPI met (${done}/${tgt}) — skipping ${job.type}`)
+              _dbgSkip(job, `KPI ${kpiField} ${done}/${tgt} met`)
               continue
             }
           }
@@ -438,42 +468,20 @@ async function poll() {
             nickHourlyActions.set(accId, { count: 0, resetAt: Date.now() + 3600000 })
           } else if (hourly.count >= MAX_HOURLY_ACTIONS) {
             console.log(`[POLLER] Nick ${accId.slice(0,8)} hit hourly limit (${MAX_HOURLY_ACTIONS}), skipping`)
+            _dbgSkip(job, `hourly ${hourly.count}/${MAX_HOURLY_ACTIONS}`)
             continue
           }
         }
       }
 
-      // Per-nick session duration cap (25-45min random continuous work)
-      if (accId) {
-        const sessionStart = nickSessionStart.get(accId)
-        // Each nick gets a random session max on first check
-        if (!nickSessionStart.has(`${accId}_max`)) nickSessionStart.set(`${accId}_max`, randSessionMax())
-        const sessionMax = nickSessionStart.get(`${accId}_max`)
-        if (sessionStart && (Date.now() - sessionStart) > sessionMax) {
-          const durMin = Math.round((Date.now() - sessionStart) / 60000)
-          console.log(`[POLLER] Nick ${accId.slice(0,8)} session ${durMin}min, forcing rest`)
-          nickSessionStart.delete(accId)
-          nickSessionStart.delete(`${accId}_max`)
-          const restMs = randRestMs()
-          nickRestUntil.set(accId, { until: Date.now() + restMs, durationMin: Math.round(restMs / 60000) })
-          try { const { releaseSession } = require('../browser/session-pool'); releaseSession(accId) } catch {}
-          continue
-        }
-      }
-
-      // Per-nick rest period (45-120min random gap)
-      if (accId) {
-        const rest = nickRestUntil.get(accId)
-        if (rest && Date.now() < rest.until) {
-          const remainMin = Math.round((rest.until - Date.now()) / 60000)
-          if (!nickSessionStart.has(`${accId}_restlog`) || Date.now() - nickSessionStart.get(`${accId}_restlog`) > 300000) {
-            console.log(`[POLLER] Nick ${accId.slice(0,8)} resting (${remainMin}/${rest.durationMin}min)`)
-            nickSessionStart.set(`${accId}_restlog`, Date.now())
-          }
-          continue
-        }
-        if (rest && Date.now() >= rest.until) nickRestUntil.delete(accId)
-      }
+      // 2026-05-04: REMOVED session-cap + rest-period gates.
+      // User wants smooth continuous comment activity, not "work 25-45min →
+      // rest 45-120min" cycle that creates visible quiet windows. Human-like
+      // pacing is now enforced AT THE ACTION LEVEL (15-45s between likes,
+      // 60-120s "distracted" pauses 25% of time, in nurture handler) plus
+      // daily budget cap and hourly action ceiling — those alone give a
+      // smoother + still-safe traffic pattern.
+      // Keep nickSessionStart for reporting only (no force-rest).
 
       // Per-nick budget pre-check (avoid claiming if daily limit already reached)
       if (actionType && accId) {
@@ -485,6 +493,7 @@ async function poll() {
             nickBudgetExhaustedLog.add(logKey)
             console.log(`[POLLER] Nick ${accId.slice(0,8)} budget exhausted for ${actionType}, skipping (further logs suppressed until reset)`)
           }
+          _dbgSkip(job, `budget exhausted ${actionType}`)
           continue
         }
       }
@@ -1218,7 +1227,22 @@ function startPoller() {
   const mode = useApi() ? 'REST API' : 'Direct DB'
   console.log(`[POLLER] Starting — max ${MAX_CONCURRENT} concurrent nicks (auto-scale, ${freeGB}/${totalGB}GB RAM), mode: ${mode}${userInfo}`)
   recoverStaleJobs().then(() => poll())
-  const pollInterval = setInterval(poll, POLL_MS)
+  // Self-pacing setTimeout chain instead of setInterval — each tick picks
+  // its own random delay in [POLL_MIN_MS, POLL_MAX_MS]. Stored as `pollInterval`
+  // so the existing shutdown path that does `clearInterval(pollInterval)`
+  // still nulls it out (clearTimeout is safe on the same handle, and
+  // clearInterval on a Timeout object also works in Node).
+  let pollInterval = null
+  function scheduleNextPoll() {
+    const span = POLL_MAX_MS - POLL_MIN_MS
+    const delay = POLL_MIN_MS + Math.floor(Math.random() * (span + 1))
+    pollInterval = setTimeout(async () => {
+      try { await poll() } catch (err) { console.warn(`[POLL] tick error: ${err.message}`) }
+      scheduleNextPoll()
+    }, delay)
+  }
+  scheduleNextPoll()
+  console.log(`[POLLER] Job claim cadence: random ${Math.round(POLL_MIN_MS/1000)}-${Math.round(POLL_MAX_MS/1000)}s per tick`)
   const recoverInterval = setInterval(recoverStaleJobs, 2 * 60 * 1000)
 
   // ── Group Opportunity React: check pending opportunities every 5 min ──
