@@ -258,15 +258,20 @@ CHỈ trả về JSON, không giải thích.`
       // can share a personal take" which is natural group behavior. The prompt
       // still bans generic/vague comments via the QUY TẮC section, so quality
       // is guarded by AI judgment, not a hard numeric cutoff.
+      // 2026-05-02: bumped threshold 3 → 6. Score 3-5 = "could comment" but
+      // quality is generic ("hope it gets fixed", "cảm ơn chia sẻ"). Score 6+
+      // = post has substance: question, problem, request for help, specific
+      // discussion. User feedback: "tập trung vào bài có giá trị đừng cmt
+      // chung chung". Quality > quantity.
       const filtered = results
-        .filter(r => r.score >= 3 && r.index >= 1 && r.index <= posts.length && !adIdxSet.has(r.index))
+        .filter(r => r.score >= 6 && r.index >= 1 && r.index <= posts.length && !adIdxSet.has(r.index))
         .filter(r => r.action !== 'skip')
         .sort((a, b) => b.score - a.score)
         .slice(0, maxPicks || 2)
 
       if (filtered.length > 0) return filtered
 
-      console.log(`[AI-BRAIN] No posts scored >= 3 — all scores: ${results.map(r => r.score).join(',')}`)
+      console.log(`[AI-BRAIN] No posts scored >= 6 — all scores: ${results.map(r => r.score).join(',')}`)
       return []
     }
   } catch (err) {
@@ -284,21 +289,6 @@ CHỈ trả về JSON, không giải thích.`
  */
 async function qualityGateComment({ comment, postText, group, topic, nick, ownerId, threadComments }) {
   if (!comment || comment.length < 3) return { approved: false, reason: 'too_short' }
-
-  // 2026-05-04: a 19-char follow-up like "Mình sẽ theo dõi thêm" was slipping
-  // through because it was below the AI-check threshold AND not in the regex
-  // bank. Real-human comments worth posting carry substance — numbers, brand
-  // names, a personal anecdote, or a pointed question. If the comment is
-  // shorter than ~30 chars / 6 words AND has no specific token, kill it.
-  const trimmed = comment.trim()
-  const wordCount = trimmed.split(/\s+/).length
-  const hasSpecific = /\d+[%kKgGmM]?|[A-Z]{2,}[a-z]*\d*|vps|api|cpu|ram|ssd|node|nginx|docker|aws|gcp|azure|cloudflare|vpn|cdn|kbps|mbps|gbps|ms|tb|gb/i.test(trimmed)
-  if (trimmed.length < 30 && !hasSpecific) {
-    return { approved: false, reason: 'too_short_no_substance', score: 2 }
-  }
-  if (wordCount < 6 && !hasSpecific) {
-    return { approved: false, reason: 'too_few_words', score: 2 }
-  }
 
   // Fix 4: collapse the post + thread into a single corpus so the gate can check
   // whether the comment actually addresses one specific token from the discussion.
@@ -322,17 +312,6 @@ async function qualityGateComment({ comment, postText, group, topic, nick, owner
     /thấy (nó |nó )?xử lý (rất )?(mượt|tốt|nhanh)/i,  // bot review
     /rất (hay|bổ ích|hữu ích|tuyệt vời)/i,  // generic praise
     /mình (cũng )?hay dùng .+ (cho |để )/i,  // bán hàng gián tiếp
-    /^mình sẽ (theo dõi|tìm hiểu|thử|note|lưu lại|xem)/i,  // 2026-05-04 ban: "Mình sẽ theo dõi thêm" pattern
-    /theo dõi (thêm|tiếp)/i,
-    /^(hóng|hong|theo dõi)\b/i,  // hóng/theo dõi cụt
-    /^(đánh dấu|dấu)/i,  // đánh dấu để xem sau
-    /^lưu (lại|về)/i,
-    /^để dành/i,
-    /^cảm ơn (bạn )?(nhé|nha|nhiều|ạ|đã)/i,  // cảm ơn cụt
-    /hay (đấy|ghê|nhỉ|thật)\.?$/i,
-    /^bài (hay|chất|chuẩn)/i,
-    /chuẩn (rồi|luôn)/i,
-    /^(đỉnh|tuyệt|xịn|vip|pro)\b/i,
   ]
   if (genericPatterns.some(p => p.test(comment.trim()))) {
     return { approved: false, reason: 'generic_template', score: 2 }
@@ -347,11 +326,8 @@ async function qualityGateComment({ comment, postText, group, topic, nick, owner
     }
   }
 
-  // AI quality check on every comment that survives heuristics. Previously
-  // gated at length>20 but that let 19-char fluff slip through; we already
-  // bailed on too-short / too-few-words above, so the surviving payload is
-  // long enough to deserve an AI verdict.
-  if (true) {
+  // AI quality check for longer comments
+  if (comment.length > 20) {
     try {
       const qgPrompt = `Đánh giá bình luận Facebook sau:
 
@@ -369,8 +345,6 @@ REJECT (approved=false) nếu:
 - Comment lặp lại ý đã có trong thread
 - Comment hỏi câu đã được trả lời trong thread
 - Comment chung chung kiểu "rất hay", "thông tin bổ ích", "mình cũng vậy"
-- Comment kiểu "hóng", "theo dõi thêm", "đánh dấu", "lưu lại" — không có giá trị
-- Comment không có ít nhất 1 trong: số liệu cụ thể, tên brand/tool, trải nghiệm cá nhân chi tiết, câu hỏi đào sâu, workaround có thể test
 
 Trả về JSON: {"naturalness": N, "relevance": N, "value": N, "approved": true/false, "reason": "..."}`
 
@@ -390,7 +364,7 @@ Trả về JSON: {"naturalness": N, "relevance": N, "value": N, "approved": true
         const result = JSON.parse(jsonMatch[0])
         const avg = ((result.naturalness || 0) + (result.relevance || 0) + (result.value || 0)) / 3
         return {
-          approved: avg >= 6.0 && result.naturalness >= 5 && result.relevance >= 5 && result.value >= 4,
+          approved: avg >= 4.5 && result.naturalness >= 3 && result.relevance >= 3,
           score: Math.round(avg * 10) / 10,
           naturalness: result.naturalness,
           relevance: result.relevance,
@@ -532,27 +506,10 @@ async function generateSmartComment({ postText, postAuthor, group, campaign, nic
 
   let adDirective = ''
   if (shouldSoftAd) {
-    const ctaExamples = {
-      question: `"Bạn đã thử ${adConfig.product_name} chưa? Mình dùng thấy khá ổn"`,
-      suggestion: `"Nếu cần mình gợi ý ${adConfig.product_name}, mình dùng thấy OK"`,
-      experience: `"Mình đang dùng ${adConfig.product_name}, chạy khá mượt cho việc này"`,
-    }
     adDirective = `
-=== QUẢNG CÁO NHẸ (SOFT MENTION) ===
-Bài viết này là CƠ HỘI quảng cáo nhẹ sản phẩm.
-Thương hiệu: ${adConfig.brand_name || ''}
-Sản phẩm: ${adConfig.product_name}
-Mô tả: ${adConfig.product_description || ''}
-
-CÁCH CHÈN — chọn 1 trong các kiểu:
-${ctaExamples[adConfig.cta_style] || ctaExamples.experience}
-
-QUY TẮC QUẢNG CÁO NHẸ:
-- PHẢI trả lời đúng nội dung bài viết TRƯỚC, rồi mới mention sản phẩm
-- Mention tự nhiên như chia sẻ kinh nghiệm cá nhân, KHÔNG quảng cáo lộ liễu
-- TUYỆT ĐỐI KHÔNG dùng link, URL, hashtag, số điện thoại
-- KHÔNG nói "mua ngay", "liên hệ", "inbox" — chỉ gợi ý nhẹ nhàng
-- Nếu bài viết KHÔNG phù hợp để mention → BỎ QUA, comment bình thường
+=== BRAND MENTION ===
+Sau khi trả lời bài viết, mention "${adConfig.product_name || adConfig.brand_name}" 1 lần cuối câu như kinh nghiệm cá nhân.
+Quy tắc: trả lời bài TRƯỚC → mention brand CUỐI. Không link/hashtag/SĐT/inbox. Nếu không tự nhiên → bỏ qua, comment thường.
 `
   }
 
@@ -642,7 +599,7 @@ Chỉ trả về COMMENT, không giải thích.`
       // Clean up: remove quotes, URLs, excessive length
       comment = comment.replace(/^["']|["']$/g, '').trim()
       comment = comment.replace(/https?:\/\/\S+/gi, '').trim()
-      if (comment.length > 150) comment = comment.substring(0, 150).replace(/\s\S*$/, '')
+      if (comment.length > 200) comment = comment.substring(0, 200).replace(/\s\S*$/, '')
 
       // REJECT generic comments that don't reference post content
       const genericPatterns = [

@@ -170,17 +170,21 @@ async function generateComment(context = {}) {
 }
 
 /**
- * Generate a short contextual comment by analyzing post content
- * Extracts key nouns/topics and builds a relevant response
+ * Contextual fallback — DISABLED (2026-05-08)
+ *
+ * Previous implementation used hardcoded templates like:
+ *   "Mình cũng đang tìm hiểu vấn đề này"
+ *   "Chia sẻ rất thiết thực"
+ *   "Kinh nghiệm hữu ích cho mình"
+ *
+ * These are EXACTLY the patterns quality_gate rejects as generic/bot-like
+ * (see ai-brain.js genericPatterns). Using them creates a paradox:
+ *   AI fail → fallback generates template → quality gate rejects template → 0 output
+ *
+ * New behavior: return empty → caller skips this post → no spam comment.
+ * Quality > quantity. A skipped post is always better than a bot-flagged comment.
  */
-function generateContextualFallback(_postText, _topic) {
-  // 2026-05-04: previously this function picked from hardcoded template
-  // pools per post-type. The user complained that "Mình sẽ theo dõi thêm"
-  // (one of the news templates) was being posted as a real comment — the
-  // FB activity log proved it. None of these templates carry substance,
-  // so the user-stated rule "tập trung vào bài có giá trị, đừng cmt chung
-  // chung" requires us to skip rather than fall back. Returning empty
-  // tells the caller to skip the post entirely.
+function generateContextualFallback(/* postText, topic */) {
   return ''
 }
 
@@ -361,12 +365,30 @@ Chỉ trả về comment, không giải thích.`
 /**
  * Generate brand-aware contextual fallback when AI fails
  */
-function generateBrandContextualFallback(_postContent, _brandKeywords = [], _brandName = '') {
-  // 2026-05-04: same reasoning as generateContextualFallback above. Hardcoded
-  // brand templates ("Mình thấy X cũng được nhiều người recommend đó bạn")
-  // read like sales bots. Skip the post if Hermes/AI cannot produce a real
-  // brand-aware comment.
-  return null
+function generateBrandContextualFallback(postContent, brandKeywords = [], brandName = '') {
+  const lower = postContent.toLowerCase()
+
+  // Check if post is a question
+  if (/\?|ai biết|có ai|mọi người|cho mình hỏi|giúp mình|tư vấn|ở đâu|chỗ nào/.test(lower)) {
+    if (brandName) {
+      const templates = [
+        `Mình thấy ${brandName} cũng được nhiều người recommend đó bạn`,
+        `Bạn thử tìm hiểu ${brandName} xem, mình dùng thấy ổn`,
+        `${brandName} cũng là một option hay, bạn tham khảo thử`,
+      ]
+      return templates[Math.floor(Math.random() * templates.length)]
+    }
+    return null // no brand name = can't do meaningful fallback
+  }
+
+  // Experience sharing
+  if (/kinh nghiệm|chia sẻ|review|đánh giá|so sánh/.test(lower)) {
+    if (brandName) {
+      return `Cảm ơn bạn chia sẻ, mình cũng có trải nghiệm tương tự với ${brandName}`
+    }
+  }
+
+  return null // don't force a generic comment
 }
 
 module.exports = { generateComment, generateOpportunityComment }

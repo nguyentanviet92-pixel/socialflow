@@ -76,4 +76,55 @@ module.exports = async function (app) {
     if (error) return reply.code(500).send({ error: error.message })
     return { ok: true }
   })
+
+  // ─── System notification (agent-auth) ─────────────────────
+  // Used by the agent to push critical alerts (Hermes offline, checkpoint, etc.)
+  // Requires X-Agent-Key header (same as /ai-hermes/agent/* routes).
+  // Inserts notification for the admin user (ADMIN_USER_ID) since agent
+  // doesn't have a user session context.
+  const AGENT_SECRET = process.env.AGENT_SECRET
+  const ADMIN_USER_ID = process.env.ADMIN_USER_ID || '274868cf-742d-4d8a-89e8-bf1c37766b77'
+
+  app.post('/system', async (req, reply) => {
+    // Auth: agent key
+    const key = req.headers['x-agent-key']
+    if (!AGENT_SECRET || key !== AGENT_SECRET) {
+      return reply.code(401).send({ error: 'Invalid agent key' })
+    }
+
+    const { type, title, body, level, data } = req.body || {}
+    if (!type || !title) {
+      return reply.code(400).send({ error: 'type and title required' })
+    }
+
+    // Dedup: don't insert if same type was sent in last 30 minutes
+    try {
+      const since = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+      const { data: recent } = await app.supabase
+        .from('notifications')
+        .select('id')
+        .eq('user_id', ADMIN_USER_ID)
+        .eq('type', type)
+        .gte('created_at', since)
+        .limit(1)
+      if (recent && recent.length > 0) {
+        return { ok: true, deduplicated: true }
+      }
+    } catch {}
+
+    const { error } = await app.supabase
+      .from('notifications')
+      .insert({
+        user_id: ADMIN_USER_ID,
+        type,
+        title,
+        body: body || '',
+        level: level || 'info',
+        data: data || {},
+        is_read: false,
+      })
+
+    if (error) return reply.code(500).send({ error: error.message })
+    return { ok: true }
+  })
 }
