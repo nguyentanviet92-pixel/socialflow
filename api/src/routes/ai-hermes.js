@@ -6,32 +6,29 @@ module.exports = async (fastify) => {
   console.log('[HERMES] Using URL:', HERMES_URL, 'and SECRET starting with:', AGENT_SECRET ? AGENT_SECRET.substring(0, 5) : 'undefined')
 
   async function proxyToHermes(path, body, timeout = 30000) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeout)
     try {
-      const res = await fetch(`${HERMES_URL}${path}`, {
-        method: 'POST',
+      const axios = require('axios')
+      const res = await axios.post(`${HERMES_URL}${path}`, body, {
         headers: {
           'Content-Type': 'application/json',
           'X-Agent-Key': AGENT_SECRET,
           'Connection': 'close',
         },
-        body: JSON.stringify(body),
-        signal: controller.signal,
+        timeout: timeout,
+        validateStatus: () => true
       })
-      const json = await res.json().catch(() => ({ error: 'Invalid JSON response' }))
-      return { status: res.status, json }
-    } finally {
-      clearTimeout(timer)
+      return { status: res.status, json: res.data }
+    } catch (err) {
+      return { status: 503, json: { error: 'Hermes API unreachable', detail: err.message } }
     }
   }
 
   // ─── Health check (passthrough) ────────────────────────
   fastify.get('/health', async (req, reply) => {
     try {
-      const res = await fetch(`${HERMES_URL}/health`, { signal: AbortSignal.timeout(5000) })
-      const json = await res.json()
-      return { ...json, proxy: 'ok' }
+      const axios = require('axios')
+      const res = await axios.get(`${HERMES_URL}/health`, { timeout: 5000, headers: { 'Connection': 'close' } })
+      return { ...res.data, proxy: 'ok' }
     } catch (err) {
       return reply.code(503).send({ error: 'Hermes API unreachable', detail: err.message })
     }
@@ -98,13 +95,18 @@ module.exports = async (fastify) => {
   })
 
   // ─── Status / performance / skills (both auth paths) ────
-  // For HermesBar component + /hermes Brain page.
   async function getStatus() {
-    const res = await fetch(`${HERMES_URL}/status`, {
-      headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
-      signal: AbortSignal.timeout(5000),
-    })
-    return { status: res.status, json: await res.json() }
+    try {
+      const axios = require('axios')
+      const res = await axios.get(`${HERMES_URL}/status`, {
+        headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
+        timeout: 5000,
+        validateStatus: () => true // Resolve on any status code
+      })
+      return { status: res.status, json: res.data }
+    } catch (err) {
+      throw new Error(err.message || 'Axios timeout or network error')
+    }
   }
 
   fastify.get('/status', { preHandler: fastify.authenticate }, async (req, reply) => {
@@ -212,11 +214,13 @@ module.exports = async (fastify) => {
 
   fastify.get('/performance', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
-      const res = await fetch(`${HERMES_URL}/performance`, {
+      const axios = require('axios')
+      const res = await axios.get(`${HERMES_URL}/performance`, {
         headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
+        validateStatus: () => true
       })
-      return reply.code(res.status).send(await res.json())
+      return reply.code(res.status).send(res.data)
     } catch (err) {
       return reply.code(503).send({ error: err.message })
     }
@@ -224,11 +228,13 @@ module.exports = async (fastify) => {
 
   fastify.get('/skills/status', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
-      const res = await fetch(`${HERMES_URL}/skills/status`, {
+      const axios = require('axios')
+      const res = await axios.get(`${HERMES_URL}/skills/status`, {
         headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
-        signal: AbortSignal.timeout(10000),
+        timeout: 10000,
+        validateStatus: () => true
       })
-      return reply.code(res.status).send(await res.json())
+      return reply.code(res.status).send(res.data)
     } catch (err) {
       return reply.code(503).send({ error: err.message })
     }
