@@ -1043,7 +1043,7 @@ Không markdown wrapper. Chỉ JSON.`
           last_error: null,
         }).eq('id', req.params.id)
       } else if (v.valid === false) {
-        const reasonMap = { CHECKPOINT: 'checkpoint', SESSION_EXPIRED: 'expired', DISABLED: 'disabled' }
+        const reasonMap = { CHECKPOINT: 'checkpoint', SESSION_EXPIRED: 'session_expired', DISABLED: 'disabled' }
         const mapped = reasonMap[v.reason]
         if (mapped) {
           immediateStatus = mapped
@@ -1055,7 +1055,7 @@ Không markdown wrapper. Chỉ JSON.`
           }).eq('id', req.params.id)
         }
       }
-      // valid: null (AMBIGUOUS) → leave as 'unknown', let agent verify
+      // valid: null (AMBIGUOUS / NETWORK_ERROR) → leave as 'unknown', let agent verify
     } catch (e) {
       fastify.log.warn({ err: e.message }, '[UPDATE-COOKIE] immediate validate failed — falling back to agent')
     }

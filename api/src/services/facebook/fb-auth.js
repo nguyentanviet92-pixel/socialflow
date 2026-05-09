@@ -42,7 +42,7 @@ async function validateCookie(account, proxyConfig = null) {
     const html = String(res.data || '')
     const finalUrl = (res.request?.res?.responseUrl || res.config?.url || '').toLowerCase()
 
-    // Hard checkpoint markers
+    // Hard checkpoint markers — check FIRST, these are unambiguous
     if (finalUrl.includes('/checkpoint') || /checkpoint|security check|verify your identity|xác nhận danh tính/i.test(html)) {
       return { valid: false, reason: 'CHECKPOINT' }
     }
@@ -53,21 +53,40 @@ async function validateCookie(account, proxyConfig = null) {
       return { valid: false, reason: 'RATE_LIMIT' }
     }
 
-    // Strong logged-in markers (positive signals only — don't trust absence)
+    // ── POSITIVE signals — if any are present, cookie is VALID ──
+    // Check these BEFORE negative signals to prevent false positives.
     const hasUserIdJson = /"USER_ID"\s*:\s*"\d+"/.test(html) || /"actorID"\s*:\s*"\d+"/.test(html)
     const hasLoggedInTrue = /"is_logged_in"\s*:\s*true/.test(html)
     const hasDtsg = /"DTSGInitialData"|name="fb_dtsg"/.test(html)
     if (hasUserIdJson || hasLoggedInTrue || hasDtsg) return { valid: true }
 
-    // Saved-login chooser ("Tiếp tục as X" / "Create new account") = logged out
-    const hasCreateAccount = /tạo tài khoản mới|create new account/i.test(html)
-    const hasContinue = /tiếp tục|continue|dùng trang cá nhân khác|use another profile/i.test(html)
-    if (hasCreateAccount && hasContinue) return { valid: false, reason: 'SESSION_EXPIRED' }
+    // ── NEGATIVE signals — only check AFTER confirming no positive signals ──
 
-    // Login URL or login form
-    if (finalUrl.includes('/login') || /form[^>]+id="?login_form"?|name="email"[^>]*type="email"/i.test(html)) {
+    // "Khám phá những điều bạn yêu thích" / "Discover things you love" hero text
+    // This is the big splash page FB shows when cookie is dead but profile remembered
+    const hasDiscoverHero = /khám phá những điều bạn yêu thích|discover.{0,10}things you.{0,10}love/i.test(html)
+    if (hasDiscoverHero) return { valid: false, reason: 'SESSION_EXPIRED' }
+
+    // Saved-login chooser: require ALL THREE signals to avoid false positives.
+    // Words like "tiếp tục" / "continue" appear on normal FB pages too, so a
+    // single match is NOT enough. We need the full profile-picker trifecta.
+    const hasCreateAccount = /tạo tài khoản mới|create new account/i.test(html)
+    const hasOtherProfile = /dùng trang cá nhân khác|use a(?:nother| different) profile/i.test(html)
+    // Only match "tiếp tục"/"continue" as a standalone button-like text,
+    // not as part of longer phrases like "tiếp tục đọc" / "continue reading"
+    const hasContinueBtn = />\s*(?:tiếp tục|continue)\s*</i.test(html)
+    const chooserScore = (hasCreateAccount ? 1 : 0) + (hasOtherProfile ? 1 : 0) + (hasContinueBtn ? 1 : 0)
+    if (chooserScore >= 2) return { valid: false, reason: 'SESSION_EXPIRED' }
+
+    // Login page — but only if URL is clearly a login page with a form,
+    // not just a redirect parameter containing /login
+    const isLoginPage = finalUrl.includes('/login') && !finalUrl.includes('next=')
+    const hasLoginForm = /form[^>]+id="?login_form"?|name="email"[^>]*type="email"/i.test(html)
+    if (isLoginPage || hasLoginForm) {
       return { valid: false, reason: 'SESSION_EXPIRED' }
     }
+
+    // Explicit logged-out markers
     if (/"is_logged_in"\s*:\s*false/.test(html) || /please log in|session expired/i.test(html)) {
       return { valid: false, reason: 'SESSION_EXPIRED' }
     }
@@ -75,7 +94,8 @@ async function validateCookie(account, proxyConfig = null) {
     // Ambiguous — don't lie. Caller should fall back to agent verify.
     return { valid: null, reason: 'AMBIGUOUS' }
   } catch {
-    return { valid: false, reason: 'NETWORK_ERROR' }
+    // Network error should NOT mark cookie as dead — it could be VPS network issue
+    return { valid: null, reason: 'NETWORK_ERROR' }
   }
 }
 

@@ -73,7 +73,7 @@ export default function CookieRepairModal({ account, onClose, onSuccess }) {
         setTimeout(() => { onSuccess?.(); onClose() }, 1500)
         return
       }
-      if (data?.status && ['checkpoint', 'expired', 'disabled', 'banned'].includes(data.status)) {
+      if (data?.status && ['checkpoint', 'expired', 'session_expired', 'disabled', 'banned', 'dead'].includes(data.status)) {
         setPhase('failed')
         setError(`Cookie ${data.status} — thử cookie khác`)
         toast.error(`✗ Cookie ${data.status}`)
