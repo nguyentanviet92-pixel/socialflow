@@ -2,7 +2,8 @@
 // Exposes /ai-hermes/comment, /ai-hermes/evaluate, /ai-hermes/quality-gate, /ai-hermes/generate
 module.exports = async (fastify) => {
   const HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8100'
-  const AGENT_SECRET = process.env.AGENT_SECRET
+  const AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY
+  console.log('[HERMES] Using AGENT_SECRET starting with:', AGENT_SECRET ? AGENT_SECRET.substring(0, 5) : 'undefined')
 
   async function proxyToHermes(path, body, timeout = 30000) {
     const controller = new AbortController()
