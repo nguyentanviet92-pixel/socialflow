@@ -156,27 +156,27 @@ async function checkSessionOnPage(page, supabase, accountId) {
         return { ok: false, reason: 'restricted' }
 
       // "Continue as <name>" landing page — FB shows this when session cookie
-      // is invalid but the device still remembers the profile. URL stays at
-      // facebook.com root, no /login redirect, so URL-only checks miss it.
-      // Detect via the profile-picker buttons that only render here.
+      // is invalid but the device still remembers the profile. URL sometimes stays at
+      // facebook.com root, but can happen on other URLs too.
+      // Detect via the profile-picker buttons or the hero text.
       try {
-        const u = new URL(url)
-        const isRoot = (u.hostname.endsWith('facebook.com') || u.hostname.endsWith('facebook.com/')) &&
-          (u.pathname === '/' || u.pathname === '')
-        if (isRoot) {
-          const btns = Array.from(document.querySelectorAll('a, [role="button"], button'))
-            .map(b => (b.innerText || '').trim().toLowerCase())
-          const hasContinueAs = btns.some(t => t === 'tiếp tục' || t === 'continue')
-          const hasOtherProfile = btns.some(t =>
-            t.includes('dùng trang cá nhân khác') || t.includes('use a different profile')
-          )
-          const hasCreate = btns.some(t =>
-            t.includes('tạo tài khoản') || t.includes('create new account')
-          )
-          // Need at least 2 of the 3 profile-picker signals to avoid false positives
-          const score = (hasContinueAs ? 1 : 0) + (hasOtherProfile ? 1 : 0) + (hasCreate ? 1 : 0)
-          if (score >= 2) return { ok: false, reason: 'session_expired' }
-        }
+        const btns = Array.from(document.querySelectorAll('a, [role="button"], button'))
+          .map(b => (b.innerText || '').trim().toLowerCase())
+        const hasContinueAs = btns.some(t => t === 'tiếp tục' || t === 'continue')
+        const hasOtherProfile = btns.some(t =>
+          t.includes('dùng trang cá nhân khác') || t.includes('use a different profile')
+        )
+        const hasCreate = btns.some(t =>
+          t.includes('tạo tài khoản') || t.includes('create new account')
+        )
+        // Need at least 2 of the 3 profile-picker signals to avoid false positives
+        const score = (hasContinueAs ? 1 : 0) + (hasOtherProfile ? 1 : 0) + (hasCreate ? 1 : 0)
+        
+        const hasDiscoverText = text.toLowerCase().includes('khám phá những điều bạn yêu thích') || 
+                                text.toLowerCase().includes('discover what you love') ||
+                                text.toLowerCase().includes('discover things you love')
+
+        if (score >= 2 || hasDiscoverText) return { ok: false, reason: 'session_expired' }
       } catch {}
 
       return { ok: true }
