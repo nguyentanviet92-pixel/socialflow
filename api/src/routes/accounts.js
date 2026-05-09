@@ -1026,7 +1026,7 @@ Không markdown wrapper. Chỉ JSON.`
       fb_user_id: fbUserId || undefined,
       status: 'unknown',
       is_active: true, // re-enable on cookie refresh
-    }).eq('id', req.params.id).eq('owner_id', req.user.id).select().single()
+    }).eq('id', req.params.id).eq('owner_id', req.user.id).select('*, proxies(*)').single()
 
     if (error) return reply.code(500).send({ error: error.message })
 
@@ -1034,7 +1034,16 @@ Không markdown wrapper. Chỉ JSON.`
     // when a 2s HTTP check can already tell us if the cookie is good.
     let immediateStatus = null
     try {
-      const v = await validateCookie(data)
+      // Must pass proxy to avoid burning cookie from VPS datacenter IP
+      const proxyConfig = data.proxies ? {
+        host: data.proxies.host,
+        port: data.proxies.port,
+        username: data.proxies.username,
+        password: data.proxies.password,
+        type: data.proxies.type || 'http'
+      } : null;
+      
+      const v = await validateCookie(data, proxyConfig)
       if (v.valid === true) {
         immediateStatus = 'healthy'
         await supabase.from('accounts').update({
