@@ -14,6 +14,7 @@ module.exports = async (fastify) => {
         headers: {
           'Content-Type': 'application/json',
           'X-Agent-Key': AGENT_SECRET,
+          'Connection': 'close',
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -100,7 +101,7 @@ module.exports = async (fastify) => {
   // For HermesBar component + /hermes Brain page.
   async function getStatus() {
     const res = await fetch(`${HERMES_URL}/status`, {
-      headers: { 'X-Agent-Key': AGENT_SECRET },
+      headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
       signal: AbortSignal.timeout(5000),
     })
     return { status: res.status, json: await res.json() }
@@ -212,7 +213,7 @@ module.exports = async (fastify) => {
   fastify.get('/performance', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const res = await fetch(`${HERMES_URL}/performance`, {
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
         signal: AbortSignal.timeout(10000),
       })
       return reply.code(res.status).send(await res.json())
@@ -224,7 +225,7 @@ module.exports = async (fastify) => {
   fastify.get('/skills/status', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const res = await fetch(`${HERMES_URL}/skills/status`, {
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
         signal: AbortSignal.timeout(10000),
       })
       return reply.code(res.status).send(await res.json())
