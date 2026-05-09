@@ -254,7 +254,7 @@ export default function ReplyModal({ post, onClose }) {
                           acc.id === selectedAccountId ? 'bg-blue-50' : ''
                         }`}
                       >
-                        <div className={`w-2 h-2 rounded-full shrink-0 ${acc.status === 'healthy' ? 'bg-hermes' : acc.status === 'expired' ? 'bg-red-500' : 'bg-yellow-500'}`} />
+                        <div className={`w-2 h-2 rounded-full shrink-0 ${acc.status === 'healthy' ? 'bg-hermes' : ['expired', 'session_expired', 'checkpoint'].includes(acc.status) ? 'bg-red-500' : 'bg-yellow-500'}`} />
                         <span className="truncate">{acc.username}</span>
                         <span className="text-xs text-app-dim ml-auto shrink-0">{acc.status}</span>
                       </button>

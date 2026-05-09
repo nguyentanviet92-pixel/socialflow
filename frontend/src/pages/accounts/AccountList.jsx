@@ -16,18 +16,22 @@ import {
   XCircle,
   ScanSearch,
   Mic,
+  Key,
+  AlertTriangle,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
 import useAgentGuard from '../../hooks/useAgentGuard'
 import HealthBadge from '../../components/accounts/HealthBadge'
 import ProxyBadge from '../../components/shared/ProxyBadge'
+import CookieRepairModal from '../../components/hermes/CookieRepairModal'
 
 export default function AccountList() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showBulkModal, setShowBulkModal] = useState(false)
   const [search, setSearch] = useState('')
   const [editAccount, setEditAccount] = useState(null)
+  const [cookieRepairAccount, setCookieRepairAccount] = useState(null)
 
   // Fetch All state: { accountId: { jobId, status, error } }
   const [fetchJobs, setFetchJobs] = useState({})
@@ -163,8 +167,49 @@ export default function AccountList() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
   }
 
+  // Nicks cần update cookie ngay
+  const expiredNicks = accounts.filter(a =>
+    ['session_expired', 'expired', 'checkpoint'].includes(a.status)
+  )
+
   return (
     <div className="space-y-6">
+
+      {/* ⚠️ Banner cảnh báo cookie hết hạn/checkpoint */}
+      {expiredNicks.length > 0 && (
+        <div
+          className="flex items-start gap-3 px-4 py-3 rounded"
+          style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)' }}
+        >
+          <AlertTriangle size={16} className="text-danger mt-0.5 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-danger mb-1">
+              {expiredNicks.length} nick cần cập nhật cookie
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {expiredNicks.map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => setCookieRepairAccount(a)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded"
+                  style={{
+                    background: 'rgba(239,68,68,0.12)',
+                    border: '1px solid rgba(239,68,68,0.4)',
+                    color: 'var(--danger)',
+                  }}
+                >
+                  <Key size={11} />
+                  {a.username || a.id.slice(0, 8)}
+                  <span className="text-[10px] opacity-70">
+                    {a.status === 'checkpoint' ? '· checkpoint' : '· hết hạn'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-app-primary">Accounts</h1>
         <div className="flex items-center gap-2">
@@ -316,12 +361,18 @@ export default function AccountList() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <HealthBadge status={account.status} />
-                        {(account.status === 'dead' || account.status === 'checkpoint') && (
+                        {(['checkpoint', 'session_expired', 'expired', 'dead'].includes(account.status)) && (
                           <button
-                            onClick={() => setEditAccount(account)}
-                            className="text-[10px] text-orange-600 hover:text-orange-700 font-medium underline"
+                            onClick={() => setCookieRepairAccount(account)}
+                            className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                            style={{
+                              background: 'rgba(239,68,68,0.1)',
+                              border: '1px solid rgba(239,68,68,0.35)',
+                              color: 'var(--danger)',
+                            }}
                           >
-                            Cap nhat cookie
+                            <Key size={9} />
+                            Cập nhật cookie
                           </button>
                         )}
                       </div>
@@ -381,6 +432,17 @@ export default function AccountList() {
           onClose={() => setEditAccount(null)}
           onSuccess={() => {
             setEditAccount(null)
+            queryClient.invalidateQueries({ queryKey: ['accounts'] })
+          }}
+        />
+      )}
+
+      {cookieRepairAccount && (
+        <CookieRepairModal
+          account={cookieRepairAccount}
+          onClose={() => setCookieRepairAccount(null)}
+          onSuccess={() => {
+            setCookieRepairAccount(null)
             queryClient.invalidateQueries({ queryKey: ['accounts'] })
           }}
         />

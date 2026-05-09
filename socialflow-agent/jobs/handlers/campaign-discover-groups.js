@@ -156,10 +156,13 @@ async function extractGroupsFromDOM(page) {
 async function campaignDiscoverGroups(payload, supabase) {
   const { account_id, campaign_id, role_id, topic, config, feeds_into, parsed_plan } = payload
   // Phase 1: Load campaign.language → derive allowedLangs (overrides config.allowed_languages)
+  // Also load min_member_count for member-count threshold gate.
   let campaignLanguage = 'vi'
+  let campaign = {}
   if (campaign_id) {
     try {
-      const { data: _c } = await supabase.from('campaigns').select('language').eq('id', campaign_id).single()
+      const { data: _c } = await supabase.from('campaigns').select('language, min_member_count, kpi_config, config').eq('id', campaign_id).single()
+      campaign = _c || {}
       if (_c?.language) campaignLanguage = _c.language
     } catch {}
   }
@@ -198,14 +201,7 @@ async function campaignDiscoverGroups(payload, supabase) {
     const currentUrl = page.url()
     if (!currentUrl.includes('facebook.com') || currentUrl.includes('/login') || currentUrl === 'about:blank') {
       console.log(`[CAMPAIGN-SCOUT] Warming up: navigating to FB feed...`)
-      // Audit 2026-04-12: 15s timeout (was 30s) + local try/catch so a slow
-      // warmup nav doesn't crash the whole scout job. Login/checkpoint detection
-      // is kept OUTSIDE the catch — those are real failures that must throw.
-      try {
-        await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 15000 })
-      } catch (warmErr) {
-        console.warn(`[CAMPAIGN-SCOUT] Warm-up goto failed: ${warmErr.message} — continuing anyway`)
-      }
+      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 30000 })
       await R.sleepRange(3000, 5000)
       const fbUrl = page.url()
       if (fbUrl.includes('/login') || fbUrl.includes('checkpoint')) {
@@ -342,6 +338,24 @@ async function campaignDiscoverGroups(payload, supabase) {
     const toTag = []        // already member but not tagged for this campaign → just tag
     const alreadyTagged = [] // already tagged for a campaign → skip
 
+    // Pre-fetch member status for all candidate groups across ALL nicks of
+    // current owner — for cross-campaign reuse. If ANY of owner's nicks is
+    // already a confirmed member of group X, we don't need to join again
+    // for current campaign — just upsert the campaign_groups junction.
+    const ownerMemberFbIds = new Set()
+    try {
+      const { data: ownerNicks } = await supabase.from('accounts')
+        .select('id').eq('owner_id', payload.owner_id || account.owner_id || null)
+      const ownerNickIds = (ownerNicks || []).map(n => n.id)
+      if (ownerNickIds.length > 0) {
+        const { data: ownerMembers } = await supabase.from('fb_groups')
+          .select('fb_group_id').in('account_id', ownerNickIds).eq('is_member', true)
+        for (const r of ownerMembers || []) ownerMemberFbIds.add(r.fb_group_id)
+      }
+    } catch (e) {
+      console.warn(`[CAMPAIGN-SCOUT] owner reuse pre-fetch failed: ${e.message}`)
+    }
+
     for (const g of allGroups) {
       const existing = existingMap.get(g.fb_group_id)
       if (existing) g.ai_relevance = existing.ai_relevance // propagate cache
@@ -349,6 +363,15 @@ async function campaignDiscoverGroups(payload, supabase) {
       // Cross-nick dedup: skip if ANY nick in campaign already joined this group
       if (joinedSet.has(g.fb_group_id)) {
         alreadyTagged.push(g)
+      } else if (existing?.is_member === true) {
+        // Current nick already member (via this OR another campaign) →
+        // just tag for current campaign (no re-join needed).
+        toTag.push(g)
+      } else if (!existing && ownerMemberFbIds.has(g.fb_group_id)) {
+        // Owner has another nick in this group already → reuse junction
+        // without joining current nick. Marks intent; if nurture later
+        // needs current nick membership it will trigger join then.
+        toTag.push(g)
       } else if (!existing) {
         toJoin.push(g)
       } else if (!existing.joined_via_campaign_id) {
@@ -378,7 +401,7 @@ async function campaignDiscoverGroups(payload, supabase) {
 
     if (untaggedGroups?.length > 0) {
       // Filter: chỉ đánh giá group chưa có AI cache cho topic này
-      const topicKey = topic.toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
+      const topicKey = (topic || '').toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
       const needsEval = untaggedGroups.filter(g => {
         const cached = g.ai_relevance?.[topicKey]
         if (!cached) return true
@@ -462,7 +485,7 @@ async function campaignDiscoverGroups(payload, supabase) {
       }
 
       // Skip groups already evaluated as irrelevant for this topic (cached)
-      const topicKey_ = topic.toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
+      const topicKey_ = (topic || '').toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
       const cachedEval = group.ai_relevance?.[topicKey_]
       if (cachedEval && !cachedEval.relevant && cachedEval.evaluated_at) {
         const ageMs = Date.now() - new Date(cachedEval.evaluated_at).getTime()
@@ -530,7 +553,7 @@ async function campaignDiscoverGroups(payload, supabase) {
         }
 
         // Cache AI eval result to DB (both accept and reject)
-        const topicKey = topic.toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
+        const topicKey = (topic || '').toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
         const existingRelevance = group.ai_relevance || {}
         const tier = evaluation.tier || (evaluation.score >= 8 ? 'tier1_potential' : evaluation.score >= 5 ? 'tier2_prospect' : 'tier3_irrelevant')
         existingRelevance[topicKey] = {
@@ -555,24 +578,35 @@ async function campaignDiscoverGroups(payload, supabase) {
         const allowedLangs = campaignLanguage === 'mixed'
           ? ['vi', 'en']
           : (config?.allowed_languages || campaignAllowedLangs)
-        const topicKws = topic.toLowerCase().split(/[\s,]+/).filter(k => k.length > 2)
+        const topicKws = (topic || '').toLowerCase().split(/[\s,]+/).filter(k => k.length > 2)
         const nameContainsTopic = topicKws.some(kw => (group.name || '').toLowerCase().includes(kw))
 
+        // 2026-05-02: STRICT language gate per user request.
+        // Campaign chọn 'vi' → cấm join nhóm khác tiếng (FB auto-translate
+        // gây hiểu nhầm, comment dịch sai → admin/spam-detector flag).
+        // Override only allowed when campaign.language='mixed'.
         if (evaluation.language && !allowedLangs.includes(evaluation.language) && evaluation.language !== '?') {
-          if (nameContainsTopic) {
-            // Tên group chứa topic keyword → OVERRIDE language rejection
-            console.log(`[CAMPAIGN-SCOUT] 🌐 "${group.name}" lang=${evaluation.language} BUT name matches topic → OVERRIDE, keeping`)
-          } else if (evaluation.score >= 7) {
-            // AI score cao → có thể vẫn hữu ích dù khác ngôn ngữ
-            console.log(`[CAMPAIGN-SCOUT] 🌐 "${group.name}" lang=${evaluation.language} BUT score=${evaluation.score} high → OVERRIDE, keeping`)
-          } else {
-            console.log(`[CAMPAIGN-SCOUT] 🌐 Skip "${group.name}" — lang: ${evaluation.language} (allowed: ${allowedLangs.join(',')})`)
-            logger.log('visit_group', {
-              target_type: 'group', target_name: group.name, result_status: 'skipped',
-              details: { reason: `lang_${evaluation.language}`, language: evaluation.language },
-            })
-            continue
-          }
+          console.log(`[CAMPAIGN-SCOUT] 🌐 STRICT skip "${group.name}" — lang: ${evaluation.language} (allowed: ${allowedLangs.join(',')})`)
+          logger.log('visit_group', {
+            target_type: 'group', target_name: group.name, result_status: 'skipped',
+            details: { reason: `lang_${evaluation.language}_strict`, language: evaluation.language, name_contains_topic: nameContainsTopic, score: evaluation.score },
+          })
+          continue
+        }
+
+        // 2026-05-02: minimum member count gate.
+        // Campaign config field `min_member_count` (default 100) — skip groups
+        // smaller. Reasoning: tiny groups have low engagement + low ROI per
+        // join effort + admin tend to be more aggressive on spam-detection.
+        const minMembers = config?.min_member_count || campaign.min_member_count || 100
+        const memberCount = groupInfo?.member_count || group.member_count || 0
+        if (memberCount > 0 && memberCount < minMembers) {
+          console.log(`[CAMPAIGN-SCOUT] 👥 Skip "${group.name}" — only ${memberCount} members < ${minMembers} threshold`)
+          logger.log('visit_group', {
+            target_type: 'group', target_name: group.name, result_status: 'skipped',
+            details: { reason: 'member_count_below_threshold', member_count: memberCount, min_required: minMembers },
+          })
+          continue
         }
 
         // Save ai_join_score + risk_level to fb_groups for future reference
@@ -745,17 +779,17 @@ async function campaignDiscoverGroups(payload, supabase) {
             await R.sleepRange(1500, 3000)
           }
 
-          // Phase 8 Fix 3: detect membership state by ACTUAL DOM evidence, not
-          // optimistic defaults. Three-way result:
+          // Phase 8 Fix 3 + Phase 3.1: detect membership state by ACTUAL DOM evidence.
+          // Three-way result:
           //   admitted → composer textbox is visible
           //   pending  → "chờ duyệt / pending review / request sent" text
-          //   unknown  → neither — DO NOT mark as member, defer to Phase 7 cron
+          //   unknown  → neither — retry once (public groups need 2-3s to render composer)
           let isPending = false
           let confirmedMember = false
-          try {
-            await R.sleepRange(800, 1500)
-            const membershipState = await page.evaluate(() => {
-              const text = document.body?.innerText?.substring(0, 800) || ''
+
+          const detectMembershipState = async () => {
+            return page.evaluate(() => {
+              const text = document.body?.innerText?.substring(0, 1200) || ''
               const isPendingText = /pending\s+review|chờ\s+(duyệt|phê\s+duyệt)|waiting.*approval|awaiting|đã\s+gửi\s+yêu\s+cầu|request\s+sent/i.test(text)
               // Composer presence = admitted (can post to the group)
               const composerSelectors = [
@@ -764,16 +798,34 @@ async function campaignDiscoverGroups(payload, supabase) {
                 '[aria-label*="Bạn viết gì" i]',
                 '[aria-label*="Create a post" i]',
                 '[aria-label*="Tạo bài viết" i]',
+                '[role="textbox"][contenteditable="true"]',
               ]
               let hasComposer = false
               for (const sel of composerSelectors) {
                 try { if (document.querySelector(sel)) { hasComposer = true; break } } catch {}
               }
-              return { isPendingText, hasComposer }
-            }).catch(() => ({ isPendingText: false, hasComposer: false }))
+              // Also check "Joined" / "Đã tham gia" button as secondary signal
+              const joinedBtnText = /\b(Joined|Đã tham gia|Member)\b/i.test(text)
+              return { isPendingText, hasComposer, joinedBtnText }
+            }).catch(() => ({ isPendingText: false, hasComposer: false, joinedBtnText: false }))
+          }
+
+          try {
+            // First check: wait 2-3s for DOM to settle after join click
+            await R.sleepRange(2000, 3000)
+            let membershipState = await detectMembershipState()
+
+            // If unknown (neither pending nor composer) → retry once after 3s
+            // Public groups often approve instantly but composer takes time to render
+            if (!membershipState.isPendingText && !membershipState.hasComposer) {
+              console.log(`[CAMPAIGN-SCOUT] Membership state unknown for "${group.name}" — retrying in 3s`)
+              await R.sleepRange(2500, 3500)
+              membershipState = await detectMembershipState()
+            }
 
             isPending = membershipState.isPendingText
-            confirmedMember = membershipState.hasComposer && !isPending
+            // Consider confirmed if composer visible OR "Joined" button visible (without pending text)
+            confirmedMember = (membershipState.hasComposer || membershipState.joinedBtnText) && !isPending
 
             if (isPending) {
               if (!campaignDiscoverGroups._pendingCount) campaignDiscoverGroups._pendingCount = {}
@@ -781,6 +833,9 @@ async function campaignDiscoverGroups(payload, supabase) {
               campaignDiscoverGroups._pendingCount[key] = (campaignDiscoverGroups._pendingCount[key] || 0) + 1
               const { checkPendingLoop } = require('../../lib/signal-collector')
               checkPendingLoop(account_id, payload.job_id, group.fb_group_id, campaignDiscoverGroups._pendingCount[key])
+            }
+            if (confirmedMember) {
+              console.log(`[CAMPAIGN-SCOUT] ✅ Instant admit detected for "${group.name}" — marking as member immediately`)
             }
           } catch {}
 
@@ -815,6 +870,9 @@ async function campaignDiscoverGroups(payload, supabase) {
             is_member: confirmedMember,
             pending_approval: !confirmedMember,
             joined_at: confirmedMember ? new Date().toISOString() : null,
+            // Track when pending state began so daily cron can compute 7-day cap.
+            // Only set on FIRST pending; on confirmed → null (cleared).
+            pending_since: confirmedMember ? null : new Date().toISOString(),
             global_score: globalScore,
             score_tier: tier,
             evaluation_posts: evalPosts,

@@ -64,6 +64,35 @@ async function getSession(account, opts = {}) {
     closing: false,
   }
 
+  // 2026-05-04: kill popup tabs as soon as the context spawns them.
+  // Cause: FB click handlers for profile previews / group cards / share
+  // dialogs frequently use window.open() or target="_blank", which creates
+  // a fresh blank tab. Our handlers never click "Close" on these, so they
+  // pile up as `about:blank` tabs (user reported 12+ stuck tabs in one
+  // session). getPage()/releaseSession() trim extras only between jobs;
+  // this listener catches them mid-job too.
+  //
+  // CRITICAL: don't touch the initial blank tab Camoufox creates during
+  // launchPersistentContext — closing it makes the context emit
+  // "Target page, context or browser has been closed" on the very next
+  // call, killing the whole session. Only close *additional* about:blank
+  // tabs that appear *after* the session has a working main tab.
+  session.context.on('page', async (popup) => {
+    try { await popup.waitForLoadState('domcontentloaded', { timeout: 3000 }) } catch {}
+    try {
+      // If this is one of the first 1-2 pages on the context, it's the
+      // initial blank tab from launch — keep it.
+      const pageCount = session.context.pages().length
+      if (pageCount <= 1) return
+
+      const url = popup.url()
+      if (!url || url === 'about:blank' || url.startsWith('about:')) {
+        await popup.close()
+        console.log(`[SESSION-POOL] Auto-closed popup tab for ${account.username || id} (had ${pageCount} pages)`)
+      }
+    } catch {}
+  })
+
   entry._saveInterval = setInterval(async () => {
     try {
       await entry.context.storageState({ path: entry.storageFile })

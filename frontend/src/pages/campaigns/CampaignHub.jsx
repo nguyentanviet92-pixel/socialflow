@@ -12,7 +12,6 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Play, Pause, Edit, Loader, Brain, X, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
-import CookieRepairModal from '../../components/hermes/CookieRepairModal'
 import DenseStat from '../../components/hermes/DenseStat'
 import HermesCaller from '../../components/hermes/HermesCaller'
 import JobRow from '../../components/hermes/JobRow'
@@ -22,6 +21,36 @@ const asArray = (d) => Array.isArray(d) ? d
   : Array.isArray(d?.items) ? d.items
   : Array.isArray(d?.data) ? d.data
   : []
+
+// ─── System Alert Banner ─────────────────────────────────────
+function SystemAlertBanner() {
+  const { data: alerts } = useQuery({
+    queryKey: ['system-alerts-urgent'],
+    queryFn: async () => {
+      try { return (await api.get('/notifications?limit=5&level=urgent&is_read=false')).data } catch { return null }
+    },
+    refetchInterval: 15000,
+  })
+
+  const unreadAlerts = alerts?.data || []
+  if (unreadAlerts.length === 0) return null
+
+  return (
+    <div className="m-6 p-4 rounded" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
+      <div className="flex items-center gap-2 text-danger font-semibold mb-2 text-sm uppercase tracking-wider">
+        <span>⚠</span> System Alerts ({unreadAlerts.length})
+      </div>
+      <div className="space-y-2">
+        {unreadAlerts.map(a => (
+          <div key={a.id} className="text-xs text-app-primary">
+            <span className="font-medium mr-2">{a.title}</span>
+            <span className="text-app-muted">{a.body}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // ─── Tab: Overview ─────────────────────────────────────────
 // Daily report card — shows latest narrative + today's KPI totals. The
@@ -139,6 +168,7 @@ function DailyReportCard({ campaignId }) {
 function OverviewTab({ campaign, campaignId }) {
   const nav = useNavigate()
   const [, setSearchParams] = useSearchParams()
+  const [editingKpi, setEditingKpi] = useState(null) // { row } when modal open
   const { data: kpi } = useQuery({
     queryKey: ['campaigns', campaignId, 'kpi'],
     queryFn: async () => {
@@ -176,6 +206,7 @@ function OverviewTab({ campaign, campaignId }) {
 
   return (
     <div className="overflow-auto font-mono-ui">
+      <SystemAlertBanner />
       <DailyReportCard campaignId={campaignId} />
       <div className="p-6">
       {/* Empty state — prompt to configure Hermes */}
@@ -346,10 +377,8 @@ function OverviewTab({ campaign, campaignId }) {
               <button
                 key={i}
                 type="button"
-                onClick={() => {
-                  // Jump to Hoạt động tab filtered by this nick
-                  setSearchParams({ tab: 'runtime', account_id: row.account_id })
-                }}
+                onClick={() => setEditingKpi({ row })}
+                title="Click để sửa target KPI hôm nay"
                 className="w-full flex items-center gap-3 px-4 py-2 text-xs hover:bg-app-muted/10 text-left"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
@@ -399,6 +428,111 @@ function OverviewTab({ campaign, campaignId }) {
           </div>
         </div>
       )}
+      </div>
+
+      {editingKpi && createPortal(
+        <EditKpiModal
+          campaignId={campaignId}
+          row={editingKpi.row}
+          hasOpp={kpi?.rows?.some(r => (r.target_opportunity_comments || 0) > 0)}
+          onClose={() => setEditingKpi(null)}
+        />,
+        document.body
+      )}
+    </div>
+  )
+}
+
+// Modal: edit per-nick target KPI for today. Backend route is
+// PATCH /campaigns/:id/kpi-today/:account_id and only accepts target_*
+// fields (done_* + kpi_met are computed and stay read-only).
+function EditKpiModal({ campaignId, row, hasOpp, onClose }) {
+  const qc = useQueryClient()
+  const [form, setForm] = useState({
+    target_likes: row.target_likes || 0,
+    target_comments: row.target_comments || 0,
+    target_friend_requests: row.target_friend_requests || 0,
+    target_group_joins: row.target_group_joins || 0,
+    target_opportunity_comments: row.target_opportunity_comments || 0,
+  })
+
+  const save = useMutation({
+    mutationFn: async () => (
+      await api.patch(`/campaigns/${campaignId}/kpi-today/${row.account_id}`, form)
+    ).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['campaigns', campaignId, 'kpi'] })
+      toast.success('Đã cập nhật target KPI')
+      onClose()
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || err.message),
+  })
+
+  const setField = (k) => (e) => {
+    const v = parseInt(e.target.value, 10)
+    setForm(f => ({ ...f, [k]: Number.isFinite(v) && v >= 0 ? Math.min(v, 500) : 0 }))
+  }
+
+  // Click backdrop to close, but not when clicking inside the modal panel.
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-app-surface rounded border border-app-border w-full max-w-md p-5 font-mono-ui text-xs"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-app-muted">Sửa KPI hôm nay</div>
+            <div className="text-app-primary mt-0.5">{row.username || row.account_id?.slice(0, 8)}</div>
+          </div>
+          <button type="button" onClick={onClose} className="text-app-muted hover:text-app-primary">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          {[
+            { k: 'target_likes', label: 'Like', done: row.done_likes },
+            { k: 'target_comments', label: 'Comment', done: row.done_comments },
+            ...(hasOpp ? [{ k: 'target_opportunity_comments', label: 'QC (ad/brand)', done: row.done_opportunity_comments }] : []),
+            { k: 'target_friend_requests', label: 'Friend Request', done: row.done_friend_requests },
+            { k: 'target_group_joins', label: 'Join Group', done: row.done_group_joins },
+          ].map(({ k, label, done }) => (
+            <div key={k} className="flex items-center gap-3">
+              <label className="flex-1 text-app-muted">{label}</label>
+              <span className="text-app-dim w-10 text-right">{done || 0} /</span>
+              <input
+                type="number"
+                min={0}
+                max={500}
+                value={form[k]}
+                onChange={setField(k)}
+                className="w-20 px-2 py-1 bg-app-elevated border border-app-border rounded text-app-primary text-right"
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-app-muted hover:text-app-primary"
+          >
+            Huỷ
+          </button>
+          <button
+            type="button"
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            className="px-4 py-1.5 bg-hermes text-app-bg rounded hover:opacity-90 disabled:opacity-50"
+          >
+            {save.isPending ? 'Đang lưu...' : 'Lưu'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -490,8 +624,6 @@ function HermesCentralToggle({ campaign }) {
 function AgentsTab({ campaign }) {
   const qc = useQueryClient()
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [selectedNick, setSelectedNick] = useState(null)
-  const [repairNick, setRepairNick] = useState(null)
 
   const campaignId = campaign?.id
   const roles = campaign?.campaign_roles || []
@@ -591,19 +723,16 @@ function AgentsTab({ campaign }) {
                 className="flex items-center gap-3 px-4 py-2 text-xs"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
-                <button
-                  className="flex-1 text-app-primary truncate text-left hover:text-hermes cursor-pointer"
-                  onClick={() => setSelectedNick({ acc, k: kpiByAccount[acc.id] })}
-                >
+                <span className="flex-1 text-app-primary truncate">
                   {acc.username || acc.id.slice(0, 8)}
-                </button>
+                </span>
                 <span className="w-28 text-app-muted truncate hidden md:inline">
                   {accRoles.map(r => r.role_type || r.name).filter(Boolean).join(', ') || 'hermes'}
                 </span>
                 <span className={`w-20 truncate ${
                   acc.status === 'healthy' ? 'text-hermes' :
                   acc.status === 'at_risk' ? 'text-warn' :
-                  acc.status === 'checkpoint' ? 'text-danger' : 'text-app-muted'
+                  ['checkpoint', 'session_expired', 'expired'].includes(acc.status) ? 'text-danger' : 'text-app-muted'
                 }`}>
                   ● {acc.status || '—'}
                 </span>
@@ -625,44 +754,7 @@ function AgentsTab({ campaign }) {
         </div>
       )}
 
-      {selectedNick && (() => {
-        const { acc, k } = selectedNick
-        const done = k?.total_done || 0
-        const target = k?.total_target || 0
-        const pct = k?.progress_pct || 0
-        return createPortal(
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setSelectedNick(null)}>
-            <div className="w-full max-w-sm" style={{ background: 'var(--bg-base)', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-                <span className="text-app-primary text-sm font-semibold">{acc.username}</span>
-                <button onClick={() => setSelectedNick(null)} className="text-app-muted hover:text-app-primary"><X size={16} /></button>
-              </div>
-              <div className="px-4 py-3 text-xs space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-app-muted">Status</span>
-                  <span className={acc.status === 'healthy' ? 'text-hermes' : acc.status === 'checkpoint' ? 'text-danger' : 'text-warn'}>● {acc.status || '—'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-app-muted">KPI hôm nay</span>
-                  <span className="text-app-primary">{done}/{target} ({pct}%)</span>
-                </div>
-                {k?.comment_done != null && <div className="flex justify-between"><span className="text-app-muted">Comment</span><span>{k.comment_done}/{k.comment_target}</span></div>}
-                {k?.like_done != null && <div className="flex justify-between"><span className="text-app-muted">Like</span><span>{k.like_done}/{k.like_target}</span></div>}
-              </div>
-              <div className="flex gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
-                <button className="btn-ghost text-xs flex-1" onClick={async () => { try { await api.post(`/accounts/${acc.id}/check-health`); toast.success('Health check queued') } catch(e) { toast.error(e.message) } }}>HEALTH CHECK</button>
-                <button className="btn-ghost text-xs flex-1" onClick={() => { setRepairNick(acc); setSelectedNick(null) }}>🍪 COOKIE</button>
-                <a href={`/accounts/${acc.id}`} className="btn-ghost text-xs flex-1 text-center">FULL DETAIL</a>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )
-      })()}
-
-      {repairNick && <CookieRepairModal account={repairNick} onClose={() => setRepairNick(null)} />}
-
-      {pickerOpen && (
+      {pickerOpen && createPortal(
         <div
           className="fixed inset-0 z-40 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.6)' }}
@@ -696,7 +788,7 @@ function AgentsTab({ campaign }) {
                     <span className="flex-1 text-app-primary truncate">{acc.username || acc.id.slice(0, 8)}</span>
                     <span className={
                       acc.status === 'healthy' ? 'text-hermes' :
-                      acc.status === 'checkpoint' ? 'text-danger' : 'text-app-muted'
+                      ['checkpoint', 'session_expired', 'expired'].includes(acc.status) ? 'text-danger' : 'text-app-muted'
                     }>
                       ● {acc.status || '—'}
                     </span>
@@ -705,7 +797,8 @@ function AgentsTab({ campaign }) {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
@@ -839,6 +932,18 @@ function GroupsTab({ campaignId }) {
     onError: (err) => toast.error(err.response?.data?.error || err.message),
   })
 
+  // Pin/unpin priority — agent visits + comments here BEFORE tier-ranked groups
+  const togglePriority = useMutation({
+    mutationFn: async ({ id, priority_visit }) => {
+      await api.patch(`/campaigns/${campaignId}/groups/${id}/priority`, { priority_visit })
+    },
+    onSuccess: (_, vars) => {
+      toast.success(vars.priority_visit ? 'Đã pin ưu tiên' : 'Đã bỏ pin')
+      qc.invalidateQueries({ queryKey: ['campaigns', campaignId, 'groups'] })
+    },
+    onError: (err) => toast.error(err.response?.data?.error || err.message),
+  })
+
   // Counts
   const counts = useMemo(() => {
     const c = { all: groups.length, member: 0, pending: 0, rejected: 0, banned: 0, unknown: 0 }
@@ -893,18 +998,34 @@ function GroupsTab({ campaignId }) {
         <div className="space-y-2">
           {filteredGroups.map((g) => {
             const badge = STATUS_BADGE[g.join_status || 'unknown']
+            const pinned = g.priority_visit === true
             return (
               <div
                 key={g.id}
                 className="p-3"
                 style={{
                   background: 'var(--bg-elevated)',
-                  border: g.overdue
-                    ? '1px solid rgba(249,115,22,0.4)'
-                    : '1px solid var(--border)',
+                  border: pinned
+                    ? '1px solid var(--hermes)'
+                    : g.overdue
+                      ? '1px solid rgba(249,115,22,0.4)'
+                      : '1px solid var(--border)',
                 }}
               >
                 <div className="flex items-center gap-3 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={pinned}
+                    onChange={(e) => togglePriority.mutate({ id: g.id, priority_visit: e.target.checked })}
+                    disabled={togglePriority.isPending}
+                    title="Pin ưu tiên — agent sẽ visit + comment ở đây trước"
+                    className="cursor-pointer accent-hermes"
+                  />
+                  {pinned && (
+                    <span className="text-[10px] uppercase text-hermes" title="Pinned to top of visit queue">
+                      📌 pin
+                    </span>
+                  )}
                   <span className="flex-1 text-app-primary truncate">{g.name || g.fb_group_id}</span>
                   <span className="text-app-muted">👥 {g.member_count ? (g.member_count >= 1000 ? `${Math.round(g.member_count / 1000)}k` : g.member_count) : '?'}</span>
                   <span className={badge.color}>{badge.text}</span>
@@ -917,6 +1038,32 @@ function GroupsTab({ campaignId }) {
                     <a href={g.url} target="_blank" rel="noopener noreferrer" className="text-info hover:text-hermes text-[10px]">
                       [Xem ↗]
                     </a>
+                  )}
+                </div>
+
+                {/* AI Evaluation / Health Monitor */}
+                <div className="mt-1.5 flex items-center gap-3 text-[10px] text-app-muted">
+                  {g.score_tier && (
+                    <span className={
+                      g.score_tier === 'tier1_potential' ? 'text-hermes' : 
+                      g.score_tier === 'tier2_prospect' ? 'text-info' : 'text-app-muted'
+                    }>
+                      💎 {g.score_tier.replace('_', ' ')}
+                    </span>
+                  )}
+                  {g.risk_level && (
+                    <span className={
+                      g.risk_level === 'high' ? 'text-danger' : 
+                      g.risk_level === 'medium' ? 'text-warn' : 'text-hermes'
+                    }>
+                      🛡 risk: {g.risk_level}
+                    </span>
+                  )}
+                  {g.global_score > 0 && <span>⭐ score: {g.global_score}</span>}
+                  {g.ai_relevance && Object.values(g.ai_relevance).some(v => v.note || v.reason) && (
+                    <span className="truncate flex-1">
+                      📝 {Object.values(g.ai_relevance).find(v => v.note || v.reason)?.note || Object.values(g.ai_relevance).find(v => v.note || v.reason)?.reason}
+                    </span>
                   )}
                 </div>
 
@@ -1057,25 +1204,14 @@ function ExecutionTab({ campaignId }) {
   const failed = jobs.filter(j => j.status === 'failed').length
 
   return (
-    <div className="flex flex-col h-full">
-      <div
-        className="flex items-center gap-8 px-6 py-3"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
-        <DenseStat value={running} label="Running" color="hermes" />
-        <DenseStat value={pending} label="Queued" />
-        <DenseStat value={done} label="Done" color="hermes" />
-        <DenseStat value={failed} label="Failed" color={failed > 0 ? 'danger' : 'primary'} />
-      </div>
-      <div className="flex-1 overflow-auto">
-        {jobs.length === 0 ? (
-          <div className="p-8 text-center text-app-muted font-mono-ui text-xs">
-            No jobs for this campaign yet.
-          </div>
-        ) : (
-          jobs.map(job => <JobRow key={job.id} job={job} />)
-        )}
-      </div>
+    <div
+      className="flex items-center gap-8 px-6 py-3"
+      style={{ borderBottom: '1px solid var(--border)' }}
+    >
+      <DenseStat value={running} label="Running" color="hermes" />
+      <DenseStat value={pending} label="Queued" />
+      <DenseStat value={done} label="Done" color="hermes" />
+      <DenseStat value={failed} label="Failed" color={failed > 0 ? 'danger' : 'primary'} />
     </div>
   )
 }
@@ -1120,15 +1256,20 @@ const ACTION_LABEL = {
 }
 const FILTERABLE_TYPES = [
   { value: '',                    label: 'Tất cả' },
-  { value: 'comment',             label: 'Comment' },
-  { value: 'opportunity_comment', label: 'Comment (AD)' },
-  { value: 'like',                label: 'Like' },
-  { value: 'react',               label: 'React' },
-  { value: 'post',                label: 'Post' },
-  { value: 'join_group',          label: 'Join Group' },
-  { value: 'friend_request',      label: 'Kết bạn' },
-  { value: 'check_group_membership', label: 'Check pending' },
-  { value: 'visit_group',         label: 'Vào nhóm' },
+  { value: 'like',                label: '❤️ Like' },
+  { value: 'comment',             label: '💬 Comment' },
+  { value: 'opportunity_comment', label: '💬 Comment (AD)' },
+  { value: 'join_group',          label: '👥 Tham gia nhóm' },
+  { value: 'friend_request',      label: '🤝 Kết bạn' },
+  { value: 'react',               label: '❤️ React' },
+  { value: 'visit_group',         label: '👀 Vào nhóm' },
+  { value: 'ai_evaluate_posts',   label: '🧠 AI đánh giá bài' },
+  { value: 'ai_evaluate_group',   label: '🧠 AI đánh giá nhóm' },
+  { value: 'post',                label: '📝 Post' },
+  { value: 'check_group_membership', label: '🔍 Check membership' },
+  { value: 'comment_rejected',    label: '🛑 Comment bị từ chối' },
+  { value: 'membership_approved', label: '✅ Duyệt vào nhóm' },
+  { value: 'membership_rejected', label: '🚫 Từ chối vào nhóm' },
 ]
 
 function fmtTime(iso) {
@@ -1364,42 +1505,21 @@ function ActivityTab({ campaignId, campaign }) {
   const pages = pageNumbers(page, totalPages)
 
   return (
-    <div className="flex flex-col">
-      {/* ── Toolbar: action type as tab pills ── */}
+    <div className="flex flex-col h-full">
+      {/* ── Toolbar ── */}
       <div
-        className="flex items-center gap-1 px-4 pt-2 pb-0 flex-wrap"
+        className="flex items-center gap-2 px-4 py-2.5 flex-wrap"
         style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}
       >
-        <span className="font-semibold text-sm mr-2">Hoạt động</span>
-        {FILTERABLE_TYPES.map(t => {
-          const active = filterType === t.value
-          return (
-            <button
-              key={t.value || 'all'}
-              onClick={() => setFilterType(t.value)}
-              className="px-2.5 py-1 text-xs whitespace-nowrap"
-              style={{
-                borderTop: '1px solid ' + (active ? 'var(--hermes)' : 'transparent'),
-                borderLeft: '1px solid ' + (active ? 'var(--border)' : 'transparent'),
-                borderRight: '1px solid ' + (active ? 'var(--border)' : 'transparent'),
-                borderBottom: 'none',
-                marginBottom: '-1px',
-                background: active ? 'var(--bg)' : 'transparent',
-                color: active ? 'var(--hermes)' : 'var(--text-muted)',
-                fontWeight: active ? 600 : 400,
-              }}
-            >
-              {t.label}
-            </button>
-          )
-        })}
-      </div>
+        <select
+          className="px-2 py-1 rounded text-xs"
+          style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
+          value={filterType}
+          onChange={e => setFilterType(e.target.value)}
+        >
+          {FILTERABLE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
 
-      {/* ── Toolbar row 2: date + nick + count + CSV ── */}
-      <div
-        className="flex items-center gap-2 px-4 py-2 flex-wrap"
-        style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}
-      >
         <select
           className="px-2 py-1 rounded text-xs"
           style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
@@ -1450,7 +1570,7 @@ function ActivityTab({ campaignId, campaign }) {
       </div>
 
       {/* ── Feed grouped by date ── */}
-      <div>
+      <div className="flex-1 overflow-auto">
         {isLoading ? (
           <div className="p-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>Đang tải…</div>
         ) : rows.length === 0 ? (
@@ -2326,10 +2446,10 @@ export default function CampaignHub() {
           </MergedTab>
         )}
         {tab === 'runtime' && (
-          <MergedTab>
-            <ActivityTab campaignId={id} campaign={campaign} />
+          <div className="h-full overflow-y-auto">
             <ExecutionTab campaignId={id} />
-          </MergedTab>
+            <ActivityTab campaignId={id} campaign={campaign} />
+          </div>
         )}
         {tab === 'assets' && (
           <MergedTab>

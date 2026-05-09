@@ -81,8 +81,16 @@ async function main() {
   console.log('[OK] VPS DB reachable (via /agent-db proxy)')
 
   // Start heartbeat (via REST — audit 2026-04-14)
+  // 2026-05-04: fixed two bugs that left lag at 1h+:
+  //   1. require('./lib/api-client') returns { getApiClient, ApiClient }, not
+  //      an instance — so apiClient.heartbeat was undefined and the call threw
+  //      synchronously (caught silently by the try/catch).
+  //   2. The exported method is sendHeartbeat(stats), not heartbeat({...}) —
+  //      agentId/hostname/userId are populated inside the client from its own
+  //      fields, so we only pass the stats payload.
   const { config } = require('./lib/supabase')
-  const apiClient = require('./lib/api-client')
+  const { getApiClient } = require('./lib/api-client')
+  const apiClient = getApiClient()
   const AGENT_ID = process.env.AGENT_ID || config.AGENT_ID || `${os.hostname()}-${process.pid}`
   const pkg = require('./package.json')
   let heartbeatFails = 0
@@ -90,20 +98,14 @@ async function main() {
     try {
       const pool = getPool()
       const memUsage = process.memoryUsage()
-      await apiClient.heartbeat({
-        agentId: AGENT_ID,
-        hostname: os.hostname(),
-        platform: os.platform(),
-        userId: process.env.AGENT_USER_ID || null,
-        stats: {
-          version: pkg.version,
-          cpu_usage: os.loadavg()[0],
-          mem_usage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
-          running_jobs: pool.size,
-          running_accounts: [...pool.interactionNicks, ...pool.utilityNicks],
-          jobs_today: pool.jobsToday,
-          jobs_failed: pool.jobsFailed,
-        },
+      await apiClient.sendHeartbeat({
+        version: pkg.version,
+        cpu_usage: os.loadavg()[0],
+        mem_usage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
+        running_jobs: pool.size,
+        running_accounts: [...pool.interactionNicks, ...pool.utilityNicks],
+        jobs_today: pool.jobsToday,
+        jobs_failed: pool.jobsFailed,
       })
       if (heartbeatFails > 0) {
         console.log(`[HEARTBEAT] Reconnected after ${heartbeatFails} failures`)

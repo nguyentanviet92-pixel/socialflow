@@ -27,7 +27,7 @@ async function autoCreateProfiles() {
       .from('accounts')
       .select('id, owner_id, status, is_active')
       .eq('is_active', true)
-      .not('status', 'in', '("checkpoint","expired","disabled")')
+      .not('status', 'in', '("checkpoint","expired","session_expired","disabled")')
 
     if (!accounts?.length) return
 
@@ -128,7 +128,7 @@ async function processNurtureProfiles() {
 
         // 1. Account must be active and healthy
         if (!acc.is_active) continue
-        if (['checkpoint', 'expired', 'disabled'].includes(acc.status)) continue
+        if (['checkpoint', 'expired', 'session_expired', 'disabled'].includes(acc.status)) continue
 
         // 2. Health score check
         if (profile.health_score <= 0) continue
@@ -296,7 +296,7 @@ async function scheduleGroupMonitors() {
     for (const group of needsScan) {
       try {
         const acc = group.accounts
-        if (!acc.is_active || ['checkpoint', 'expired', 'disabled'].includes(acc.status)) continue
+        if (!acc.is_active || ['checkpoint', 'expired', 'session_expired', 'disabled'].includes(acc.status)) continue
         if (busyNicks.has(acc.id)) continue
 
         // Check no duplicate job pending
@@ -425,7 +425,7 @@ function initNurtureScheduler() {
         if (!Number.isFinite(pauseUntil)) continue
         if (pauseUntil > now) continue // still pausing
         // Don't resume if the nick actually died since being paused (checkpoint/expired)
-        if (['checkpoint', 'expired', 'disabled', 'banned'].includes(a.status)) continue
+        if (['checkpoint', 'expired', 'session_expired', 'disabled', 'banned'].includes(a.status)) continue
         await supabase.from('accounts').update({ is_active: true, notes: null }).eq('id', a.id)
         console.log(`[ORCHESTRATOR] auto-resumed ${a.username} (pause expired)`)
         resumed++
@@ -501,19 +501,16 @@ function initNurtureScheduler() {
     }
   }, { timezone: 'Asia/Ho_Chi_Minh' })
 
-  // Extra 5-min orchestrator tick JUST for hermes_central campaigns. These
-  // campaigns opted into Hermes as sole coordinator — the dumb schedulers
-  // skip them, so without a faster tick their nicks would only get work
-  // every 15 min and throughput would tank. 5 min matches the nurture
-  // cadence the schedulers provided for non-central campaigns.
+  // RE-ENABLED 2026-05-02 (after wiring fallback chain): Moonshot 429 no
+  // longer bricks this cron — Hermes Python auto-falls-back through DeepSeek
+  // → NVIDIA → Gemini Flash on 429/billing/5xx. Without this cron the
+  // hermes_central nicks idle 60 min between assign_job → throughput
+  // collapses to <2 sessions/day vs target 24-28.
   cron.schedule('*/5 * * * *', async () => {
     try {
       const { data: centrals } = await supabase
-        .from('campaigns')
-        .select('id, name')
-        .eq('hermes_central', true)
-        .eq('status', 'running')
-        .eq('is_active', true)
+        .from('campaigns').select('id, name')
+        .eq('hermes_central', true).eq('status', 'running').eq('is_active', true)
       if (!centrals?.length) return
       const { runOrchestration } = require('./hermes-orchestrator')
       for (const c of centrals) {
@@ -623,7 +620,149 @@ function initNurtureScheduler() {
     }
   })
 
-  console.log('[NURTURE] Scheduler initialized (every 5 min) — includes group monitor + weekly memory decay + daily cleanup')
+  // Daily group-membership check at 09:00 VN. Replaces previous per-pending
+  // exponential backoff inside check-group-membership handler. Behavior:
+  //   - Query all pending groups not yet >= 7 days (handler caps at 7d by
+  //     setting score_tier='D' which excludes from this query).
+  //   - Insert ONE check_group_membership job per pending group with random
+  //     0-30 min jitter (don't burst the agent).
+  //   - Skip if a check job is already pending/running for that group.
+  cron.schedule('0 9 * * *', async () => {
+    try {
+      const since7d = new Date(Date.now() - 7 * 86400000).toISOString()
+      const { data: pending } = await supabase
+        .from('fb_groups')
+        .select('id, fb_group_id, name, account_id, pending_since')
+        .eq('pending_approval', true)
+        .eq('is_member', false)
+        .neq('score_tier', 'D')
+        .gte('pending_since', since7d)
+      if (!pending?.length) {
+        console.log('[MEMBER-CHECK] Daily cron: 0 pending groups under 7d')
+        return
+      }
+      const groupIds = pending.map(p => p.id)
+      const { data: junctions } = await supabase
+        .from('campaign_groups')
+        .select('group_id, campaign_id')
+        .in('group_id', groupIds)
+      const campaignByGroup = new Map((junctions || []).map(j => [j.group_id, j.campaign_id]))
+
+      let queued = 0
+      for (const g of pending) {
+        // Dedup: skip if a check job is already in-flight for this group
+        const { count: existing } = await supabase.from('jobs')
+          .select('id', { count: 'exact', head: true })
+          .eq('type', 'check_group_membership')
+          .in('status', ['pending', 'claimed', 'running'])
+          .filter('payload->>fb_group_id', 'eq', g.fb_group_id)
+        if ((existing || 0) > 0) continue
+
+        await supabase.from('jobs').insert({
+          type: 'check_group_membership',
+          priority: 5,
+          payload: {
+            fb_group_id: g.fb_group_id,
+            group_row_id: g.id,
+            account_id: g.account_id,
+            group_name: g.name,
+            campaign_id: campaignByGroup.get(g.id) || null,
+            source: 'daily_cron',
+          },
+          status: 'pending',
+          scheduled_at: new Date(Date.now() + Math.random() * 30 * 60000).toISOString(),
+        })
+        queued++
+      }
+      console.log(`[MEMBER-CHECK] Daily cron: queued ${queued}/${pending.length} pending check jobs`)
+    } catch (err) {
+      console.error('[MEMBER-CHECK] daily cron error:', err.message)
+    }
+  }, { timezone: 'Asia/Ho_Chi_Minh' })
+
+  // KPI Coordinator — every 90 min during VN active hours (07:00-22:00).
+  // Lets Hermes reason about KPI gap + nick quality flexibly without rigid rules.
+  // Output is persisted to hermes_decisions for the main orchestrator to read
+  // on its next cycle (signal-feeder pattern, no double-emission).
+  cron.schedule('23 7,9,11,13,14,16,18,20,22 * * *', async () => {
+    try {
+      const { runKpiCoordinatorAllRunning } = require('./hermes-orchestrator')
+      await runKpiCoordinatorAllRunning(supabase)
+    } catch (err) {
+      console.error('[KPI-COORD] cron error:', err.message)
+    }
+  }, { timezone: 'Asia/Ho_Chi_Minh' })
+
+  // Comment engagement check — every 6h. Picks comments posted 18-30h ago,
+  // queues check_comment_engagement jobs (1 per nick, batched up to 15
+  // comments). Closes the post-publish learning loop: Hermes finally sees
+  // which comments got reactions/replies vs. were ignored or removed.
+  cron.schedule('37 */6 * * *', async () => {
+    try {
+      const since = new Date(Date.now() - 30 * 3600 * 1000).toISOString()
+      const until = new Date(Date.now() - 18 * 3600 * 1000).toISOString()
+      const { data: rows } = await supabase
+        .from('campaign_activity_log')
+        .select('account_id, campaign_id, target_url, target_name, details, created_at')
+        .eq('action_type', 'comment')
+        .eq('result_status', 'success')
+        .gte('created_at', since)
+        .lte('created_at', until)
+        .limit(500)
+      if (!rows?.length) return
+
+      // Skip rows already checked (look at engagement_check log for same target_url)
+      const urls = rows.map(r => r.target_url).filter(Boolean)
+      const { data: alreadyChecked } = await supabase
+        .from('campaign_activity_log')
+        .select('target_url')
+        .eq('action_type', 'comment_engagement_check')
+        .in('target_url', urls.slice(0, 500))
+      const checkedSet = new Set((alreadyChecked || []).map(r => r.target_url))
+
+      // Group comments by nick
+      const byNick = new Map()
+      for (const r of rows) {
+        if (!r.target_url || checkedSet.has(r.target_url)) continue
+        const text = r.details?.comment_text
+        if (!text || text.length < 10) continue
+        const arr = byNick.get(r.account_id) || []
+        if (arr.length < 15) arr.push({
+          target_url: r.target_url,
+          target_name: r.target_name,
+          comment_text: text,
+          campaign_id: r.campaign_id,
+        })
+        byNick.set(r.account_id, arr)
+      }
+
+      let queued = 0
+      for (const [accountId, comments] of byNick) {
+        if (!comments.length) continue
+        // Skip if a check_comment_engagement job already pending for this nick
+        const { count: existing } = await supabase.from('jobs')
+          .select('id', { count: 'exact', head: true })
+          .eq('type', 'check_comment_engagement')
+          .in('status', ['pending', 'claimed', 'running'])
+          .filter('payload->>account_id', 'eq', accountId)
+        if ((existing || 0) > 0) continue
+
+        await supabase.from('jobs').insert({
+          type: 'check_comment_engagement',
+          priority: 7,
+          payload: { account_id: accountId, comments },
+          status: 'pending',
+          scheduled_at: new Date(Date.now() + Math.random() * 30 * 60000).toISOString(),
+        })
+        queued++
+      }
+      if (queued > 0) console.log(`[ENGAGEMENT-CHECK] Queued ${queued} engagement check jobs`)
+    } catch (err) {
+      console.error('[ENGAGEMENT-CHECK] cron error:', err.message)
+    }
+  })
+
+  console.log('[NURTURE] Scheduler initialized (every 5 min) — includes group monitor + weekly memory decay + daily cleanup + KPI coord + engagement check')
 }
 
 // Phase 13: Hourly AI Pilot health check.

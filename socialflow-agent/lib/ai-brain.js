@@ -127,13 +127,14 @@ function detectAdPost(post) {
 async function evaluatePosts({ posts, campaign, nick, group, topic, maxPicks, ownerId, adConfig, brandConfig, groupLanguage }) {
   if (!posts?.length) return []
 
-  // Phase 8 Fix 1: tag ad posts upfront so downstream never comments on them.
-  // We keep them in the array (so indices stay stable) but mark is_ad_post=true
-  // and the AI prompt is instructed to return action=skip for those indices.
+  // Phase 8 Fix 1: We used to manually tag ad posts (via detectAdPost) but this
+  // caused false positives where legitimate users asking "cài VPS ở đâu giá rẻ"
+  // were skipped because of keywords like "giá".
+  // Now, we let the AI read the FULL batch of posts and their UIDs, and the AI
+  // alone decides if it's a competitor ad (action: "skip") or a brand opportunity.
   for (const p of posts) {
-    if (p.is_ad_post === undefined) p.is_ad_post = detectAdPost(p)
+    p.is_ad_post = false // Let AI decide contextually
   }
-  const adIdxSet = new Set(posts.map((p, i) => p.is_ad_post ? i + 1 : null).filter(Boolean))
 
   const context = buildContext({ campaign, nick, group, topic })
 
@@ -141,10 +142,8 @@ async function evaluatePosts({ posts, campaign, nick, group, topic, maxPicks, ow
   const lang = groupLanguage || detectGroupLanguage(posts)
 
   // Fix 2: include thread comments per post so AI scores against the discussion.
-  // Fix 1: mark ad posts visibly in the prompt so AI enforces action=skip for them.
   const postList = posts.map((p, i) => {
-    const adTag = p.is_ad_post ? ' [AD_POST=true → BỎ QUA]' : ''
-    const head = `${i + 1}. [${p.author || '?'}]${adTag} "${(p.body || p.text || '').substring(0, 250)}"`
+    const head = `${i + 1}. [${p.author || '?'}] "${(p.body || p.text || '').substring(0, 250)}"`
     const tc = Array.isArray(p.threadComments) ? p.threadComments.slice(0, 3) : []
     if (tc.length === 0) return head
     const threadStr = tc.map(c => `     ↳ ${c.author || '?'}: "${(c.text || '').substring(0, 150)}"`).join('\n')
@@ -223,10 +222,12 @@ ${langBlock}${adSection}
 5. Nếu THẬT SỰ không có gì để nói → score 3. Nhưng ĐỪNG quá khắt khe — bài trong nhóm "${topic}" thường ít nhất liên quan gián tiếp.
 
 === BẮT BUỘC BỎ QUA ===
-- Bài có [AD_POST=true] trong header → action: "skip", score ≤ 2 (đây là quảng cáo của người khác)
-- Bài quảng cáo từ ĐỐI THỦ
+- Bài quảng cáo từ ĐỐI THỦ hoặc thương hiệu khác → action: "skip", score ≤ 2
 - Bài spam, chỉ có link không nội dung
 - Bài mà thread đã có câu trả lời đầy đủ
+
+=== CƠ HỘI QUẢNG CÁO ===
+- Nếu bài viết hỏi về giải pháp/sản phẩm mà thương hiệu của chúng ta cung cấp (ví dụ "cài VPS ở đâu", "cách dùng an toàn") → BẮT BUỘC set ad_opportunity: true và đánh score cao (8-10) để lập tức bình luận quảng cáo. Đừng nhầm lẫn bài hỏi mua với bài quảng cáo của đối thủ.
 
 Trả về JSON array:
 [{"index": 1, "score": 8, "reason": "...", "action": "comment", "comment_angle": "...", "comment_language": "vi", "ad_opportunity": false, "ad_reason": "...", "lead_potential": false}]
@@ -258,15 +259,20 @@ CHỈ trả về JSON, không giải thích.`
       // can share a personal take" which is natural group behavior. The prompt
       // still bans generic/vague comments via the QUY TẮC section, so quality
       // is guarded by AI judgment, not a hard numeric cutoff.
+      // 2026-05-02: bumped threshold 3 → 6. Score 3-5 = "could comment" but
+      // quality is generic ("hope it gets fixed", "cảm ơn chia sẻ"). Score 6+
+      // = post has substance: question, problem, request for help, specific
+      // discussion. User feedback: "tập trung vào bài có giá trị đừng cmt
+      // chung chung". Quality > quantity.
       const filtered = results
-        .filter(r => r.score >= 3 && r.index >= 1 && r.index <= posts.length && !adIdxSet.has(r.index))
+        .filter(r => r.score >= 6 && r.index >= 1 && r.index <= posts.length && !adIdxSet.has(r.index))
         .filter(r => r.action !== 'skip')
         .sort((a, b) => b.score - a.score)
         .slice(0, maxPicks || 2)
 
       if (filtered.length > 0) return filtered
 
-      console.log(`[AI-BRAIN] No posts scored >= 3 — all scores: ${results.map(r => r.score).join(',')}`)
+      console.log(`[AI-BRAIN] No posts scored >= 6 — all scores: ${results.map(r => r.score).join(',')}`)
       return []
     }
   } catch (err) {
@@ -284,21 +290,6 @@ CHỈ trả về JSON, không giải thích.`
  */
 async function qualityGateComment({ comment, postText, group, topic, nick, ownerId, threadComments }) {
   if (!comment || comment.length < 3) return { approved: false, reason: 'too_short' }
-
-  // 2026-05-04: a 19-char follow-up like "Mình sẽ theo dõi thêm" was slipping
-  // through because it was below the AI-check threshold AND not in the regex
-  // bank. Real-human comments worth posting carry substance — numbers, brand
-  // names, a personal anecdote, or a pointed question. If the comment is
-  // shorter than ~30 chars / 6 words AND has no specific token, kill it.
-  const trimmed = comment.trim()
-  const wordCount = trimmed.split(/\s+/).length
-  const hasSpecific = /\d+[%kKgGmM]?|[A-Z]{2,}[a-z]*\d*|vps|api|cpu|ram|ssd|node|nginx|docker|aws|gcp|azure|cloudflare|vpn|cdn|kbps|mbps|gbps|ms|tb|gb/i.test(trimmed)
-  if (trimmed.length < 30 && !hasSpecific) {
-    return { approved: false, reason: 'too_short_no_substance', score: 2 }
-  }
-  if (wordCount < 6 && !hasSpecific) {
-    return { approved: false, reason: 'too_few_words', score: 2 }
-  }
 
   // Fix 4: collapse the post + thread into a single corpus so the gate can check
   // whether the comment actually addresses one specific token from the discussion.
@@ -322,17 +313,6 @@ async function qualityGateComment({ comment, postText, group, topic, nick, owner
     /thấy (nó |nó )?xử lý (rất )?(mượt|tốt|nhanh)/i,  // bot review
     /rất (hay|bổ ích|hữu ích|tuyệt vời)/i,  // generic praise
     /mình (cũng )?hay dùng .+ (cho |để )/i,  // bán hàng gián tiếp
-    /^mình sẽ (theo dõi|tìm hiểu|thử|note|lưu lại|xem)/i,  // 2026-05-04 ban: "Mình sẽ theo dõi thêm" pattern
-    /theo dõi (thêm|tiếp)/i,
-    /^(hóng|hong|theo dõi)\b/i,  // hóng/theo dõi cụt
-    /^(đánh dấu|dấu)/i,  // đánh dấu để xem sau
-    /^lưu (lại|về)/i,
-    /^để dành/i,
-    /^cảm ơn (bạn )?(nhé|nha|nhiều|ạ|đã)/i,  // cảm ơn cụt
-    /hay (đấy|ghê|nhỉ|thật)\.?$/i,
-    /^bài (hay|chất|chuẩn)/i,
-    /chuẩn (rồi|luôn)/i,
-    /^(đỉnh|tuyệt|xịn|vip|pro)\b/i,
   ]
   if (genericPatterns.some(p => p.test(comment.trim()))) {
     return { approved: false, reason: 'generic_template', score: 2 }
@@ -347,11 +327,8 @@ async function qualityGateComment({ comment, postText, group, topic, nick, owner
     }
   }
 
-  // AI quality check on every comment that survives heuristics. Previously
-  // gated at length>20 but that let 19-char fluff slip through; we already
-  // bailed on too-short / too-few-words above, so the surviving payload is
-  // long enough to deserve an AI verdict.
-  if (true) {
+  // AI quality check for longer comments
+  if (comment.length > 20) {
     try {
       const qgPrompt = `Đánh giá bình luận Facebook sau:
 
@@ -369,8 +346,6 @@ REJECT (approved=false) nếu:
 - Comment lặp lại ý đã có trong thread
 - Comment hỏi câu đã được trả lời trong thread
 - Comment chung chung kiểu "rất hay", "thông tin bổ ích", "mình cũng vậy"
-- Comment kiểu "hóng", "theo dõi thêm", "đánh dấu", "lưu lại" — không có giá trị
-- Comment không có ít nhất 1 trong: số liệu cụ thể, tên brand/tool, trải nghiệm cá nhân chi tiết, câu hỏi đào sâu, workaround có thể test
 
 Trả về JSON: {"naturalness": N, "relevance": N, "value": N, "approved": true/false, "reason": "..."}`
 
@@ -390,7 +365,7 @@ Trả về JSON: {"naturalness": N, "relevance": N, "value": N, "approved": true
         const result = JSON.parse(jsonMatch[0])
         const avg = ((result.naturalness || 0) + (result.relevance || 0) + (result.value || 0)) / 3
         return {
-          approved: avg >= 6.0 && result.naturalness >= 5 && result.relevance >= 5 && result.value >= 4,
+          approved: avg >= 4.5 && result.naturalness >= 3 && result.relevance >= 3,
           score: Math.round(avg * 10) / 10,
           naturalness: result.naturalness,
           relevance: result.relevance,
@@ -532,27 +507,10 @@ async function generateSmartComment({ postText, postAuthor, group, campaign, nic
 
   let adDirective = ''
   if (shouldSoftAd) {
-    const ctaExamples = {
-      question: `"Bạn đã thử ${adConfig.product_name} chưa? Mình dùng thấy khá ổn"`,
-      suggestion: `"Nếu cần mình gợi ý ${adConfig.product_name}, mình dùng thấy OK"`,
-      experience: `"Mình đang dùng ${adConfig.product_name}, chạy khá mượt cho việc này"`,
-    }
     adDirective = `
-=== QUẢNG CÁO NHẸ (SOFT MENTION) ===
-Bài viết này là CƠ HỘI quảng cáo nhẹ sản phẩm.
-Thương hiệu: ${adConfig.brand_name || ''}
-Sản phẩm: ${adConfig.product_name}
-Mô tả: ${adConfig.product_description || ''}
-
-CÁCH CHÈN — chọn 1 trong các kiểu:
-${ctaExamples[adConfig.cta_style] || ctaExamples.experience}
-
-QUY TẮC QUẢNG CÁO NHẸ:
-- PHẢI trả lời đúng nội dung bài viết TRƯỚC, rồi mới mention sản phẩm
-- Mention tự nhiên như chia sẻ kinh nghiệm cá nhân, KHÔNG quảng cáo lộ liễu
-- TUYỆT ĐỐI KHÔNG dùng link, URL, hashtag, số điện thoại
-- KHÔNG nói "mua ngay", "liên hệ", "inbox" — chỉ gợi ý nhẹ nhàng
-- Nếu bài viết KHÔNG phù hợp để mention → BỎ QUA, comment bình thường
+=== BRAND MENTION ===
+Sau khi trả lời bài viết, mention "${adConfig.product_name || adConfig.brand_name}" 1 lần cuối câu như kinh nghiệm cá nhân.
+Quy tắc: trả lời bài TRƯỚC → mention brand CUỐI. Không link/hashtag/SĐT/inbox. Nếu không tự nhiên → bỏ qua, comment thường.
 `
   }
 
@@ -582,48 +540,47 @@ ${langInstr}
 2. NEVER write generic comments that could paste into any post
 3. If post asks technical question → answer with technical detail (config, command, numbers)
 4. If post shares experience → respond to THAT specific experience
-5. Write 2-3 sentences. Always include a supporting sentence that explains, expands, or gives evidence
+5. Viết ngắn gọn, tự nhiên, có thể dùng slang/viết tắt, được phép viết 2-4 câu nếu cần thiết.
 6. AVOID: "I'm also looking into...", "Have you tried X?", "Very useful", "Thanks for sharing"
 7. Read the post carefully and respond SPECIFICALLY, don't drift to other topics
-8. If post ASKS how to do X → ANSWER about X. Do NOT ask an unrelated question back
 
 GOOD examples:
-- Post about Oracle VPS → "Oracle's 24G free tier is solid. Been running docker on it for months, super smooth for the price"
-- Post about port error → "Check firewall rules, probably blocking 443. Run ufw allow 443 and restart, should fix it"
-- Post about multi-agent setup → "LangGraph or CrewAI is the easiest way to set it up. I run 3 agents in parallel, each handling its own task"
+- Post about Oracle VPS → "Oracle's 24G free tier is solid, been running docker on it smoothly"
+- Post about port error → "Check firewall rules, probably blocking 443"
+- Post about config → "Change bind_address to 0.0.0.0 in the config, that should work"
 
 BAD examples:
 - "I'm also exploring this" ← no specific detail
 - "Useful info" ← could paste anywhere
-- Post asks about multi-agent → "What VPS do you use for APIs?" ← asks unrelated question, doesn't answer
+- "Have you tried VPS?" ← unrelated to post
 
-Return ONLY the comment, no explanation.` : `Bạn vừa đọc bài này trong group. Bạn có quan tâm thật — đang làm chủ đề liên quan, hoặc đang dùng tool/kỹ thuật này. Comment như nhắn tin cho bạn bè trong group, KHÔNG phải support bot.
+Return ONLY the comment, no explanation.` : `Bạn là THÀNH VIÊN THẬT trong nhóm Facebook "${group?.name || ''}". Comment PHẢI trả lời ĐÚNG nội dung bài viết bên dưới.
 
-=== BÀI VIẾT ===
+=== BÀI VIẾT CỦA [${postAuthor || '?'}] ===
 "${postText.substring(0, 400)}"
-${commentAngle ? `\nGÓC GỢI Ý: ${commentAngle}` : ''}
+${commentAngle ? `\nGÓC TIẾP CẬN GỢI Ý: ${commentAngle}` : ''}
 ${threadBlock}
 ${adDirective}
 ${langInstr}
 
-=== NGƯỜI THẬT TRONG GROUP TECH VN HAY VIẾT GÌ ===
-- React ngắn + 1 chi tiết: "Ngon choét, cái websearch thay MCP luôn 😁"
-- Hỏi 1 tính năng mình quan tâm: "Cái này có support upload image từ claude code không bác?"
-- Kể case mình gặp: "Vừa cần cái này hôm qua, config tay mất cả buổi. Có tool này ngon rồi"
-- Chia sẻ kinh nghiệm dùng: "Dùng được mấy tuần rồi, stable, chưa thấy lỗi gì"
-- Hỏi thêm 1 điều cụ thể: "Hermes integration này có cần config thêm key riêng không bác?"
+=== QUY TẮC BẮT BUỘC ===
+1. Comment PHẢI nhắc đến 1 CHI TIẾT CỤ THỂ từ bài viết (tên công nghệ, con số, vấn đề, sản phẩm được nhắc)
+2. KHÔNG ĐƯỢC viết comment chung chung có thể paste vào bất kỳ bài nào
+3. Nếu bài hỏi kỹ thuật → trả lời kỹ thuật (config, command, số liệu)
+4. Nếu bài chia sẻ kinh nghiệm → phản hồi ĐÚNG kinh nghiệm đó
+5. Viết tự nhiên như người bình thường, ngắn gọn nhưng đầy đủ ý (2-4 câu), KHÔNG dùng văn phong trang trọng, có thể dùng slang/viết tắt.
+6. KHÔNG dùng: "Mình cũng đang...", "Bạn đã thử X chưa?", "Rất hay/bổ ích", "Cảm ơn chia sẻ"
+7. PHẢI đọc kỹ bài viết và phản hồi CỤ THỂ, KHÔNG lái sang chủ đề khác
 
-=== KHÔNG ĐƯỢC ===
-- Diagnose lỗi không ai nhắc: "Kiểm tra lại payload", "Check schema" → bài không có lỗi nào
-- Ngôn ngữ support/advisor: "Bạn nên...", "Hãy thử...", "Cần kiểm tra..."
-- Comment chung chung: "Rất hay", "Thông tin hữu ích", "Cảm ơn chia sẻ"
-- Hỏi ngược câu không liên quan khi bài đang nói chuyện khác
-- Lái sang chủ đề không có trong bài
+VÍ DỤ ĐÚNG (trả lời đúng nội dung):
+- Bài hỏi về Oracle VPS → "Oracle 24G free thì ngon, mình chạy docker trên đó mượt lắm"
+- Bài lỗi port → "Check firewall rule đi, chắc block port 443 rồi"
+- Bài về config → "Sửa dòng bind_address trong config thành 0.0.0.0 là được"
 
-=== ĐỘ DÀI & CẤU TRÚC ===
-Luôn viết 2 câu riêng biệt. Câu 1: ý chính (react/kể/hỏi). Câu 2: bổ trợ (giải thích/kể thêm/hỏi thêm).
-KHÔNG dùng dấu phẩy nối 2 ý thành 1 câu dài. 3 câu nếu trả lời kỹ thuật.
-Dùng từ đệm: ạ, nhé, nha, á, thôi, mà, nè, luôn, đấy. Xưng mình/bạn/bác.
+VÍ DỤ SAI (chung chung, copy-paste được):
+- "Mình cũng đang tìm hiểu cái này" ← KHÔNG nhắc chi tiết gì
+- "Thông tin hữu ích" ← Paste vào bài nào cũng được
+- "Bạn thử VPS chưa?" ← Không liên quan nội dung bài
 
 Chỉ trả về COMMENT, không giải thích.`
 
@@ -632,7 +589,7 @@ Chỉ trả về COMMENT, không giải thích.`
     let comment = (await callAI({
       taskType: 'comment_gen',
       prompt,
-      maxTokens: 300,
+      maxTokens: 120,
       temperature: 0.85,
       ownerId,
       accountId: accId,
@@ -643,7 +600,7 @@ Chỉ trả về COMMENT, không giải thích.`
       // Clean up: remove quotes, URLs, excessive length
       comment = comment.replace(/^["']|["']$/g, '').trim()
       comment = comment.replace(/https?:\/\/\S+/gi, '').trim()
-      if (comment.length > 150) comment = comment.substring(0, 150).replace(/\s\S*$/, '')
+      if (comment.length > 400) comment = comment.substring(0, 400).replace(/\s\S*$/, '')
 
       // REJECT generic comments that don't reference post content
       const genericPatterns = [

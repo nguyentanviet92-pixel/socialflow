@@ -19,10 +19,22 @@ export default function HermesBar() {
   const { data, error } = useQuery({
     queryKey: ['hermes', 'status'],
     queryFn: async () => {
-      const res = await api.get('/ai-hermes/status')
-      return res.data
+      try {
+        const res = await api.get('/ai-hermes/status')
+        return res.data
+      } catch (err) {
+        // Suppress 503/network errors from flooding console
+        const status = err?.response?.status
+        if (status === 503 || status === 502 || !status) {
+          return null // treat as offline gracefully
+        }
+        throw err
+      }
     },
-    refetchInterval: 10000,
+    refetchInterval: (query) => {
+      // Back off to 30s when offline to reduce VPS + console spam
+      return query.state.data || !query.state.error ? 10000 : 30000
+    },
     staleTime: 8000,
     retry: 0,
   })

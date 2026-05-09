@@ -6,8 +6,20 @@ const { getPage, releaseSession } = require('../../browser/session-pool')
 const { delay, humanBrowse, humanMouseMove } = require('../../browser/human')
 const { checkAccountStatus, saveDebugScreenshot } = require('./post-utils')
 
+// Lỗi do điều kiện tạm thời → có thể retry
+function isRetryable(err) {
+  const msg = err.message || ''
+  return (
+    msg.includes('Could not find comment input') ||
+    msg.includes('timeout') ||
+    msg.includes('Timeout') ||
+    msg.includes('not focused') ||
+    msg.includes('Element is not attached')
+  )
+}
+
 async function commentPostHandler(payload, supabase) {
-  const { account_id, post_url, fb_post_id, comment_text, source_name } = payload
+  const { account_id, post_url, fb_post_id, comment_text, source_name, job_id } = payload
 
   if (!account_id || !comment_text) throw new Error('account_id and comment_text required')
   if (!post_url && !fb_post_id) throw new Error('post_url or fb_post_id required')
@@ -20,19 +32,25 @@ async function commentPostHandler(payload, supabase) {
 
   if (!account) throw new Error('Account not found')
 
-  // Find comment_log linked to this job to update status (scope by owner_id for multi-user safety)
+  // Find comment_log: ưu tiên match theo job_id (retry tạo job mới), fallback theo fb_post_id
   const ownerId = account.owner_id
-  const { data: commentLogs } = await supabase
-    .from('comment_logs')
-    .select('id')
-    .eq('owner_id', ownerId)
-    .eq('fb_post_id', fb_post_id)
-    .eq('account_id', account_id)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false })
-    .limit(1)
-
+  let commentLogQuery = supabase.from('comment_logs').select('id').eq('owner_id', ownerId).eq('account_id', account_id)
+  if (job_id) {
+    commentLogQuery = commentLogQuery.eq('job_id', job_id)
+  } else {
+    commentLogQuery = commentLogQuery.eq('fb_post_id', fb_post_id).eq('status', 'pending')
+  }
+  const { data: commentLogs } = await commentLogQuery.order('created_at', { ascending: false }).limit(1)
   const commentLogId = commentLogs?.[0]?.id
+
+  const MAX_RETRIES = 2
+  let lastErr = null
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      console.log(`[COMMENT-POST] Retry ${attempt}/${MAX_RETRIES} sau ${attempt * 5}s...`)
+      await delay(attempt * 5000, attempt * 5000 + 2000)
+    }
 
   let browserPage
   try {
@@ -44,12 +62,10 @@ async function commentPostHandler(payload, supabase) {
     // Validate URL — prevent commenting on group wall instead of specific post
     const isGroupUrl = /^https:\/\/www\.facebook\.com\/groups\/[^/]+\/?$/.test(targetUrl)
     if (isGroupUrl) {
-      // Try to build URL from fb_post_id
       if (fb_post_id && !fb_post_id.startsWith('mobile_') && /^\d+$/.test(fb_post_id)) {
         const gMatch = targetUrl.match(/groups\/([^/?]+)/)
         if (gMatch) {
           targetUrl = `https://www.facebook.com/groups/${gMatch[1]}/posts/${fb_post_id}/`
-          console.log(`[COMMENT-POST] Fixed group URL → ${targetUrl}`)
         } else {
           throw new Error('post_url is group URL without specific post — cannot comment safely')
         }
@@ -58,7 +74,9 @@ async function commentPostHandler(payload, supabase) {
       }
     }
 
-    console.log(`[COMMENT-POST] Navigating to: ${targetUrl}`)
+    // Switch to mobile FB — simpler DOM, easier comment box
+    targetUrl = targetUrl.replace('://www.facebook.com', '://m.facebook.com')
+    console.log(`[COMMENT-POST] Navigating to (mobile): ${targetUrl}`)
 
     await browserPage.goto(targetUrl, {
       waitUntil: 'domcontentloaded',
@@ -94,83 +112,168 @@ async function commentPostHandler(payload, supabase) {
     await humanMouseMove(browserPage)
     await delay(1000, 2000)
 
-    // Find and click the comment input area
-    console.log('[COMMENT-POST] Looking for comment box...')
+    // Scroll down to load comments section
+    await browserPage.evaluate(() => window.scrollBy(0, Math.floor(window.innerHeight * 0.6)))
+    await delay(2000, 3000)
 
-    // Try multiple selectors for comment box
-    const commentBoxSelectors = [
-      'div[contenteditable="true"][aria-label*="comment" i]',
-      'div[contenteditable="true"][aria-label*="bình luận" i]',
-      'div[contenteditable="true"][aria-label*="Write" i]',
-      'div[contenteditable="true"][aria-label*="Viết" i]',
-      'div[contenteditable="true"][role="textbox"][aria-label*="comment" i]',
-      // Fallback: click "Write a comment" placeholder text
-      '[aria-label*="Write a comment"]',
-      '[aria-label*="Viết bình luận"]',
+    // Mobile FB: find comment box (textarea or contenteditable)
+    console.log('[COMMENT-POST] Looking for comment box (mobile)...')
+
+    const mobileSelectors = [
+      'textarea[name="comment_text"]',           // classic mobile FB
+      'textarea[data-sigil="comment-body-input"]', // mbasic
+      'textarea[placeholder*="bình luận" i]',
+      'textarea[placeholder*="comment" i]',
+      'div[contenteditable="true"][role="textbox"]', // newer mobile
+      'textarea',                                  // last resort
     ]
 
     let commentBox = null
-    for (const selector of commentBoxSelectors) {
-      commentBox = await browserPage.$(selector)
-      if (commentBox) {
-        console.log(`[COMMENT-POST] Found comment box with: ${selector}`)
-        break
-      }
+    for (const sel of mobileSelectors) {
+      try {
+        const el = await browserPage.$(sel)
+        if (el) {
+          const visible = await el.isVisible().catch(() => false)
+          if (visible) {
+            console.log(`[COMMENT-POST] Found comment box: ${sel}`)
+            commentBox = el
+            break
+          }
+        }
+      } catch {}
     }
 
+    // If no box found, try clicking "Comment" link to reveal it
     if (!commentBox) {
-      // Try scrolling down to load comments section
-      await browserPage.evaluate(() => window.scrollBy(0, 500))
-      await delay(2000, 3000)
-
-      // Try clicking "Comment" button area to open comment box
-      const commentBtnSelectors = [
-        'div[aria-label="Leave a comment"]',
-        'div[aria-label="Viết bình luận"]',
-        'span:has-text("Comment")',
+      console.log('[COMMENT-POST] No comment box — clicking comment link...')
+      const commentLinks = [
+        'a[href*="comment"]',
         'span:has-text("Bình luận")',
+        'span:has-text("Comment")',
       ]
-
-      for (const selector of commentBtnSelectors) {
+      for (const sel of commentLinks) {
         try {
-          const btn = await browserPage.$(selector)
-          if (btn) {
-            await btn.click()
-            await delay(1000, 2000)
+          const link = await browserPage.$(sel)
+          if (link && await link.isVisible().catch(() => false)) {
+            await link.click({ timeout: 5000 })
+            await delay(2000, 3000)
             break
           }
         } catch {}
       }
 
-      // Try finding comment box again after clicking
-      for (const selector of commentBoxSelectors) {
-        commentBox = await browserPage.$(selector)
-        if (commentBox) break
+      // Re-search after clicking
+      for (const sel of mobileSelectors) {
+        try {
+          const el = await browserPage.$(sel)
+          if (el && await el.isVisible().catch(() => false)) {
+            commentBox = el
+            break
+          }
+        } catch {}
       }
     }
 
     if (!commentBox) {
       try { await saveDebugScreenshot(browserPage, `comment-no-box-${account_id}`) } catch {}
-      throw new Error('Could not find comment input box')
+      throw new Error('Could not find comment input box (mobile)')
     }
 
-    // Click to focus
-    await commentBox.click()
+    // Focus and type
+    await commentBox.scrollIntoViewIfNeeded().catch(() => {})
+    await delay(300, 600)
+    await commentBox.click({ timeout: 5000 }).catch(async () => {
+      await browserPage.evaluate(el => { el.focus(); el.click() }, commentBox)
+    })
     await delay(500, 1000)
 
-    // Type comment with human-like delays
+    // Type comment
     console.log(`[COMMENT-POST] Typing comment (${comment_text.length} chars)...`)
-    for (const char of comment_text) {
-      await browserPage.keyboard.type(char, { delay: Math.random() * 80 + 30 })
-    }
-    await delay(1000, 2000)
 
-    // Submit with Enter
+    // Mobile textarea: can use fill() directly for textarea, or type for contenteditable
+    const tagName = await browserPage.evaluate(el => el.tagName.toLowerCase(), commentBox)
+    if (tagName === 'textarea') {
+      await commentBox.fill(comment_text)
+      await delay(500, 1000)
+    } else {
+      for (const char of comment_text) {
+        await browserPage.keyboard.type(char, { delay: Math.random() * 80 + 30 })
+      }
+      await delay(1000, 2000)
+    }
+
+    // Submit: try submit button first, then Enter
     console.log('[COMMENT-POST] Submitting comment...')
-    await browserPage.keyboard.press('Enter')
+    const submitSelectors = [
+      'button[type="submit"][name="submit"]',   // mbasic
+      'button[data-sigil="submit_composer"]',
+      'input[type="submit"]',
+      'button[type="submit"]',
+    ]
+    let submitted = false
+    for (const sel of submitSelectors) {
+      try {
+        const btn = await browserPage.$(sel)
+        if (btn && await btn.isVisible().catch(() => false)) {
+          await btn.click({ timeout: 5000 })
+          submitted = true
+          console.log(`[COMMENT-POST] Clicked submit: ${sel}`)
+          break
+        }
+      } catch {}
+    }
+    if (!submitted) {
+      await browserPage.keyboard.press('Enter')
+    }
 
     // Wait for comment to appear — like a real person checking their comment posted
     await delay(3000, 5000)
+
+    // ═══ POST-SUBMIT VERIFICATION (Phase 2.4) ═══
+    // Check for 3 failure signals BEFORE marking success:
+    //   1. Checkpoint/error redirect
+    //   2. FB error toast visible
+    //   3. Comment text still stuck in input (submit silently failed)
+    const submitVerify = await browserPage.evaluate((commentText) => {
+      const url = location.href || ''
+      const bodyText = (document.body?.innerText || '').substring(0, 500)
+
+      // 1. Checkpoint or login redirect
+      if (url.includes('checkpoint') || url.includes('/login')) {
+        return { ok: false, reason: 'checkpoint_redirect', url }
+      }
+
+      // 2. Error toast — FB shows these as fixed-position overlays
+      const errorPatterns = /couldn't post|không thể đăng|try again|thử lại|something went wrong|đã xảy ra lỗi|spam|temporarily blocked|tạm thời bị chặn/i
+      if (errorPatterns.test(bodyText)) {
+        // Check if it's in a toast/overlay (not just page content)
+        const toasts = document.querySelectorAll('[role="alert"], [data-testid*="toast"], [data-testid*="error"]')
+        for (const t of toasts) {
+          if (errorPatterns.test(t.innerText || '')) {
+            return { ok: false, reason: 'error_toast', message: (t.innerText || '').substring(0, 100) }
+          }
+        }
+      }
+
+      // 3. Comment still in input box (submit didn't go through)
+      const inputs = document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"]')
+      for (const input of inputs) {
+        const val = (input.value || input.innerText || '').trim()
+        if (val && val.length > 10 && commentText.includes(val.substring(0, 20))) {
+          return { ok: false, reason: 'text_still_in_input', text: val.substring(0, 50) }
+        }
+      }
+
+      return { ok: true }
+    }, comment_text).catch(() => ({ ok: true })) // on eval failure, assume OK
+
+    if (!submitVerify.ok) {
+      console.warn(`[COMMENT-POST] ⚠️ Submit verification FAILED: ${submitVerify.reason} — ${submitVerify.message || submitVerify.text || submitVerify.url || ''}`)
+      if (submitVerify.reason === 'checkpoint_redirect') {
+        throw new Error('CHECKPOINT_after_comment_submit')
+      }
+      throw new Error(`SUBMIT_FAILED:${submitVerify.reason}`)
+    }
 
     // Scroll slightly to see the comment area
     await browserPage.evaluate(() => window.scrollBy(0, Math.floor(Math.random() * 150 + 50)))
@@ -197,37 +300,67 @@ async function commentPostHandler(payload, supabase) {
       }).eq('id', commentLogId).eq('owner_id', ownerId)
     }
 
-    console.log(`[COMMENT-POST] Success! Commented on ${source_name || fb_post_id}`)
+    console.log(`[COMMENT-POST] ✅ Verified + Success! Commented on ${source_name || fb_post_id}`)
+
+    // Remember: this comment format worked for this nick
+    try {
+      const { remember } = require('../../lib/ai-memory')
+      if (payload.campaign_id) {
+        await remember(supabase, {
+          campaignId: payload.campaign_id,
+          accountId: account_id,
+          groupFbId: payload.fb_group_id || null,
+          memoryType: 'nick_behavior',
+          key: 'comment_format_works',
+          value: {
+            length: comment_text.length,
+            preview: comment_text.substring(0, 120),
+            attempts_needed: attempt + 1,
+            source: source_name || 'unknown',
+          },
+          confidence: 0.7,
+        })
+      }
+    } catch (memErr) { /* non-blocking */ }
 
     return {
       success: true,
       fb_post_id,
       source_name,
       comment_length: comment_text.length,
+      attempts: attempt + 1,
     }
 
   } catch (err) {
-    console.error(`[COMMENT-POST] Error: ${err.message}`)
-
-    // Update comment_log FIRST (scope by owner_id)
-    if (commentLogId) {
-      await supabase.from('comment_logs').update({
-        status: 'failed',
-        error_message: err.message.substring(0, 500),
-        finished_at: new Date().toISOString(),
-      }).eq('id', commentLogId).eq('owner_id', ownerId).catch(() => {})
-    }
+    lastErr = err
+    console.error(`[COMMENT-POST] Attempt ${attempt + 1} failed: ${err.message}`)
 
     // Debug screenshot (best effort)
     if (browserPage) {
-      try { await saveDebugScreenshot(browserPage, `comment-error-${account_id}`) } catch {}
+      try { await saveDebugScreenshot(browserPage, `comment-error-${account_id}-attempt${attempt}`) } catch {}
     }
 
-    throw err
   } finally {
-    if (browserPage) await browserPage.close().catch(() => {})
+    // Keep page on FB for session reuse
     releaseSession(account_id)
   }
+
+  // Nếu không retryable → dừng ngay
+  if (!isRetryable(lastErr)) break
+  } // end retry loop
+
+  // Tất cả attempts đều thất bại
+  if (commentLogId) {
+    try {
+      await supabase.from('comment_logs').update({
+        status: 'failed',
+        error_message: lastErr.message.substring(0, 500),
+        finished_at: new Date().toISOString(),
+      }).eq('id', commentLogId).eq('owner_id', ownerId)
+    } catch (_) {}
+  }
+
+  throw lastErr
 }
 
 module.exports = commentPostHandler

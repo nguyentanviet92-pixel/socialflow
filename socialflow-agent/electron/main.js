@@ -12,6 +12,15 @@ let logs = []
 let userSession = null  // { id, email, access_token }
 const MAX_LOGS = 500
 
+// 2026-05-04: watchdog. agent.js child crashed at 19:08 and stayed dead for
+// 2h+ because nothing re-spawned it. Track manual-stop intent vs unexpected
+// exit so we only auto-restart real crashes; back off on repeat failures so
+// a busted build doesn't loop-restart at 100% CPU.
+let agentManuallyStopped = false
+let agentRestartAttempts = 0
+let agentRestartTimer = null
+const RESTART_BACKOFF_MS = [5000, 15000, 60000, 180000, 600000] // 5s,15s,1m,3m,10m
+
 // Paths
 const isPackaged = !process.defaultApp
 // electron-builder puts asarUnpack files in app.asar.unpacked (real filesystem path)
@@ -234,14 +243,49 @@ function startAgent() {
     data.toString().split('\n').filter(Boolean).forEach(line => addLog(line, 'error'))
   })
 
-  agentProcess.on('exit', (code) => {
-    addLog(`Agent stopped (code: ${code})`, code === 0 ? 'info' : 'error')
+  agentProcess.on('exit', (code, signal) => {
+    addLog(`Agent stopped (code: ${code}, signal: ${signal || 'none'})`, code === 0 ? 'info' : 'error')
     agentProcess = null
     updateTray()
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('status', { running: false })
     }
+
+    // 2026-05-04 watchdog: only auto-restart if exit was unexpected.
+    // Skip restart when:
+    //   - app is quitting (isQuitting set on app.before-quit)
+    //   - user clicked Stop in the UI (agentManuallyStopped)
+    //   - exit code 0 with no signal (clean shutdown initiated by us)
+    //   - no userSession (login expired — needs user re-auth, can't restart)
+    const cleanExit = code === 0 && !signal
+    if (isQuitting || agentManuallyStopped || cleanExit) {
+      agentRestartAttempts = 0
+      return
+    }
+    if (!userSession) {
+      addLog('Agent crashed but no active session — waiting for user login', 'warn')
+      return
+    }
+
+    const idx = Math.min(agentRestartAttempts, RESTART_BACKOFF_MS.length - 1)
+    const delay = RESTART_BACKOFF_MS[idx]
+    agentRestartAttempts++
+    addLog(`Agent crashed (attempt ${agentRestartAttempts}). Auto-restart in ${Math.round(delay / 1000)}s...`, 'warn')
+    if (agentRestartTimer) clearTimeout(agentRestartTimer)
+    agentRestartTimer = setTimeout(() => {
+      agentRestartTimer = null
+      if (isQuitting || agentManuallyStopped || agentProcess) return
+      addLog(`Auto-restarting agent (attempt ${agentRestartAttempts})`, 'info')
+      try { startAgent() } catch (e) {
+        addLog(`Auto-restart threw: ${e.message}`, 'error')
+      }
+    }, delay)
   })
+
+  // First successful start clears the crash counter so the next crash gets the
+  // 5s backoff again rather than the 10m one.
+  if (agentProcess.pid) agentRestartAttempts = 0
+  agentManuallyStopped = false
 
   addLog('Agent started', 'success')
   updateTray()
@@ -251,6 +295,9 @@ function startAgent() {
 }
 
 function stopAgent() {
+  // Mark intent so the exit handler's watchdog doesn't auto-restart.
+  agentManuallyStopped = true
+  if (agentRestartTimer) { clearTimeout(agentRestartTimer); agentRestartTimer = null }
   if (!agentProcess) return
   agentProcess.kill('SIGTERM')
   setTimeout(() => {

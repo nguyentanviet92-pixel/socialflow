@@ -6,12 +6,13 @@ import { vi } from 'date-fns/locale'
 import api from '../../lib/api'
 
 const STATUS_CONFIG = {
-  healthy:    { label: 'Khỏe', color: 'bg-green-100 text-hermes' },
-  checkpoint: { label: 'Checkpoint', color: 'bg-red-100 text-red-700' },
-  expired:    { label: 'Hết hạn', color: 'bg-orange-100 text-orange-700' },
-  disabled:   { label: 'Tắt', color: 'bg-app-elevated text-app-muted' },
-  at_risk:    { label: 'Nguy cơ', color: 'bg-red-100 text-red-700' },
-  unknown:    { label: 'Chưa kiểm', color: 'bg-app-elevated text-app-dim' },
+  healthy:         { label: 'Khỏe', color: 'bg-green-100 text-hermes' },
+  checkpoint:      { label: 'Checkpoint', color: 'bg-red-100 text-red-700' },
+  expired:         { label: 'Hết hạn', color: 'bg-orange-100 text-orange-700' },
+  session_expired: { label: 'Hết hạn', color: 'bg-orange-100 text-orange-700' },
+  disabled:        { label: 'Tắt', color: 'bg-app-elevated text-app-muted' },
+  at_risk:         { label: 'Nguy cơ', color: 'bg-red-100 text-red-700' },
+  unknown:         { label: 'Chưa kiểm', color: 'bg-app-elevated text-app-dim' },
 }
 
 const RISK_CONFIG = {
@@ -96,7 +97,7 @@ export default function AccountHealth() {
             const budget = a.daily_budget || {}
             const risk = riskMap[a.id]
             const riskCfg = risk ? (RISK_CONFIG[risk.risk_level] || RISK_CONFIG.normal) : null
-            const hasIssue = a.failure_count_24h > 0 || a.status === 'checkpoint' || a.status === 'expired' || a.status === 'at_risk'
+            const hasIssue = a.failure_count_24h > 0 || ['checkpoint', 'expired', 'session_expired', 'at_risk'].includes(a.status)
             const isCritical = risk?.risk_level === 'critical'
             const isExpanded = expandedAccount === a.id
 

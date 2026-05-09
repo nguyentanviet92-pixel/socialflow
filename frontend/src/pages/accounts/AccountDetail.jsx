@@ -28,6 +28,7 @@ import api, { API_BASE } from '../../lib/api'
 import useAgentGuard from '../../hooks/useAgentGuard'
 import HealthBadge from '../../components/accounts/HealthBadge'
 import ProxyBadge from '../../components/shared/ProxyBadge'
+import CookieRepairModal from '../../components/hermes/CookieRepairModal'
 import QuickPost from '../../components/accounts/QuickPost'
 import VoiceProfileEditor from './VoiceProfileEditor'
 
@@ -62,6 +63,7 @@ const FETCH_STATUS = {
 export default function AccountDetail() {
   const { id } = useParams()
   const [activeTab, setActiveTab] = useState('config')
+  const [showCookieRepair, setShowCookieRepair] = useState(false)
   const [quickPostTarget, setQuickPostTarget] = useState(null)
   const [fetchJobId, setFetchJobId] = useState(null)
   const [fetchStatus, setFetchStatus] = useState(null) // null | pending | claimed | running | done | failed
@@ -246,6 +248,13 @@ export default function AccountDetail() {
           </div>
           <div className="flex items-center gap-3">
             <button
+              onClick={() => setShowCookieRepair(true)}
+              className="inline-flex items-center gap-2 px-3 py-2 text-sm font-mono-ui rounded transition-colors"
+              style={{ background: 'rgba(239,68,68,0.12)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.35)' }}
+            >
+              🍪 Cập nhật cookie
+            </button>
+            <button
               onClick={handleFetchAll}
               disabled={isFetching}
               className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
@@ -380,6 +389,15 @@ export default function AccountDetail() {
           accountId={id}
           target={quickPostTarget}
           onClose={() => setQuickPostTarget(null)}
+        />
+      )}
+
+      {/* Cookie Repair Modal */}
+      {showCookieRepair && account && (
+        <CookieRepairModal
+          account={account}
+          onClose={() => setShowCookieRepair(false)}
+          onSuccess={() => setShowCookieRepair(false)}
         />
       )}
     </div>

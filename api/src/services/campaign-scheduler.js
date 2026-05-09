@@ -95,6 +95,16 @@ function initScheduler() {
     catch (err) { console.error('[MEMBERSHIP-CHECK] error:', err.message) }
   }, { timezone: 'Asia/Ho_Chi_Minh' })
 
+  // ── Daily re-verify members: 06:00 VN.
+  // Catches stale is_member=true flags when nick has been silently removed
+  // (admin kick, FB cleanup, group going private). Without this nurture
+  // keeps visiting groups the nick no longer belongs to → looks like spam +
+  // ban risk. Cap 30 jobs/day to avoid spike on browser fleet.
+  cron.schedule('0 6 * * *', async () => {
+    try { await processStaleMembershipReverify() }
+    catch (err) { console.error('[STALE-MEMBER-REVERIFY] error:', err.message) }
+  }, { timezone: 'Asia/Ho_Chi_Minh' })
+
   // ── Auto-apply Hermes Review: every 6h for campaigns with auto_apply_enabled
   // Offset to :07 to stagger from other cron jobs.
   cron.schedule('7 */6 * * *', async () => {
@@ -582,6 +592,108 @@ async function processMembershipChecks() {
     if (!error) created++
   }
   if (created > 0) console.log(`[MEMBERSHIP-CHECK] Queued ${created} campaign-scoped checks`)
+}
+
+// ─── Daily stale-member re-verify (6am VN) ────────────────────────────────
+// Reuses check_group_membership handler (which detects "Tham gia" button →
+// flips is_member=false). Targets groups currently flagged is_member=true
+// AND not checked in 24h+ (or never). Spaced-out scheduled_at so the agent
+// doesn't see a 30-job spike at 06:00 — drips them across 60 min instead.
+const STALE_MEMBER_REVERIFY_CAP = 30
+async function processStaleMembershipReverify() {
+  // Backlog cap — share the same job-type queue with processMembershipChecks
+  const { count: backlogCount } = await supabase
+    .from('jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('type', 'check_group_membership')
+    .in('status', ['pending', 'running', 'claimed'])
+  if ((backlogCount || 0) >= STALE_MEMBER_REVERIFY_CAP) {
+    console.log(`[STALE-MEMBER-REVERIFY] Backlog full (${backlogCount}/${STALE_MEMBER_REVERIFY_CAP}), skipping`)
+    return
+  }
+  const slotsLeft = STALE_MEMBER_REVERIFY_CAP - (backlogCount || 0)
+
+  // Skip hermes_central campaigns (orchestrator's recheck_group covers them)
+  const { data: centralCampaigns } = await supabase
+    .from('campaigns')
+    .select('id')
+    .eq('hermes_central', true)
+    .eq('is_active', true)
+  const centralCampaignIds = new Set((centralCampaigns || []).map(c => c.id))
+
+  // Find member groups not checked in 24h+ (or never). Active campaigns only.
+  const cutoffISO = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+  const { data: staleRowsRaw } = await supabase
+    .from('campaign_groups')
+    .select('group_id, campaign_id, assigned_nick_id, fb_groups!inner(id, fb_group_id, url, name, is_member, pending_approval, membership_last_checked_at)')
+    .eq('status', 'active')
+    .eq('fb_groups.is_member', true)
+    .eq('fb_groups.pending_approval', false)
+    .or(`membership_last_checked_at.is.null,membership_last_checked_at.lt.${cutoffISO}`, { foreignTable: 'fb_groups' })
+    .limit(slotsLeft * 3)
+
+  const staleRows = (staleRowsRaw || []).filter(r => !centralCampaignIds.has(r.campaign_id))
+  if (!staleRows?.length) {
+    console.log('[STALE-MEMBER-REVERIFY] No stale member groups to verify')
+    return
+  }
+
+  // Dedup against existing pending checks
+  const { data: existingChecks } = await supabase
+    .from('jobs')
+    .select('payload')
+    .eq('type', 'check_group_membership')
+    .in('status', ['pending', 'claimed', 'running'])
+    .limit(100)
+  const queued = new Set((existingChecks || []).map(j => j.payload?.group_row_id).filter(Boolean))
+
+  // Resolve owner_id per campaign (created_by required for fair-scheduler)
+  const campaignIds = [...new Set(staleRows.map(r => r.campaign_id).filter(Boolean))]
+  const ownerByCampaign = {}
+  if (campaignIds.length) {
+    const { data: campRows } = await supabase
+      .from('campaigns').select('id, owner_id').in('id', campaignIds)
+    for (const c of campRows || []) ownerByCampaign[c.id] = c.owner_id
+  }
+
+  let created = 0
+  const { checkAndReserve } = require('./nick-quota')
+  for (const r of staleRows) {
+    if (created >= slotsLeft) break
+    const fg = r.fb_groups
+    if (!fg || queued.has(fg.id)) continue
+
+    if (r.assigned_nick_id) {
+      const qr = await checkAndReserve(supabase, { accountId: r.assigned_nick_id, jobType: 'check_group_membership' })
+      if (!qr.ok) {
+        console.log(`[STALE-MEMBER-REVERIFY] nick ${r.assigned_nick_id.slice(0, 8)} quota full — skip ${fg.name}`)
+        continue
+      }
+    }
+
+    // Drip across 60 min so agent doesn't see a spike at 06:00 sharp
+    const delayMs = (Math.random() * 60 * 60 * 1000)
+    // Priority 8 — janitorial, lower than pending check (7) so it never beats nurture
+    const { error } = await supabase.from('jobs').insert({
+      type: 'check_group_membership',
+      priority: 8,
+      payload: {
+        fb_group_id: fg.fb_group_id,
+        group_row_id: fg.id,
+        group_url: fg.url || `https://www.facebook.com/groups/${fg.fb_group_id}`,
+        group_name: fg.name,
+        account_id: r.assigned_nick_id,
+        campaign_id: r.campaign_id,
+        owner_id: ownerByCampaign[r.campaign_id] || null,
+        reason: 'daily_stale_reverify',
+      },
+      status: 'pending',
+      scheduled_at: new Date(Date.now() + delayMs).toISOString(),
+      created_by: ownerByCampaign[r.campaign_id] || null,
+    })
+    if (!error) created++
+  }
+  if (created > 0) console.log(`[STALE-MEMBER-REVERIFY] Queued ${created} re-verify jobs (drip over 60 min)`)
 }
 
 async function processPendingCampaigns() {

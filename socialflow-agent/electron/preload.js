@@ -21,8 +21,13 @@ contextBridge.exposeInMainWorld('agent', {
 // poller can filter jobs for the correct owner. Without this the agent
 // would either run for no one (single-user embed) or against the wrong
 // user's campaigns.
+//
+// Channel names below are intentionally flat (no `auth:*` prefix) because
+// that's what `ipcMain.handle()` registers in electron/main.js. A mismatch
+// here makes invoke() reject with "no handler registered", which crashes
+// the renderer's init() silently and leaves the UI body blank.
 contextBridge.exposeInMainWorld('auth', {
-  login: (email, password) => ipcRenderer.invoke('auth:login', { email, password }),
-  logout: () => ipcRenderer.invoke('auth:logout'),
-  me: () => ipcRenderer.invoke('auth:me'),
+  login: (email, password) => ipcRenderer.invoke('login', { email, password }),
+  logout: () => ipcRenderer.invoke('logout'),
+  me: () => ipcRenderer.invoke('get-user'),
 })

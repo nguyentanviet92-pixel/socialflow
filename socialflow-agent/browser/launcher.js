@@ -62,6 +62,35 @@ async function launchBrowser(account, options = {}) {
 
   const storageFile = path.join(profileDir, 'storage.json')
 
+  // 2026-05-04: kill ONLY orphan Playwright Chromium processes for THIS profile dir.
+  //
+  // Two-layer filter to avoid ever touching the user's personal Chrome:
+  //   1. ExecutablePath must contain `ms-playwright\chromium` — the bundled
+  //      Chromium Playwright spawns is always under that path. The user's
+  //      personal Chrome lives under `Program Files\Google\Chrome\` so it
+  //      can never match this filter.
+  //   2. CommandLine must contain `--user-data-dir=<this nick's profile>`.
+  //      Different nicks = different profile dirs = no cross-kill.
+  //
+  // Why we need this: Playwright's parent process exits but a renderer / GPU
+  // child can keep the profile dir's SingletonLock alive. clearProfileLock
+  // removes the file but the orphan still owns the dir; the next launch sees
+  // "Opening in existing browser session" then "Target page, context or
+  // browser has been closed" because the orphan dies under it.
+  if (process.platform === 'win32') {
+    try {
+      const { execSync } = require('child_process')
+      // PowerShell -like uses '*' wildcards, NOT regex — backslashes are
+      // literal. Don't double-escape (the previous version turned every '\'
+      // into '\\\\' which produced patterns no real Windows path could match,
+      // so the kill list was always empty and orphans piled up).
+      // Only escape single-quotes for the inner PS literal.
+      const psPath = userDataDir.replace(/'/g, "''")
+      // Two AND-conditions so we never hit a process the user opened.
+      const cmd = "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='chrome.exe'\\\" | Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -like '*ms-playwright*chromium*') -and $_.CommandLine -and ($_.CommandLine -like '*" + psPath + "*') } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }\""
+      execSync(cmd, { timeout: 6000, stdio: 'ignore' })
+    } catch { /* best-effort, fall through to lock clear + launch */ }
+  }
   // Clear stale lock files from previous crashed session — must run BEFORE launch
   clearProfileLock(userDataDir)
 
