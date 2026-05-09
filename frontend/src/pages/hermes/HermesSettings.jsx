@@ -496,7 +496,7 @@ function FallbackSection() {
     queryFn: async () => (await api.get('/ai-hermes/config')).data,
   })
   const cfg = cfgData?.config || {}
-  const [chain, setChain] = useState(['hermes', 'deepseek', 'openai', 'gemini'])
+  const [chain, setChain] = useState(['nvidia', 'deepseek', 'kimi'])
   const [timeoutMs, setTimeoutMs] = useState(3000)
   const [dragIdx, setDragIdx] = useState(null)
 
