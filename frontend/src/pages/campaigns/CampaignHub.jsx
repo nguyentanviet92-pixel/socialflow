@@ -732,7 +732,7 @@ function AgentsTab({ campaign }) {
                 <span className={`w-20 truncate ${
                   acc.status === 'healthy' ? 'text-hermes' :
                   acc.status === 'at_risk' ? 'text-warn' :
-                  acc.status === 'checkpoint' ? 'text-danger' : 'text-app-muted'
+                  ['checkpoint', 'session_expired', 'expired'].includes(acc.status) ? 'text-danger' : 'text-app-muted'
                 }`}>
                   ● {acc.status || '—'}
                 </span>
@@ -788,7 +788,7 @@ function AgentsTab({ campaign }) {
                     <span className="flex-1 text-app-primary truncate">{acc.username || acc.id.slice(0, 8)}</span>
                     <span className={
                       acc.status === 'healthy' ? 'text-hermes' :
-                      acc.status === 'checkpoint' ? 'text-danger' : 'text-app-muted'
+                      ['checkpoint', 'session_expired', 'expired'].includes(acc.status) ? 'text-danger' : 'text-app-muted'
                     }>
                       ● {acc.status || '—'}
                     </span>

@@ -127,7 +127,7 @@ export default function CommandCenter() {
   const totalTargetToday = runningCampaigns.reduce((s, c) => s + (c.today_target || 0), 0)
 
   const activeNicks = accounts.filter(a => a.is_active)
-  const checkpointNicks = accounts.filter(a => ['checkpoint', 'expired'].includes(a.status))
+  const checkpointNicks = accounts.filter(a => ['checkpoint', 'expired', 'session_expired'].includes(a.status))
 
   const runningJobs = jobs.filter(j => ['claimed', 'running'].includes(j.status))
   const pendingJobs = jobs.filter(j => j.status === 'pending')

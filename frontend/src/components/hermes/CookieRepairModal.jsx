@@ -95,7 +95,7 @@ export default function CookieRepairModal({ account, onClose, onSuccess }) {
           return
         }
 
-        if (['checkpoint', 'expired', 'banned'].includes(data.status)) {
+        if (['checkpoint', 'expired', 'session_expired', 'banned'].includes(data.status)) {
           clearInterval(pollRef.current)
           pollRef.current = null
           setPhase('failed')
