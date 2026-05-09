@@ -36,7 +36,7 @@ if exist "node\node.exe" (
 if %errorlevel% neq 0 (
     echo   [*] Cai dat Node.js tu dong...
     echo.
-    powershell -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $url = 'https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip'; $out = 'node-portable.zip'; Write-Host '   Dang tai Node.js (~30MB)...'; (New-Object Net.WebClient).DownloadFile($url, $out); Write-Host '   [OK] Da tai xong' }"
+    powershell -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $url = 'https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip'; $out = 'node-portable.zip'; Write-Host '   Dang tai Node.js (~30MB)...'; Invoke-WebRequest -Uri $url -OutFile $out; Write-Host '   [OK] Da tai xong' }"
 
     if not exist "node-portable.zip" (
         color 0C
@@ -77,7 +77,7 @@ if not exist "node_modules\@supabase" (
         exit /b
     )
     echo.
-    echo   [2/2] Cai trinh duyet Chromium (2-5 phut)...
+    echo   [2/2] Cai trinh duyet Chromium 2-5 phut...
     call "%NPX%" playwright install chromium 2>nul
     echo.
     echo   [OK] Cai dat hoan tat!
