@@ -1,4 +1,4 @@
-const { getPage, releaseSession } = require('../../browser/session-pool')
+const { getPage, releaseSession, closeSession } = require('../../browser/session-pool')
 const fs = require('fs')
 const path = require('path')
 const https = require('https')
@@ -57,7 +57,7 @@ Chỉ JSON, không markdown.`
 }
 
 async function checkHealthHandler(payload, supabase) {
-  const { account_id } = payload
+  const { account_id, triggered_by } = payload
 
   const { data: account } = await supabase
     .from('accounts')
@@ -67,9 +67,22 @@ async function checkHealthHandler(payload, supabase) {
 
   if (!account) throw new Error('Account not found')
 
+  // ── Cookie refresh: kill old session so new DB cookie gets injected ──
+  // When user pastes a new cookie via UI, the API sets triggered_by='cookie_update'.
+  // Without this, getPage() would reuse the existing browser session which still
+  // has the OLD (dead) cookies in its profile dir → health check fails immediately.
+  if (triggered_by === 'cookie_update') {
+    console.log(`[CHECK] Cookie update detected — closing stale session for ${account.username || account_id}`)
+    try { await closeSession(account_id) } catch {}
+    // Small delay to let browser fully close before reopening
+    await new Promise(r => setTimeout(r, 1500))
+  }
+
   let page
   try {
-    const session = await getPage(account)
+    const session = await getPage(account, {
+      forceDbCookies: triggered_by === 'cookie_update',
+    })
     page = session.page
 
     // Navigate to Facebook

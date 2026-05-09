@@ -151,8 +151,11 @@ async function injectDbCookies(context, account) {
  * DB cookies thường stale (user paste 1 lần rồi thôi) → nếu inject đè lên profile
  * sẽ ghi đè session đang hoạt động → FB detect inconsistency → checkpoint.
  *
+ * Exception: forceDbCookies=true (set by check-health when triggered_by='cookie_update')
+ * → user JUST pasted fresh cookies, profile has OLD dead cookies → inject DB cookies.
+ *
  * @param {object} account - account record từ DB
- * @param {object} opts - { headless: boolean } - override headless mode
+ * @param {object} opts - { headless: boolean, forceDbCookies: boolean }
  */
 async function getPage(account, opts = {}) {
   const id = account.id || account.account_id
@@ -192,16 +195,34 @@ async function getPage(account, opts = {}) {
     page = await session.context.newPage()
   }
 
-  // Decide cookie source: profile > DB
-  const profileHasCookies = await hasValidFbCookies(session.context)
-  if (profileHasCookies) {
-    console.log(`[SESSION-POOL] 🍪 Using profile cookies for ${username} (profile dir has valid c_user+xs)`)
-  } else {
+  // Decide cookie source: profile > DB (unless forceDbCookies is set)
+  if (opts.forceDbCookies) {
+    // Cookie just updated via UI — always inject fresh DB cookies.
+    // Clear existing FB cookies first so they don't conflict.
+    try {
+      const oldCookies = await session.context.cookies('https://www.facebook.com')
+      if (oldCookies.length > 0) {
+        await session.context.clearCookies()
+        console.log(`[SESSION-POOL] 🧹 Cleared ${oldCookies.length} stale profile cookies for ${username}`)
+      }
+    } catch {}
     const injected = await injectDbCookies(session.context, account)
     if (injected) {
-      console.log(`[SESSION-POOL] 💉 Injecting DB cookies for ${username} (profile dir empty/invalid)`)
+      console.log(`[SESSION-POOL] 💉 Force-injected fresh DB cookies for ${username} (cookie_update)`)
     } else {
-      console.warn(`[SESSION-POOL] ⚠️  No cookies available for ${username} — neither profile nor DB has FB cookies`)
+      console.warn(`[SESSION-POOL] ⚠️  forceDbCookies=true but no DB cookies available for ${username}`)
+    }
+  } else {
+    const profileHasCookies = await hasValidFbCookies(session.context)
+    if (profileHasCookies) {
+      console.log(`[SESSION-POOL] 🍪 Using profile cookies for ${username} (profile dir has valid c_user+xs)`)
+    } else {
+      const injected = await injectDbCookies(session.context, account)
+      if (injected) {
+        console.log(`[SESSION-POOL] 💉 Injecting DB cookies for ${username} (profile dir empty/invalid)`)
+      } else {
+        console.warn(`[SESSION-POOL] ⚠️  No cookies available for ${username} — neither profile nor DB has FB cookies`)
+      }
     }
   }
 
