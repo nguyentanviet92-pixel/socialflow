@@ -1030,43 +1030,41 @@ Không markdown wrapper. Chỉ JSON.`
 
     if (error) return reply.code(500).send({ error: error.message })
 
-    // Immediate server-side validation — don't make user wait 3 min for agent
-    // when a 2s HTTP check can already tell us if the cookie is good.
+    // Immediate server-side validation — only if proxy is available.
+    // VPS datacenter IP will ALWAYS trigger Facebook checkpoint when
+    // checking cookies directly, causing false-positive "checkpoint" errors.
+    // Even WITH proxy, we only trust POSITIVE results (cookie valid).
+    // Negative results (checkpoint/expired) are unreliable from HTTP-only
+    // checks — leave those to the agent's browser-based DOM verification.
     let immediateStatus = null
-    try {
-      // Must pass proxy to avoid burning cookie from VPS datacenter IP
-      const proxyConfig = data.proxies ? {
-        host: data.proxies.host,
-        port: data.proxies.port,
-        username: data.proxies.username,
-        password: data.proxies.password,
-        type: data.proxies.type || 'http'
-      } : null;
-      
-      const v = await validateCookie(data, proxyConfig)
-      if (v.valid === true) {
-        immediateStatus = 'healthy'
-        await supabase.from('accounts').update({
-          status: 'healthy',
-          last_checked_at: new Date().toISOString(),
-          last_error: null,
-        }).eq('id', req.params.id)
-      } else if (v.valid === false) {
-        const reasonMap = { CHECKPOINT: 'checkpoint', SESSION_EXPIRED: 'session_expired', DISABLED: 'disabled' }
-        const mapped = reasonMap[v.reason]
-        if (mapped) {
-          immediateStatus = mapped
+    const proxyConfig = data.proxies ? {
+      host: data.proxies.host,
+      port: data.proxies.port,
+      username: data.proxies.username,
+      password: data.proxies.password,
+      type: data.proxies.type || 'http'
+    } : null
+
+    if (proxyConfig) {
+      try {
+        const v = await validateCookie(data, proxyConfig)
+        if (v.valid === true) {
+          immediateStatus = 'healthy'
           await supabase.from('accounts').update({
-            status: mapped,
+            status: 'healthy',
             last_checked_at: new Date().toISOString(),
-            last_error: v.reason,
-            is_active: false,
+            last_error: null,
           }).eq('id', req.params.id)
         }
+        // v.valid === false → DON'T set checkpoint/expired here.
+        // HTTP-based checks produce too many false positives.
+        // Let the agent's browser-based check make the final call.
+        fastify.log.info({ valid: v.valid, reason: v.reason }, '[UPDATE-COOKIE] immediate validate result (proxy)')
+      } catch (e) {
+        fastify.log.warn({ err: e.message }, '[UPDATE-COOKIE] immediate validate failed — falling back to agent')
       }
-      // valid: null (AMBIGUOUS / NETWORK_ERROR) → leave as 'unknown', let agent verify
-    } catch (e) {
-      fastify.log.warn({ err: e.message }, '[UPDATE-COOKIE] immediate validate failed — falling back to agent')
+    } else {
+      fastify.log.info('[UPDATE-COOKIE] no proxy configured — skipping immediate validate, agent will verify')
     }
 
     // Queue check_health job — agent does deep verify (DOM + dtsg + avatar) even
