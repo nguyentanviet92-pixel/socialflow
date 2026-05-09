@@ -27,7 +27,7 @@ async function autoCreateProfiles() {
       .from('accounts')
       .select('id, owner_id, status, is_active')
       .eq('is_active', true)
-      .not('status', 'in', '("checkpoint","expired","disabled")')
+      .not('status', 'in', '("checkpoint","expired","session_expired","disabled")')
 
     if (!accounts?.length) return
 
@@ -128,7 +128,7 @@ async function processNurtureProfiles() {
 
         // 1. Account must be active and healthy
         if (!acc.is_active) continue
-        if (['checkpoint', 'expired', 'disabled'].includes(acc.status)) continue
+        if (['checkpoint', 'expired', 'session_expired', 'disabled'].includes(acc.status)) continue
 
         // 2. Health score check
         if (profile.health_score <= 0) continue
@@ -296,7 +296,7 @@ async function scheduleGroupMonitors() {
     for (const group of needsScan) {
       try {
         const acc = group.accounts
-        if (!acc.is_active || ['checkpoint', 'expired', 'disabled'].includes(acc.status)) continue
+        if (!acc.is_active || ['checkpoint', 'expired', 'session_expired', 'disabled'].includes(acc.status)) continue
         if (busyNicks.has(acc.id)) continue
 
         // Check no duplicate job pending
@@ -425,7 +425,7 @@ function initNurtureScheduler() {
         if (!Number.isFinite(pauseUntil)) continue
         if (pauseUntil > now) continue // still pausing
         // Don't resume if the nick actually died since being paused (checkpoint/expired)
-        if (['checkpoint', 'expired', 'disabled', 'banned'].includes(a.status)) continue
+        if (['checkpoint', 'expired', 'session_expired', 'disabled', 'banned'].includes(a.status)) continue
         await supabase.from('accounts').update({ is_active: true, notes: null }).eq('id', a.id)
         console.log(`[ORCHESTRATOR] auto-resumed ${a.username} (pause expired)`)
         resumed++

@@ -67,7 +67,7 @@ function evaluateNickRules(nicks) {
   const actions = []
   for (const nick of nicks) {
     // Rule 1: nick in checkpoint/expired → alert_user (needs human)
-    if (nick.status === 'checkpoint' || nick.status === 'expired') {
+    if (nick.status === 'checkpoint' || nick.status === 'expired' || nick.status === 'session_expired') {
       actions.push({
         type: 'alert_user',
         target_id: nick.id,

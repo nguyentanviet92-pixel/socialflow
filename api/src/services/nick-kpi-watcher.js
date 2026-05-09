@@ -84,7 +84,7 @@ async function diagnose(pool, accountId, campaignId) {
     plan = 'resume nick manually if ok, or investigate pause reason'
     autoApply = false
     severity = 'high'
-  } else if (acc.status === 'checkpoint' || acc.status === 'expired') {
+  } else if (acc.status === 'checkpoint' || acc.status === 'expired' || acc.status === 'session_expired') {
     cause = `nick in ${acc.status} state — cookies dead`
     plan = 'user must refresh cookies via UI'
     autoApply = false
