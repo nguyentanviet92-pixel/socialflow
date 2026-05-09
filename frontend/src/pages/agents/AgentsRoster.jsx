@@ -102,7 +102,7 @@ function NickRow({ nick, role, campaignId, runningJob, todayStats, todayJobs, on
     : nick.status === 'healthy' ? 'online'
     : nick.status === 'at_risk' ? 'idle'
     : 'error'
-  const isPaused = !nick.is_active && nick.status !== 'checkpoint' && nick.status !== 'expired'
+  const isPaused = !nick.is_active && !['checkpoint', 'expired', 'session_expired'].includes(nick.status)
 
   // Daily budget & breakdown
   const dailyBudgetTotal = (() => {
@@ -179,7 +179,7 @@ function NickRow({ nick, role, campaignId, runningJob, todayStats, todayJobs, on
               <div className="text-info truncate">→ {runningJob.payload?.action || runningJob.type}</div>
               <div className="text-app-dim text-[10px]">started {formatAgo(runningJob.started_at)}</div>
             </>
-          ) : nick.status === 'checkpoint' || nick.status === 'expired' || nick.status === 'session_expired' ? (
+          ) : ['checkpoint', 'expired', 'session_expired'].includes(nick.status) ? (
             <div className="flex items-center gap-2">
               <span className="text-danger">⚠ {nick.status === 'session_expired' ? 'session expired' : nick.status}</span>
               <button
@@ -727,7 +727,7 @@ function NickDetailPanel({ nick, onClose, onRepair }) {
             <div className={
               nick.status === 'healthy' ? 'text-hermes' :
               nick.status === 'at_risk' ? 'text-warn' :
-              nick.status === 'checkpoint' ? 'text-danger' : 'text-app-muted'
+              ['checkpoint', 'session_expired', 'expired'].includes(nick.status) ? 'text-danger' : 'text-app-muted'
             }>
               {nick.status || '—'}
             </div>

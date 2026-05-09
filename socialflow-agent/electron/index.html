@@ -422,7 +422,7 @@
       const result = await window.auth.login(email, password)
       btn.disabled = false
       btn.textContent = 'Đăng nhập'
-      if (result.ok) {
+      if (!result.error && (result.user || result.ok)) {
         showLoggedIn(result.user)
         // Kick off agent immediately on successful login
         await window.agent.start()

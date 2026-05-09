@@ -24,7 +24,7 @@ const STYLES = {
 const AUTO_TONE = {
   success: 'success', active: 'success', healthy: 'success', running: 'success', done: 'success', ok: 'success',
   warning: 'warning', paused: 'warning', idle: 'warning', pending: 'warning',
-  danger:  'danger',  error:  'danger',  checkpoint: 'danger', dead: 'danger', failed: 'danger', expired: 'danger',
+  danger:  'danger',  error:  'danger',  checkpoint: 'danger', dead: 'danger', failed: 'danger', expired: 'danger', session_expired: 'danger',
   info:    'info',
   unknown: 'neutral', neutral: 'neutral', draft: 'neutral',
 }
