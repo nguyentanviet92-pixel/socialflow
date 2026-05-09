@@ -110,6 +110,7 @@ module.exports = async (fastify) => {
       const { status, json } = await getStatus()
       return reply.code(status).send(json)
     } catch (err) {
+      req.log.error({ err: err.message, stack: err.stack }, '[HERMES] status fetch failed')
       return reply.code(503).send({ status: 'OFFLINE', error: err.message })
     }
   })
