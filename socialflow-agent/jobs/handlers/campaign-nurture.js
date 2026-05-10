@@ -177,20 +177,16 @@ async function campaignNurture(payload, supabase) {
   }
 
   // ── Ad config: load brand settings for opportunity comments ──
-  // Brand config: prefer top-level brand_config (from new SaaS form),
-  // fall back to legacy config.advertising shape
-  const brandConfig = payload.brand_config || config?.brand_config || config?.advertising || null
-  const adEnabled = brandConfig && (payload.ad_mode === 'ad_enabled' || config?.ad_mode === 'ad_enabled' || brandConfig.brand_name)
-
   const vnToday = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)
 
   // Fetch KPI target for today (set via Campaign KPI Modal)
   let kpiAdLimit = null
   let kpiAdDone = 0
+  let autoAdEnabled = false
   if (campaign_id) {
     try {
       const { data: kpiRow } = await supabase.from('nick_kpi_daily')
-        .select('target_opportunity_comments, done_opportunity_comments')
+        .select('target_opportunity_comments, done_opportunity_comments, auto_ad_enabled')
         .eq('campaign_id', campaign_id)
         .eq('account_id', account_id)
         .eq('date', vnToday)
@@ -198,16 +194,30 @@ async function campaignNurture(payload, supabase) {
       if (kpiRow) {
         kpiAdLimit = kpiRow.target_opportunity_comments ?? 0
         kpiAdDone = kpiRow.done_opportunity_comments ?? 0
+        autoAdEnabled = kpiRow.auto_ad_enabled === true
       }
     } catch {}
   }
+
+  // ── Ad config: load brand settings for opportunity comments ──
+  // Brand config: prefer top-level brand_config (from new SaaS form),
+  // fall back to legacy config.advertising shape
+  let brandConfig = payload.brand_config || config?.brand_config || config?.advertising || null
+  if (!brandConfig && autoAdEnabled) {
+    brandConfig = { brand_name: account.username || 'Người dùng', brand_description: 'Tương tác thả thính tự nhiên', brand_voice: 'thân thiện' }
+  }
+  const adEnabled = autoAdEnabled || (brandConfig && (payload.ad_mode === 'ad_enabled' || config?.ad_mode === 'ad_enabled' || brandConfig.brand_name))
 
   // Fallback to global account budget if KPI row doesn't exist
   const nickAdBudget = account.daily_budget?.opportunity_comment || { max: 0, used: 0 }
   const nickAdAutoDetect = nickAdBudget.auto_detect !== false
 
   // Determine actual daily limit (KPI takes precedence, even if 0. Fallback if null)
-  const AD_COMMENT_DAILY_LIMIT = kpiAdLimit !== null ? kpiAdLimit : (nickAdBudget.max ?? 0)
+  let AD_COMMENT_DAILY_LIMIT = kpiAdLimit !== null ? kpiAdLimit : (nickAdBudget.max ?? 0)
+  
+  if (autoAdEnabled) {
+    AD_COMMENT_DAILY_LIMIT = 999 // Unlimited (bounded by overall comment limit)
+  }
 
   // Nick must be >= 7 days old (was 30, relaxed for faster activation)
   const canDoAdComment = adEnabled && nickAge >= 7 && AD_COMMENT_DAILY_LIMIT > 0 && nickAdAutoDetect

@@ -1814,8 +1814,11 @@ module.exports = async (fastify) => {
         updates[f] = Math.floor(v)
       }
     }
+    if (typeof req.body?.auto_ad_enabled === 'boolean') {
+      updates.auto_ad_enabled = req.body.auto_ad_enabled
+    }
     if (Object.keys(updates).length === 0) {
-      return reply.code(400).send({ error: 'No valid target fields supplied (must be 0-500 ints)' })
+      return reply.code(400).send({ error: 'No valid target fields supplied (must be 0-500 ints or boolean for auto_ad_enabled)' })
     }
     updates.last_updated_at = new Date().toISOString()
 

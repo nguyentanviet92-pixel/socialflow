@@ -450,6 +450,7 @@ function EditKpiModal({ campaignId, row, hasOpp, onClose }) {
     target_friend_requests: row.target_friend_requests || 0,
     target_group_joins: row.target_group_joins || 0,
     target_opportunity_comments: row.target_opportunity_comments || 0,
+    auto_ad_enabled: row.auto_ad_enabled || false,
   })
 
   const save = useMutation({
@@ -510,6 +511,21 @@ function EditKpiModal({ campaignId, row, hasOpp, onClose }) {
               />
             </div>
           ))}
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-app-border mt-3">
+            <div className="flex-1 flex flex-col">
+              <label className="text-app-primary">Auto QC (ad/brand)</label>
+              <span className="text-[10px] text-app-dim normal-case mt-1">Tự động nhận diện bài tiềm năng và cmt thả thính mà không bị gò bó bởi target ở trên (chỉ giới hạn bởi tổng comment/ngày).</span>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={form.auto_ad_enabled}
+                onChange={e => setForm(f => ({ ...f, auto_ad_enabled: e.target.checked }))}
+              />
+              <div className="w-9 h-5 bg-app-muted/30 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-hermes"></div>
+            </label>
+          </div>
         </div>
 
         <div className="mt-5 flex justify-end gap-2">
