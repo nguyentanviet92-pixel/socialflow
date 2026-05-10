@@ -507,7 +507,8 @@ function EditKpiModal({ campaignId, row, hasOpp, onClose }) {
                 max={500}
                 value={form[k]}
                 onChange={setField(k)}
-                className="w-20 px-2 py-1 bg-app-elevated border border-app-border rounded text-app-primary text-right"
+                disabled={k === 'target_opportunity_comments' && form.auto_ad_enabled}
+                className={`w-20 px-2 py-1 bg-app-elevated border border-app-border rounded text-app-primary text-right ${k === 'target_opportunity_comments' && form.auto_ad_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}
               />
             </div>
           ))}
