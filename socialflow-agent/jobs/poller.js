@@ -451,6 +451,7 @@ async function poll() {
             if (tgt > 0 && done >= tgt) {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} ${kpiField} KPI met (${done}/${tgt}) — skipping ${job.type}`)
               _dbgSkip(job, `KPI ${kpiField} ${done}/${tgt} met`)
+              updateJobStatus(job.id, 'done', { skipped: true, reason: `kpi_met_${kpiField}` }).catch(() => {})
               continue
             }
           }
@@ -503,6 +504,7 @@ async function poll() {
             console.log(`[POLLER] Nick ${accId.slice(0,8)} budget exhausted for ${actionType}, skipping (further logs suppressed until reset)`)
           }
           _dbgSkip(job, `budget exhausted ${actionType}`)
+          updateJobStatus(job.id, 'done', { skipped: true, reason: `budget_exhausted_${actionType}` }).catch(() => {})
           continue
         }
       }

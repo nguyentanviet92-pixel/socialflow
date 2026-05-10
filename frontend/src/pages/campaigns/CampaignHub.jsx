@@ -365,9 +365,7 @@ function OverviewTab({ campaign, campaignId }) {
               <span className="flex-1">Nick</span>
               <span className="w-20 text-right">Likes</span>
               <span className="w-24 text-right">Comments</span>
-              {(!!campaign?.brand_config?.brand_name || kpi.rows.some(r => (r.target_opportunity_comments || 0) > 0)) && (
-                <span className="w-16 text-right" title="Branded/ad opportunity comments — separate from normal comments">QC</span>
-              )}
+              <span className="w-16 text-right" title="Branded/ad opportunity comments — separate from normal comments">QC</span>
               <span className="w-20 text-right">FR</span>
               <span className="w-20 text-right">Groups</span>
               <span className="w-20 text-right" title="Jobs created today (all types) vs daily quota">Quota</span>
@@ -391,16 +389,14 @@ function OverviewTab({ campaign, campaignId }) {
                 <span className="w-24 text-right text-app-muted font-mono-ui">
                   {row.done_comments || 0}/{row.target_comments || 0}
                 </span>
-                {(!!campaign?.brand_config?.brand_name || kpi.rows.some(r => (r.target_opportunity_comments || 0) > 0)) && (
-                  <span
-                    className="w-16 text-right font-mono-ui"
-                    style={{ color: (row.target_opportunity_comments || 0) === 0 ? 'var(--text-dim)' :
-                      ((row.done_opportunity_comments || 0) >= (row.target_opportunity_comments || 0) ? 'var(--hermes)' : 'var(--text-muted)') }}
-                    title="Opportunity/ad comments"
-                  >
-                    {(row.target_opportunity_comments || 0) === 0 ? '—' : `${row.done_opportunity_comments || 0}/${row.target_opportunity_comments}`}
-                  </span>
-                )}
+                <span
+                  className="w-16 text-right font-mono-ui"
+                  style={{ color: (row.target_opportunity_comments || 0) === 0 ? 'var(--text-dim)' :
+                    ((row.done_opportunity_comments || 0) >= (row.target_opportunity_comments || 0) ? 'var(--hermes)' : 'var(--text-muted)') }}
+                  title="Opportunity/ad comments"
+                >
+                  {(row.target_opportunity_comments || 0) === 0 ? '—' : `${row.done_opportunity_comments || 0}/${row.target_opportunity_comments}`}
+                </span>
                 <span className="w-20 text-right text-app-muted font-mono-ui">
                   {row.done_friend_requests || 0}/{row.target_friend_requests || 0}
                 </span>
@@ -434,7 +430,7 @@ function OverviewTab({ campaign, campaignId }) {
         <EditKpiModal
           campaignId={campaignId}
           row={editingKpi.row}
-          hasOpp={!!campaign?.brand_config?.brand_name || kpi?.rows?.some(r => (r.target_opportunity_comments || 0) > 0)}
+          hasOpp={true}
           onClose={() => setEditingKpi(null)}
         />,
         document.body
