@@ -182,19 +182,40 @@ async function campaignNurture(payload, supabase) {
   const brandConfig = payload.brand_config || config?.brand_config || config?.advertising || null
   const adEnabled = brandConfig && (payload.ad_mode === 'ad_enabled' || config?.ad_mode === 'ad_enabled' || brandConfig.brand_name)
 
-  // Per-nick ad settings from daily_budget.opportunity_comment
-  // { max: 5, used: 0, auto_detect: true }
-  const nickAdBudget = account.daily_budget?.opportunity_comment || { max: 0, used: 0 }
-  const nickAdMax = nickAdBudget.max ?? 0
-  const nickAdAutoDetect = nickAdBudget.auto_detect !== false // default true if max > 0
-  // Nick must be >= 7 days old (was 30, relaxed for faster activation)
-  const canDoAdComment = adEnabled && nickAge >= 7 && nickAdMax > 0 && nickAdAutoDetect
+  const vnToday = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)
 
-  // Count today's ad comments for this nick
-  let adCommentsToday = 0
-  if (canDoAdComment) {
+  // Fetch KPI target for today (set via Campaign KPI Modal)
+  let kpiAdLimit = null
+  let kpiAdDone = 0
+  if (campaign_id) {
     try {
-      const vnToday = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)
+      const { data: kpiRow } = await supabase.from('nick_kpi_daily')
+        .select('target_opportunity_comments, done_opportunity_comments')
+        .eq('campaign_id', campaign_id)
+        .eq('account_id', account_id)
+        .eq('date', vnToday)
+        .maybeSingle()
+      if (kpiRow) {
+        kpiAdLimit = kpiRow.target_opportunity_comments ?? 0
+        kpiAdDone = kpiRow.done_opportunity_comments ?? 0
+      }
+    } catch {}
+  }
+
+  // Fallback to global account budget if KPI row doesn't exist
+  const nickAdBudget = account.daily_budget?.opportunity_comment || { max: 0, used: 0 }
+  const nickAdAutoDetect = nickAdBudget.auto_detect !== false
+
+  // Determine actual daily limit (KPI takes precedence, even if 0. Fallback if null)
+  const AD_COMMENT_DAILY_LIMIT = kpiAdLimit !== null ? kpiAdLimit : (nickAdBudget.max ?? 0)
+
+  // Nick must be >= 7 days old (was 30, relaxed for faster activation)
+  const canDoAdComment = adEnabled && nickAge >= 7 && AD_COMMENT_DAILY_LIMIT > 0 && nickAdAutoDetect
+
+  // Count today's ad comments for this nick (using KPI done count or querying log)
+  let adCommentsToday = kpiAdDone
+  if (canDoAdComment && kpiAdDone === 0) {
+    try {
       const { count } = await supabase
         .from('campaign_activity_log')
         .select('id', { count: 'exact', head: true })
@@ -204,10 +225,9 @@ async function campaignNurture(payload, supabase) {
       adCommentsToday = count || 0
     } catch {}
   }
-  // Per-nick limit from daily_budget instead of hardcoded value
-  const AD_COMMENT_DAILY_LIMIT = nickAdMax
+
   if (canDoAdComment) {
-    console.log(`[NURTURE] 📢 Ad comment enabled for ${account.username}: ${adCommentsToday}/${AD_COMMENT_DAILY_LIMIT} today (auto_detect=${nickAdAutoDetect})`)
+    console.log(`[NURTURE] 📢 Ad comment enabled for ${account.username}: ${adCommentsToday}/${AD_COMMENT_DAILY_LIMIT} today (auto_detect=${nickAdAutoDetect}, source=${kpiAdLimit !== null ? 'KPI' : 'Budget'})`)
   }
 
   // Apply age factor for newer accounts

@@ -365,7 +365,7 @@ function OverviewTab({ campaign, campaignId }) {
               <span className="flex-1">Nick</span>
               <span className="w-20 text-right">Likes</span>
               <span className="w-24 text-right">Comments</span>
-              {kpi.rows.some(r => (r.target_opportunity_comments || 0) > 0) && (
+              {(!!campaign?.brand_config?.brand_name || kpi.rows.some(r => (r.target_opportunity_comments || 0) > 0)) && (
                 <span className="w-16 text-right" title="Branded/ad opportunity comments — separate from normal comments">QC</span>
               )}
               <span className="w-20 text-right">FR</span>
@@ -391,7 +391,7 @@ function OverviewTab({ campaign, campaignId }) {
                 <span className="w-24 text-right text-app-muted font-mono-ui">
                   {row.done_comments || 0}/{row.target_comments || 0}
                 </span>
-                {kpi.rows.some(r => (r.target_opportunity_comments || 0) > 0) && (
+                {(!!campaign?.brand_config?.brand_name || kpi.rows.some(r => (r.target_opportunity_comments || 0) > 0)) && (
                   <span
                     className="w-16 text-right font-mono-ui"
                     style={{ color: (row.target_opportunity_comments || 0) === 0 ? 'var(--text-dim)' :
@@ -434,7 +434,7 @@ function OverviewTab({ campaign, campaignId }) {
         <EditKpiModal
           campaignId={campaignId}
           row={editingKpi.row}
-          hasOpp={kpi?.rows?.some(r => (r.target_opportunity_comments || 0) > 0)}
+          hasOpp={!!campaign?.brand_config?.brand_name || kpi?.rows?.some(r => (r.target_opportunity_comments || 0) > 0)}
           onClose={() => setEditingKpi(null)}
         />,
         document.body
