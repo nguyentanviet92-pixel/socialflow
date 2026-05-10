@@ -12,7 +12,7 @@ const API_URL = process.env.API_URL || 'http://localhost:3000'
 const AGENT_SECRET = process.env.AGENT_SECRET || ''
 const AGENT_SECRET_KEY = process.env.AGENT_SECRET_KEY || ((() => { try { return require("./config").AGENT_SECRET_KEY } catch{} })()) || ""
 
-const HERMES_ENABLED = !!AGENT_SECRET
+const HERMES_ENABLED = !!(AGENT_SECRET || AGENT_SECRET_KEY)
 const CALL_TIMEOUT_MS = 45000
 const FALLBACK_TIMEOUT_MS = 20000
 
@@ -73,7 +73,7 @@ async function callHermes(taskType, prompt, options = {}) {
           timeout: CALL_TIMEOUT_MS,
           headers: {
             'Content-Type': 'application/json',
-            'X-Agent-Key': AGENT_SECRET,
+            'X-Agent-Key': AGENT_SECRET || AGENT_SECRET_KEY,
           },
         }
       )
@@ -164,7 +164,7 @@ function _notifyHermesOffline(lastTask, lastCode, lastError) {
     },
     {
       timeout: 5000,
-      headers: { 'Content-Type': 'application/json', 'X-Agent-Key': AGENT_SECRET },
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Key': AGENT_SECRET || AGENT_SECRET_KEY },
     }
   ).catch(() => {
     // Fallback: try direct notification insert
@@ -179,7 +179,7 @@ function _notifyHermesOffline(lastTask, lastCode, lastError) {
       },
       {
         timeout: 5000,
-        headers: { 'Content-Type': 'application/json', 'X-Agent-Key': AGENT_SECRET },
+        headers: { 'Content-Type': 'application/json', 'X-Agent-Key': AGENT_SECRET || AGENT_SECRET_KEY },
       }
     ).catch(() => {}) // truly best-effort
   })
@@ -256,7 +256,7 @@ async function sendFeedback({ taskType, outputText, score, accountId, reason, co
       timeout: 5000,
       headers: {
         'Content-Type': 'application/json',
-        'X-Agent-Key': AGENT_SECRET,
+        'X-Agent-Key': AGENT_SECRET || AGENT_SECRET_KEY,
       },
     }
   ).catch(() => {}) // silently drop — feedback is optional

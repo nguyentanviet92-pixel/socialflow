@@ -33,7 +33,7 @@ async function filterBatch(batch, topic, ownerId, campaignContext) {
   ).join('\n')
 
   // Build topic explanation so AI understands the business context
-  const topicWords = topic.split(/[\s,]+/).filter(w => w.length > 1)
+  const topicWords = (topic || '').split(/[\s,]+/).filter(w => w.length > 1)
   const topicExplain = topicWords.join(', ')
 
   const batchPrompt = `Sản phẩm/dịch vụ: "${topicExplain}"
@@ -86,7 +86,8 @@ async function filterRelevantGroups(groups, topic, ownerId, accountId, supabase,
   if (!groups.length) return []
 
   const scope = accountId ? accountId.slice(0, 8) : 'unknown'
-  const topicKey = topic.toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
+  const safeTopic = topic || ''
+  const topicKey = safeTopic.toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
   const CACHE_TTL = 7 * 24 * 3600 * 1000 // 7 days
 
   // Split: cached vs uncached groups
@@ -184,7 +185,8 @@ async function filterRelevantGroups(groups, topic, ownerId, accountId, supabase,
  * Keyword-based fallback filter
  */
 function keywordFilter(groups, topic) {
-  const topicWords = topic.toLowerCase().split(/[\s,]+/).filter(w => w.length >= 2)
+  const safeTopic = topic || ''
+  const topicWords = safeTopic.toLowerCase().split(/[\s,]+/).filter(w => w.length >= 2)
   const RELATED = {
     'vps': ['hosting', 'server', 'cloud', 'máy chủ', 'thuê', 'mmo', 'dev', 'lập trình'],
     'hosting': ['vps', 'server', 'web', 'domain', 'cloud', 'dev'],
@@ -272,7 +274,7 @@ async function evaluateGroup(groupInfo, topic, ownerId) {
     `  Bài ${i + 1}: [${p.author || '?'}] "${(p.text || '').substring(0, 250)}"`
   ).join('\n')
 
-  const topicWords = topic.toLowerCase().split(/[\s,]+/).filter(w => w.length > 2)
+  const topicWords = (topic || '').toLowerCase().split(/[\s,]+/).filter(w => w.length > 2)
   const nameLower = (name || '').toLowerCase()
   const nameMatchesTopic = topicWords.some(w => nameLower.includes(w))
 
@@ -381,7 +383,7 @@ Trả về JSON:
 
   // Fallback: keyword match + language check
   const fallbackText = `${name} ${description || ''} ${posts.map(p => p.text).join(' ')}`.toLowerCase()
-  const fallbackWords = topic.toLowerCase().split(/[\s,]+/).filter(w => w.length >= 2)
+  const fallbackWords = (topic || '').toLowerCase().split(/[\s,]+/).filter(w => w.length >= 2)
   const hasKeyword = fallbackWords.some(w => fallbackText.includes(w))
   const isForeignLang = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/.test(fallbackText.substring(0, 500))
 

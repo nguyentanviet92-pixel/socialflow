@@ -113,7 +113,11 @@ class HttpQueryBuilder {
 
   // ── Execute (thenable) ──
   then(resolve, reject) {
-    this._send().then(resolve, reject)
+    return this._send().then(resolve, reject)
+  }
+
+  catch(reject) {
+    return this._send().catch(reject)
   }
 
   async _send() {

@@ -1507,65 +1507,74 @@ function ActivityTab({ campaignId, campaign }) {
   return (
     <div className="flex flex-col h-full">
       {/* ── Toolbar ── */}
-      <div
-        className="flex items-center gap-2 px-4 py-2.5 flex-wrap"
-        style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}
-      >
-        <select
-          className="px-2 py-1 rounded text-xs"
-          style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
-          value={filterType}
-          onChange={e => setFilterType(e.target.value)}
-        >
-          {FILTERABLE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-        </select>
-
-        <select
-          className="px-2 py-1 rounded text-xs"
-          style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
-          value={dateMode}
-          onChange={e => setDateMode(e.target.value)}
-        >
-          <option value="today">Hôm nay</option>
-          <option value="yesterday">Hôm qua</option>
-          <option value="custom">Chọn ngày…</option>
-          <option value="all">Tất cả</option>
-        </select>
-        {dateMode === 'custom' && (
-          <input
-            type="date"
-            className="px-2 py-1 rounded text-xs"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
-            value={customDate}
-            max={vnTodayStr()}
-            onChange={e => setCustomDate(e.target.value)}
-          />
-        )}
-
-        {apiAccounts.length > 0 && (
+      <div style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+        {/* Top row: Other filters & actions */}
+        <div className="flex items-center gap-2 px-4 py-2.5 flex-wrap" style={{ borderBottom: '1px solid var(--border)' }}>
           <select
             className="px-2 py-1 rounded text-xs"
             style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
-            value={filterAccountId}
-            onChange={e => setFilterAccountId(e.target.value)}
+            value={dateMode}
+            onChange={e => setDateMode(e.target.value)}
           >
-            <option value="">Tất cả nick</option>
-            {apiAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            <option value="today">Hôm nay</option>
+            <option value="yesterday">Hôm qua</option>
+            <option value="custom">Chọn ngày…</option>
+            <option value="all">Tất cả</option>
           </select>
-        )}
+          {dateMode === 'custom' && (
+            <input
+              type="date"
+              className="px-2 py-1 rounded text-xs"
+              style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
+              value={customDate}
+              max={vnTodayStr()}
+              onChange={e => setCustomDate(e.target.value)}
+            />
+          )}
 
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {total.toLocaleString('vi-VN')} hoạt động
-          </span>
-          <button
-            onClick={exportCsv}
-            disabled={!rows.length}
-            className="px-2.5 py-1 rounded text-xs"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
-          >
-            CSV
-          </button>
+          {apiAccounts.length > 0 && (
+            <select
+              className="px-2 py-1 rounded text-xs"
+              style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
+              value={filterAccountId}
+              onChange={e => setFilterAccountId(e.target.value)}
+            >
+              <option value="">Tất cả nick</option>
+              {apiAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {total.toLocaleString('vi-VN')} hoạt động
+            </span>
+            <button
+              onClick={exportCsv}
+              disabled={!rows.length}
+              className="px-2.5 py-1 rounded text-xs"
+              style={{ border: '1px solid var(--border)', background: 'var(--bg)' }}
+            >
+              CSV
+            </button>
+          </div>
+        </div>
+
+        {/* Bottom row: Filter Tabs */}
+        <div className="flex items-center gap-2 px-4 py-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+          {FILTERABLE_TYPES.map(t => (
+            <button
+              key={t.value}
+              onClick={() => setFilterType(t.value)}
+              className="px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors"
+              style={{
+                border: '1px solid var(--border)',
+                background: filterType === t.value ? 'var(--hermes)' : 'var(--bg)',
+                color: filterType === t.value ? '#fff' : 'var(--text-muted)',
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -2198,6 +2207,80 @@ function HermesReviewModal({ campaign, accounts, jobs, onClose }) {
 }
 
 // ─── Main ──────────────────────────────────────────────────
+function HermesModelQuickSelect() {
+  const qc = useQueryClient()
+  const { data: cfgData, isLoading } = useQuery({
+    queryKey: ['hermes', 'config'],
+    queryFn: async () => (await api.get('/ai-hermes/config')).data,
+  })
+
+  const save = useMutation({
+    mutationFn: async (payload) => api.put('/ai-hermes/config', payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['hermes', 'config'] }),
+    onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
+  })
+
+  if (isLoading || !cfgData?.config) return null
+
+  const providers = cfgData.providers || {}
+  const currentProvider = cfgData.config.provider
+  const currentModel = cfgData.config.model
+
+  const QUICK_PRESETS = [
+    { p: 'deepseek', m: 'deepseek-chat', label: 'DeepSeek V3' },
+    { p: 'deepseek', m: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+    { p: 'kimi', m: 'kimi-k2.6', label: 'Kimi K2.6' },
+    { p: 'openai', m: 'gpt-4o-mini', label: 'GPT-4o-mini' },
+    { p: 'gemini', m: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { p: 'groq', m: 'llama-3.3-70b-versatile', label: 'Groq Llama 3.3' },
+  ]
+
+  const handleChange = (e) => {
+    const val = e.target.value
+    if (!val) return
+    if (val === 'more') {
+      window.location.href = '/hermes/settings'
+      return
+    }
+    if (val === 'custom') return
+    const [p, m] = val.split('|')
+    const providerObj = providers[p]
+    if (!providerObj) return
+    
+    save.mutate({
+      provider: p,
+      model: m,
+      base_url: providerObj.base_url,
+    })
+    toast.success(`Đã đổi model sang ${m}`)
+  }
+
+  const currentValue = `${currentProvider}|${currentModel}`
+  const isCustom = !QUICK_PRESETS.some(x => x.p === currentProvider && x.m === currentModel)
+
+  return (
+    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-app-elevated" style={{ border: '1px solid var(--border)' }}>
+      <Brain size={14} className="text-hermes shrink-0" />
+      <select
+        value={isCustom ? 'custom' : currentValue}
+        onChange={handleChange}
+        disabled={save.isPending}
+        className="bg-transparent text-xs text-app-primary font-mono-ui outline-none cursor-pointer border-none p-0 pr-4"
+        style={{ scrollbarWidth: 'none', WebkitAppearance: 'none', appearance: 'none', backgroundImage: 'url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23a1a1aa%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right center', backgroundSize: '8px auto' }}
+      >
+        {isCustom && <option value="custom">{currentModel} (Tùy chỉnh)</option>}
+        {QUICK_PRESETS.map(preset => (
+          <option key={`${preset.p}|${preset.m}`} value={`${preset.p}|${preset.m}`}>
+            {preset.label}
+          </option>
+        ))}
+        <option disabled>──────────</option>
+        <option value="more">Cấu hình chi tiết...</option>
+      </select>
+    </div>
+  )
+}
+
 export default function CampaignHub() {
   const { id } = useParams()
   const nav = useNavigate()
@@ -2342,6 +2425,7 @@ export default function CampaignHub() {
             ● {status}
           </span>
           <HermesCentralToggle campaign={campaign} />
+          <HermesModelQuickSelect />
           <HermesRunNowButton campaignId={id} />
           {isRunning ? (
             <button

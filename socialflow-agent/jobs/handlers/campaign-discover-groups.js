@@ -154,17 +154,29 @@ async function extractGroupsFromDOM(page) {
 // ─────────────────────────────────────────────────────────────
 
 async function campaignDiscoverGroups(payload, supabase) {
-  const { account_id, campaign_id, role_id, topic, config, feeds_into, parsed_plan } = payload
+  let { account_id, campaign_id, role_id, topic, config, feeds_into, parsed_plan } = payload
   // Phase 1: Load campaign.language → derive allowedLangs (overrides config.allowed_languages)
   // Also load min_member_count for member-count threshold gate.
+  // CRITICAL: also load campaign.topic to backfill when payload.topic is undefined
+  // (scheduler-emitted jobs sometimes have empty/missing topic field).
   let campaignLanguage = 'vi'
   let campaign = {}
   if (campaign_id) {
     try {
-      const { data: _c } = await supabase.from('campaigns').select('language, min_member_count, kpi_config, config').eq('id', campaign_id).single()
+      const { data: _c } = await supabase.from('campaigns').select('language, min_member_count, kpi_config, config, topic').eq('id', campaign_id).single()
       campaign = _c || {}
       if (_c?.language) campaignLanguage = _c.language
+      // Backfill topic from campaign row if payload didn't include it
+      if (!topic && _c?.topic) {
+        topic = _c.topic
+        console.log(`[CAMPAIGN-SCOUT] Backfilled topic from campaign: "${topic}"`)
+      }
     } catch {}
+  }
+  // Final guard: if topic is still missing, log warning but don't crash
+  if (!topic) {
+    console.warn(`[CAMPAIGN-SCOUT] ⚠️ topic is undefined/empty for campaign ${campaign_id} — using empty string`)
+    topic = ''
   }
   const campaignAllowedLangs = campaignLanguage === 'mixed' ? ['vi', 'en'] : [campaignLanguage]
 
