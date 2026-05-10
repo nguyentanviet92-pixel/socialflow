@@ -181,9 +181,16 @@ async function campaignNurture(payload, supabase) {
   // fall back to legacy config.advertising shape
   const brandConfig = payload.brand_config || config?.brand_config || config?.advertising || null
   const adEnabled = brandConfig && (payload.ad_mode === 'ad_enabled' || config?.ad_mode === 'ad_enabled' || brandConfig.brand_name)
-  const canDoAdComment = adEnabled && nickAge >= 30 // warmup >= 30 days required
 
-  // Count today's ad comments for this nick (max 2/day)
+  // Per-nick ad settings from daily_budget.opportunity_comment
+  // { max: 5, used: 0, auto_detect: true }
+  const nickAdBudget = account.daily_budget?.opportunity_comment || { max: 0, used: 0 }
+  const nickAdMax = nickAdBudget.max ?? 0
+  const nickAdAutoDetect = nickAdBudget.auto_detect !== false // default true if max > 0
+  // Nick must be >= 7 days old (was 30, relaxed for faster activation)
+  const canDoAdComment = adEnabled && nickAge >= 7 && nickAdMax > 0 && nickAdAutoDetect
+
+  // Count today's ad comments for this nick
   let adCommentsToday = 0
   if (canDoAdComment) {
     try {
@@ -197,7 +204,11 @@ async function campaignNurture(payload, supabase) {
       adCommentsToday = count || 0
     } catch {}
   }
-  const AD_COMMENT_DAILY_LIMIT = 2
+  // Per-nick limit from daily_budget instead of hardcoded value
+  const AD_COMMENT_DAILY_LIMIT = nickAdMax
+  if (canDoAdComment) {
+    console.log(`[NURTURE] 📢 Ad comment enabled for ${account.username}: ${adCommentsToday}/${AD_COMMENT_DAILY_LIMIT} today (auto_detect=${nickAdAutoDetect})`)
+  }
 
   // Apply age factor for newer accounts
   const maxLikesSession = applyAgeFactor(likeCheck.remaining, nickAge)

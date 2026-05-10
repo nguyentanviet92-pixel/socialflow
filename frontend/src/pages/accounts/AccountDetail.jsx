@@ -458,126 +458,262 @@ function ConfigTab({ account, queryClient }) {
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="bg-app-surface rounded border border-app-border p-6 space-y-6 max-w-2xl"
-    >
-      <h2 className="text-lg font-semibold text-app-primary">
-        Schedule Settings
-      </h2>
-
-      {/* Active hours */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-app-primary mb-1.5">
-            Active Hours Start
-          </label>
-          <input
-            type="time"
-            value={form.active_hours_start}
-            onChange={(e) => handleChange('active_hours_start', e.target.value)}
-            className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-app-primary mb-1.5">
-            Active Hours End
-          </label>
-          <input
-            type="time"
-            value={form.active_hours_end}
-            onChange={(e) => handleChange('active_hours_end', e.target.value)}
-            className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-      </div>
-
-      {/* Active days */}
-      <div>
-        <label className="block text-sm font-medium text-app-primary mb-2">
-          Active Days
-        </label>
-        <div className="flex gap-2">
-          {dayNames.map((name, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => toggleDay(i)}
-              className={`w-10 h-10 rounded-lg text-xs font-medium transition-colors ${
-                form.active_days.includes(i)
-                  ? 'bg-info text-white'
-                  : 'bg-app-elevated text-app-muted hover:bg-app-hover'
-              }`}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Max daily posts */}
-      <div>
-        <label className="block text-sm font-medium text-app-primary mb-1.5">
-          Max Daily Posts
-        </label>
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={form.max_daily_posts}
-          onChange={(e) =>
-            handleChange('max_daily_posts', parseInt(e.target.value) || 1)
-          }
-          className="w-full max-w-xs rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        />
-      </div>
-
-      {/* Delay range */}
-      <div className="grid grid-cols-2 gap-4 max-w-md">
-        <div>
-          <label className="block text-sm font-medium text-app-primary mb-1.5">
-            Min Delay (minutes)
-          </label>
-          <input
-            type="number"
-            min={1}
-            value={form.min_delay_minutes}
-            onChange={(e) =>
-              handleChange('min_delay_minutes', parseInt(e.target.value) || 1)
-            }
-            className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-app-primary mb-1.5">
-            Max Delay (minutes)
-          </label>
-          <input
-            type="number"
-            min={1}
-            value={form.max_delay_minutes}
-            onChange={(e) =>
-              handleChange('max_delay_minutes', parseInt(e.target.value) || 1)
-            }
-            className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-      </div>
-
-      {/* Submit */}
-      <button
-        type="submit"
-        disabled={updateMutation.isPending}
-        className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg bg-info text-white hover:opacity-90 disabled:bg-blue-400 transition-colors"
+    <div className="space-y-6 max-w-2xl">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-app-surface rounded border border-app-border p-6 space-y-6"
       >
-        {updateMutation.isPending ? (
-          <Loader className="w-4 h-4 animate-spin" />
-        ) : (
-          <Save className="w-4 h-4" />
-        )}
-        {updateMutation.isPending ? 'Saving...' : 'Save Settings'}
+        <h2 className="text-lg font-semibold text-app-primary">
+          Schedule Settings
+        </h2>
+
+        {/* Active hours */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-app-primary mb-1.5">
+              Active Hours Start
+            </label>
+            <input
+              type="time"
+              value={form.active_hours_start}
+              onChange={(e) => handleChange('active_hours_start', e.target.value)}
+              className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-app-primary mb-1.5">
+              Active Hours End
+            </label>
+            <input
+              type="time"
+              value={form.active_hours_end}
+              onChange={(e) => handleChange('active_hours_end', e.target.value)}
+              className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+        </div>
+
+        {/* Active days */}
+        <div>
+          <label className="block text-sm font-medium text-app-primary mb-2">
+            Active Days
+          </label>
+          <div className="flex gap-2">
+            {dayNames.map((name, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => toggleDay(i)}
+                className={`w-10 h-10 rounded-lg text-xs font-medium transition-colors ${
+                  form.active_days.includes(i)
+                    ? 'bg-info text-white'
+                    : 'bg-app-elevated text-app-muted hover:bg-app-hover'
+                }`}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Max daily posts */}
+        <div>
+          <label className="block text-sm font-medium text-app-primary mb-1.5">
+            Max Daily Posts
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={form.max_daily_posts}
+            onChange={(e) =>
+              handleChange('max_daily_posts', parseInt(e.target.value) || 1)
+            }
+            className="w-full max-w-xs rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+
+        {/* Delay range */}
+        <div className="grid grid-cols-2 gap-4 max-w-md">
+          <div>
+            <label className="block text-sm font-medium text-app-primary mb-1.5">
+              Min Delay (minutes)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={form.min_delay_minutes}
+              onChange={(e) =>
+                handleChange('min_delay_minutes', parseInt(e.target.value) || 1)
+              }
+              className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-app-primary mb-1.5">
+              Max Delay (minutes)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={form.max_delay_minutes}
+              onChange={(e) =>
+                handleChange('max_delay_minutes', parseInt(e.target.value) || 1)
+              }
+              className="w-full rounded-lg border border-app-border px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+        </div>
+
+        {/* Submit */}
+        <button
+          type="submit"
+          disabled={updateMutation.isPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg bg-info text-white hover:opacity-90 disabled:bg-blue-400 transition-colors"
+        >
+          {updateMutation.isPending ? (
+            <Loader className="w-4 h-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4" />
+          )}
+          {updateMutation.isPending ? 'Saving...' : 'Save Settings'}
+        </button>
+      </form>
+
+      {/* Ad Comment Budget Panel */}
+      <AdBudgetPanel account={account} queryClient={queryClient} />
+    </div>
+  )
+}
+
+// ── Per-nick Ad Comment Budget ──────────────────────────────────────────
+function AdBudgetPanel({ account, queryClient }) {
+  const budget = account.daily_budget?.opportunity_comment || { max: 0, used: 0, auto_detect: false }
+  const [adMax, setAdMax] = useState(budget.max ?? 0)
+  const [autoDetect, setAutoDetect] = useState(budget.auto_detect !== false && budget.max > 0)
+
+  useEffect(() => {
+    const b = account.daily_budget?.opportunity_comment || { max: 0, used: 0, auto_detect: false }
+    setAdMax(b.max ?? 0)
+    setAutoDetect(b.auto_detect !== false && b.max > 0)
+  }, [account])
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      const newBudget = {
+        ...(account.daily_budget || {}),
+        opportunity_comment: {
+          ...(account.daily_budget?.opportunity_comment || {}),
+          max: autoDetect ? Math.max(1, adMax) : 0,
+          auto_detect: autoDetect,
+        },
+      }
+      await api.put(`/accounts/${account.id}`, { daily_budget: newBudget })
+    },
+    onSuccess: () => {
+      toast.success('Đã lưu cấu hình quảng cáo')
+      queryClient.invalidateQueries({ queryKey: ['account', String(account.id)] })
+    },
+    onError: () => toast.error('Không thể lưu cấu hình'),
+  })
+
+  const nickAge = account.fb_created_at
+    ? Math.floor((Date.now() - new Date(account.fb_created_at).getTime()) / 86400000)
+    : null
+
+  return (
+    <div className="bg-app-surface rounded border border-app-border p-6 space-y-5">
+      <div>
+        <h2 className="text-lg font-semibold text-app-primary flex items-center gap-2">
+          📢 Comment Quảng Cáo Tự Động
+        </h2>
+        <p className="text-xs text-app-muted mt-1">
+          Khi nick lướt nhóm, AI sẽ tự nhận diện bài viết tiềm năng và comment quảng cáo tự nhiên.
+        </p>
+      </div>
+
+      {/* Toggle */}
+      <div className="flex items-center justify-between p-4 rounded-lg" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+        <div>
+          <div className="text-sm font-medium text-app-primary">Auto Detect & Comment</div>
+          <div className="text-xs text-app-muted mt-0.5">
+            AI tự nhận diện bài viết có cơ hội quảng cáo khi nick đang lướt feed nhóm
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAutoDetect(!autoDetect)}
+          className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+            autoDetect ? 'bg-hermes' : 'bg-gray-300'
+          }`}
+        >
+          <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
+            autoDetect ? 'translate-x-6' : 'translate-x-1'
+          }`} />
+        </button>
+      </div>
+
+      {/* Daily limit slider */}
+      {autoDetect && (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-app-primary mb-1">
+              Số lượng tối đa / ngày: <span className="text-hermes font-bold">{adMax}</span>
+            </label>
+            <input
+              type="range"
+              min={1}
+              max={20}
+              value={adMax}
+              onChange={(e) => setAdMax(parseInt(e.target.value))}
+              className="w-full max-w-xs"
+            />
+            <div className="flex justify-between text-[10px] text-app-dim max-w-xs">
+              <span>1 (An toàn)</span>
+              <span>5</span>
+              <span>10</span>
+              <span>20 (Mạnh)</span>
+            </div>
+          </div>
+
+          {/* Status */}
+          <div className="flex items-center gap-4 text-xs">
+            <span className="text-app-muted">
+              Đã dùng hôm nay: <span className="text-hermes font-medium">{budget.used || 0}</span> / {adMax}
+            </span>
+            {nickAge !== null && nickAge < 7 && (
+              <span className="text-amber-500 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                Nick mới ({nickAge} ngày) — cần ≥ 7 ngày
+              </span>
+            )}
+          </div>
+
+          {/* Info box */}
+          <div className="p-3 rounded-lg text-xs space-y-1" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
+            <div className="font-medium text-hermes">Cách hoạt động:</div>
+            <ul className="text-app-muted space-y-0.5 pl-3 list-disc">
+              <li>Khi nick lướt nhóm (nurture), AI đọc nội dung từng bài viết</li>
+              <li>Nếu phát hiện cơ hội phù hợp với brand → tự tạo comment quảng cáo tự nhiên</li>
+              <li>Comment qua Quality Gate để đảm bảo không spam, phù hợp ngữ cảnh</li>
+              <li>Giọng điệu xoay ngẫu nhiên (casual, curious, helpful...) mỗi lần khác nhau</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Save */}
+      <button
+        type="button"
+        onClick={() => saveMut.mutate()}
+        disabled={saveMut.isPending}
+        className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg transition-colors"
+        style={{ background: 'var(--hermes)', color: '#fff' }}
+      >
+        {saveMut.isPending ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+        {saveMut.isPending ? 'Đang lưu...' : 'Lưu cấu hình quảng cáo'}
       </button>
-    </form>
+    </div>
   )
 }
 
