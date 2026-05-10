@@ -177,3 +177,9 @@ body {
   border-color: var(--border-bright);
   transform: translateY(-1px);
 }
+
+/* Fix Dropdown options */
+select option {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+}
