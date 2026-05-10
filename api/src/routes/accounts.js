@@ -1250,11 +1250,11 @@ Không markdown wrapper. Chỉ JSON.`
       last_checked_at: new Date().toISOString(),
     }).eq('id', req.params.id)
 
-    // Find active campaign_role for this account
     const { data: campaigns } = await supabase.from('campaigns')
       .select('id, name, status, campaign_roles(id, role_type, account_ids, is_active)')
       .eq('owner_id', ownerId)
       .in('status', ['running', 'active'])
+      .eq('hermes_central', false)
 
     let assignedJob = null
     const ROLE_TO_JOB_TYPE = {
@@ -1344,6 +1344,7 @@ Không markdown wrapper. Chỉ JSON.`
       .select('id, name, owner_id, campaign_roles(id, role_type, account_ids, is_active)')
       .in('owner_id', ownerIds)
       .in('status', ['running', 'active'])
+      .eq('hermes_central', false)
 
     const idleList = []
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()

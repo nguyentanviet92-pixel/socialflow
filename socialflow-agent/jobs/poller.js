@@ -204,6 +204,10 @@ let _polling = false
 let _lastPollAt = 0
 
 let _pollCount = 0
+async function idleAssign() {
+  // DISABLE idle auto-assign: It conflicts with hermes-orchestrator and creates an infinite loop of discover_groups jobs.
+  return
+}
 async function poll() {
   if (_polling) return  // prevent concurrent polls (realtime + interval race)
   if (pool.isBusy()) return  // all interaction slots taken
@@ -381,6 +385,7 @@ async function poll() {
           if (vnHour >= 0 && vnHour < 5) {
             if (Math.random() < 0.85) {
               _dbgSkip(job, `sleep hour 0-5h (reduced interaction)`)
+              updateJobStatus(job.id, 'done', { skipped: true, reason: 'sleep_hour_0_5h' }).catch(() => {})
               continue
             }
           }
@@ -388,6 +393,7 @@ async function poll() {
           if (!is247) {
             if (vnHour < startH || vnHour >= endH) {
               _dbgSkip(job, `active_hours ${startH}-${endH}h, now ${vnHour}h`)
+              updateJobStatus(job.id, 'done', { skipped: true, reason: `active_hours_${vnHour}h` }).catch(() => {})
               continue
             }
           }
@@ -408,6 +414,7 @@ async function poll() {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} warm-up blocked: ${warmup.reason} (suppressing further logs)`)
             }
             _dbgSkip(job, `warmup ${warmup.reason}`)
+            updateJobStatus(job.id, 'done', { skipped: true, reason: `warmup_${warmup.reason.replace(/\s+/g, '_')}` }).catch(() => {})
             continue
           }
         }
@@ -441,6 +448,7 @@ async function poll() {
             if (kpiRow.kpi_met && hasTargets) {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} KPI met today — yielding slot`)
               _dbgSkip(job, 'KPI met today')
+              updateJobStatus(job.id, 'done', { skipped: true, reason: 'kpi_met_today' }).catch(() => {})
               continue
             }
             // Action-specific check
@@ -1265,6 +1273,7 @@ function startPoller() {
   // ── Idle nick auto-assign: every 5 min, find healthy nicks with no recent jobs
   //    but assigned to a running campaign_role → queue a task for them.
   const idleAssignInterval = setInterval(async () => {
+    return // DISABLE idle auto-assign: Conflicts with hermes-orchestrator
     try {
       const axios = require('axios')
       const API_URL = process.env.API_URL || _pollerCfg.API_URL || 'http://localhost:3000'
