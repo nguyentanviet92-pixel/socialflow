@@ -9,7 +9,7 @@ export default defineConfig({
     open: true
   },
   preview: {
-    port: 3005,
+    port: 3006,
     host: '0.0.0.0',
     allowedHosts: true // Allow sslip.io or other host headers in Vite 6
   },
