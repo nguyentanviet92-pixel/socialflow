@@ -123,6 +123,157 @@ async function onboardNewNicks(supabase, campaignId, nickIds, userId) {
   return { scoutJobsCreated, skippedTooYoung, skippedEnoughGroups }
 }
 
+// Auto-import target_groups (URLs/IDs pasted by user) into fb_groups & campaign_groups
+async function importTargetGroups(supabase, campaignId, targetGroups, accountIds, topic, userId) {
+  if (!Array.isArray(targetGroups) || targetGroups.length === 0 || !accountIds || accountIds.length === 0) {
+    return { importedCount: 0 }
+  }
+
+  const parsedGroupIds = []
+  const groupUrlMap = new Map()
+
+  for (const gStr of targetGroups) {
+    if (!gStr || typeof gStr !== 'string') continue
+    const trimmed = gStr.trim()
+    if (!trimmed) continue
+
+    let fbGroupId = null
+    // Match URL pattern
+    const m = trimmed.match(/(?:facebook\.com|fb\.com)\/groups\/([^/?#\s]+)/i)
+    if (m) {
+      fbGroupId = m[1]
+    } else if (/^\d+$/.test(trimmed)) {
+      fbGroupId = trimmed
+    }
+
+    if (fbGroupId) {
+      parsedGroupIds.push(fbGroupId)
+      groupUrlMap.set(fbGroupId, trimmed.startsWith('http') ? trimmed : `https://www.facebook.com/groups/${fbGroupId}`)
+    }
+  }
+
+  if (parsedGroupIds.length === 0) return { importedCount: 0 }
+
+  const rows = []
+  for (const fbGroupId of parsedGroupIds) {
+    const groupUrl = groupUrlMap.get(fbGroupId)
+    for (const aid of accountIds) {
+      rows.push({
+        account_id: aid,
+        fb_group_id: fbGroupId,
+        url: groupUrl,
+        name: `Group ${fbGroupId}`, // placeholder name
+        score_tier: 'A', // Treat custom target groups as tier A (priority)
+        user_approved: true,
+        joined_via_campaign_id: campaignId,
+        topic: topic || null,
+        last_scored_at: new Date().toISOString(),
+      })
+    }
+  }
+
+  const { data: upsertedGroups, error: upsertErr } = await supabase.from('fb_groups')
+    .upsert(rows, { onConflict: 'account_id,fb_group_id' })
+    .select()
+
+  if (upsertErr) {
+    console.warn(`[import-target-groups] fb_groups upsert failed: ${upsertErr.message}`)
+    return { importedCount: 0 }
+  }
+
+  let importedCount = 0
+  try {
+    const junctionRows = (upsertedGroups || []).map(g => ({
+      campaign_id: campaignId,
+      group_id: g.id,
+      assigned_nick_id: g.account_id,
+      score: 10,
+      tier: 'A',
+      status: 'active',
+    }))
+    if (junctionRows.length) {
+      const { error: junctionErr } = await supabase.from('campaign_groups')
+        .upsert(junctionRows, { onConflict: 'campaign_id,group_id' })
+      if (!junctionErr) {
+        importedCount = junctionRows.length
+      } else {
+        console.warn(`[import-target-groups] junction upsert failed: ${junctionErr.message}`)
+      }
+    }
+  } catch (jErr) {
+    console.warn(`[import-target-groups] junction logic failed: ${jErr.message}`)
+  }
+
+  // Queue resolve_group job for placeholder names
+  const accountId = accountIds[0] // use first nick to resolve
+  for (const fbGroupId of parsedGroupIds) {
+    const groupUrl = groupUrlMap.get(fbGroupId)
+    try {
+      const { count: resolveExists } = await supabase.from('jobs')
+        .select('id', { count: 'exact', head: true })
+        .eq('type', 'resolve_group')
+        .in('status', ['pending', 'claimed', 'running'])
+        .filter('payload->>fb_group_id', 'eq', fbGroupId)
+
+      if (!resolveExists) {
+        await supabase.from('jobs').insert({
+          type: 'resolve_group',
+          priority: 5,
+          payload: {
+            account_id: accountId,
+            fb_group_id: fbGroupId,
+            group_url: groupUrl,
+            owner_id: userId,
+          },
+          status: 'pending',
+          scheduled_at: new Date().toISOString(),
+          created_by: userId,
+        })
+      }
+    } catch (jobErr) {
+      console.warn(`[import-target-groups] resolve_group insert failed for ${fbGroupId}: ${jobErr.message}`)
+    }
+
+    // Queue campaign_discover_groups (scout) job for non-members
+    try {
+      const nonMembers = (upsertedGroups || []).filter(g => g.fb_group_id === fbGroupId && !g.is_member)
+      for (const g of nonMembers) {
+        const { count: scoutExists } = await supabase.from('jobs')
+          .select('id', { count: 'exact', head: true })
+          .eq('type', 'campaign_discover_groups')
+          .in('status', ['pending', 'claimed', 'running'])
+          .filter('payload->>campaign_id', 'eq', campaignId)
+          .filter('payload->>account_id', 'eq', g.account_id)
+          .filter('payload->>target_fb_group_id', 'eq', fbGroupId)
+
+        if (!scoutExists) {
+          await supabase.from('jobs').insert({
+            type: 'campaign_discover_groups',
+            priority: 2,
+            payload: {
+              campaign_id: campaignId,
+              account_id: g.account_id,
+              owner_id: userId,
+              topic: topic || '',
+              role_type: 'scout',
+              target_group_url: groupUrl,
+              target_fb_group_id: fbGroupId,
+              reason: 'target_group_auto_join',
+            },
+            status: 'pending',
+            scheduled_at: new Date().toISOString(),
+            created_by: userId,
+          })
+        }
+      }
+    } catch (scoutErr) {
+      console.warn(`[import-target-groups] scout job insert failed for ${fbGroupId}: ${scoutErr.message}`)
+    }
+  }
+
+  return { importedCount }
+}
+
 module.exports = async (fastify) => {
   const { supabase } = fastify
 
@@ -627,6 +778,17 @@ module.exports = async (fastify) => {
 
     if (error) return reply.code(500).send({ error: error.message })
 
+    // Auto-import target groups if provided
+    if (Array.isArray(target_groups) && target_groups.length > 0) {
+      const allNickIds = [...new Set((ai_plan?.roles || []).flatMap(r => r.account_ids || []))]
+      const importNicks = allNickIds.length ? allNickIds : (account_ids || [])
+      if (importNicks.length > 0) {
+        importTargetGroups(supabase, data.id, target_groups, importNicks, topic, req.user.id).catch(err =>
+          console.warn(`[import-target-groups] POST failed: ${err.message}`)
+        )
+      }
+    }
+
     // Auto-create roles from ai_plan if confirmed
     if (ai_plan?.roles && ai_plan_confirmed) {
       const createdRoles = [] // track role IDs for wiring feeds_into
@@ -755,6 +917,17 @@ module.exports = async (fastify) => {
       .single()
 
     if (error) return reply.code(500).send({ error: error.message })
+
+    // Auto-import target_groups if target_groups or account_ids is updated
+    if (req.body.target_groups !== undefined || req.body.account_ids !== undefined) {
+      const targetGroups = req.body.target_groups !== undefined ? req.body.target_groups : (data.target_groups || [])
+      const accountIds = req.body.account_ids !== undefined ? req.body.account_ids : (data.account_ids || [])
+      if (Array.isArray(targetGroups) && targetGroups.length > 0 && accountIds.length > 0) {
+        importTargetGroups(supabase, data.id, targetGroups, accountIds, req.body.topic || data.topic, req.user.id).catch(err =>
+          req.log?.warn?.(`[import-target-groups] PUT failed: ${err.message}`)
+        )
+      }
+    }
 
     // Phase 15: hoisted so the return payload can see it regardless of branch
     let newNickIdsForOnboard = []
