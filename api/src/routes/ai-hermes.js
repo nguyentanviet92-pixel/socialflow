@@ -3,9 +3,14 @@
 module.exports = async (fastify) => {
   const HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8100'
   const AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY
-  console.log('[HERMES] Using URL:', HERMES_URL, 'and SECRET starting with:', AGENT_SECRET ? AGENT_SECRET.substring(0, 5) : 'undefined')
+  const SHORT_TIMEOUT_MS = 5000
+  const NORMAL_TIMEOUT_MS = 15000
+  const COMMENT_TIMEOUT_MS = 30000
+  const EVALUATE_TIMEOUT_MS = 45000
+  const LONG_TIMEOUT_MS = 60000
+  console.log('[HERMES] Using URL:', HERMES_URL, 'secret configured:', !!AGENT_SECRET)
 
-  async function proxyToHermes(path, body, timeout = 30000) {
+  async function proxyToHermes(path, body, timeout = COMMENT_TIMEOUT_MS) {
     try {
       const axios = require('axios')
       const res = await axios.post(`${HERMES_URL}${path}`, body, {
@@ -27,7 +32,7 @@ module.exports = async (fastify) => {
   fastify.get('/health', async (req, reply) => {
     try {
       const axios = require('axios')
-      const res = await axios.get(`${HERMES_URL}/health`, { timeout: 5000, headers: { 'Connection': 'close' } })
+      const res = await axios.get(`${HERMES_URL}/health`, { timeout: SHORT_TIMEOUT_MS, headers: { 'Connection': 'close' } })
       return { ...res.data, proxy: 'ok' }
     } catch (err) {
       return reply.code(503).send({ error: 'Hermes API unreachable', detail: err.message })
@@ -37,25 +42,25 @@ module.exports = async (fastify) => {
   // ─── Comment generation ────────────────────────────────
   // Auth: user must be logged in (JWT)
   fastify.post('/comment', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/comment', req.body, 30000)
+    const { status, json } = await proxyToHermes('/comment', req.body, COMMENT_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   // ─── Post evaluation ───────────────────────────────────
   fastify.post('/evaluate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/evaluate', req.body, 45000)
+    const { status, json } = await proxyToHermes('/evaluate', req.body, EVALUATE_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   // ─── Quality gate ──────────────────────────────────────
   fastify.post('/quality-gate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/quality-gate', req.body, 15000)
+    const { status, json } = await proxyToHermes('/quality-gate', req.body, NORMAL_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   // ─── Generic generate (drop-in for orchestrator) ───────
   fastify.post('/generate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/generate', req.body, 30000)
+    const { status, json } = await proxyToHermes('/generate', req.body, COMMENT_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
@@ -69,28 +74,28 @@ module.exports = async (fastify) => {
   }
 
   fastify.post('/agent/comment', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/comment', req.body, 30000)
+    const { status, json } = await proxyToHermes('/comment', req.body, COMMENT_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   fastify.post('/agent/evaluate', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/evaluate', req.body, 45000)
+    const { status, json } = await proxyToHermes('/evaluate', req.body, EVALUATE_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   fastify.post('/agent/quality-gate', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/quality-gate', req.body, 15000)
+    const { status, json } = await proxyToHermes('/quality-gate', req.body, NORMAL_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   fastify.post('/agent/generate', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/generate', req.body, 30000)
+    const { status, json } = await proxyToHermes('/generate', req.body, COMMENT_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   // ─── Feedback endpoint (agent-auth) ────────────────────
   fastify.post('/agent/feedback', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/feedback', req.body, 5000)
+    const { status, json } = await proxyToHermes('/feedback', req.body, SHORT_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
@@ -100,7 +105,7 @@ module.exports = async (fastify) => {
       const axios = require('axios')
       const res = await axios.get(`${HERMES_URL}/status`, {
         headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
-        timeout: 5000,
+        timeout: SHORT_TIMEOUT_MS,
         validateStatus: () => true // Resolve on any status code
       })
       return { status: res.status, json: res.data }
@@ -217,7 +222,7 @@ module.exports = async (fastify) => {
       const axios = require('axios')
       const res = await axios.get(`${HERMES_URL}/performance`, {
         headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
-        timeout: 10000,
+        timeout: NORMAL_TIMEOUT_MS,
         validateStatus: () => true
       })
       return reply.code(res.status).send(res.data)
@@ -231,7 +236,7 @@ module.exports = async (fastify) => {
       const axios = require('axios')
       const res = await axios.get(`${HERMES_URL}/skills/status`, {
         headers: { 'X-Agent-Key': AGENT_SECRET, 'Connection': 'close' },
-        timeout: 10000,
+        timeout: NORMAL_TIMEOUT_MS,
         validateStatus: () => true
       })
       return reply.code(res.status).send(res.data)
@@ -245,7 +250,7 @@ module.exports = async (fastify) => {
       const limit = req.query.limit || 50
       const res = await fetch(`${HERMES_URL}/feedback/recent?limit=${limit}`, {
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -258,7 +263,7 @@ module.exports = async (fastify) => {
     try {
       const res = await fetch(`${HERMES_URL}/skills`, {
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(SHORT_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -270,7 +275,7 @@ module.exports = async (fastify) => {
     try {
       const res = await fetch(`${HERMES_URL}/skills/${encodeURIComponent(req.params.task_type)}`, {
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(SHORT_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -287,7 +292,7 @@ module.exports = async (fastify) => {
           'X-Agent-Key': AGENT_SECRET,
         },
         body: JSON.stringify(req.body),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -300,7 +305,7 @@ module.exports = async (fastify) => {
       const res = await fetch(`${HERMES_URL}/skills/reload`, {
         method: 'POST',
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(SHORT_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -313,7 +318,7 @@ module.exports = async (fastify) => {
     try {
       const res = await fetch(`${HERMES_URL}/config`, {
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(SHORT_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -327,7 +332,7 @@ module.exports = async (fastify) => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Agent-Key': AGENT_SECRET },
         body: JSON.stringify(req.body || {}),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -336,13 +341,13 @@ module.exports = async (fastify) => {
   })
 
   fastify.post('/config/test', { preHandler: fastify.requireAdmin }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/config/test', req.body, 15000)
+    const { status, json } = await proxyToHermes('/config/test', req.body, NORMAL_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
   // ─── Skill create + delete ───────────────────────────────
   fastify.post('/skills', { preHandler: fastify.requireAdmin }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/skills', req.body, 10000)
+    const { status, json } = await proxyToHermes('/skills', req.body, NORMAL_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
@@ -351,7 +356,7 @@ module.exports = async (fastify) => {
       const res = await fetch(`${HERMES_URL}/skills/${encodeURIComponent(req.params.task_type)}`, {
         method: 'DELETE',
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -381,7 +386,7 @@ module.exports = async (fastify) => {
 
   // ─── Campaign Review ─────────────────────────────────────
   fastify.post('/campaign-review', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/campaign-review', req.body, 60000)
+    const { status, json } = await proxyToHermes('/campaign-review', req.body, LONG_TIMEOUT_MS)
     // If review succeeded AND campaign has auto_apply_enabled → run autoApply
     if (status === 200 && json?.ok && req.body?.campaign_id) {
       try {
@@ -436,7 +441,7 @@ module.exports = async (fastify) => {
         await fetch(`${HERMES_URL}/skills/reload`, {
           method: 'POST',
           headers: { 'X-Agent-Key': AGENT_SECRET },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(SHORT_TIMEOUT_MS),
         })
       } catch {}
       return { ok: true, bytes: content.length }
@@ -505,7 +510,7 @@ module.exports = async (fastify) => {
         max_tokens: 1500,
         temperature: 0.3,
         task_type: 'cookie_death_analyzer',
-      }, 60000)
+      }, LONG_TIMEOUT_MS)
       if (status !== 200) return reply.code(status).send(json)
 
       // Parse JSON from Hermes output
@@ -694,7 +699,7 @@ module.exports = async (fastify) => {
       const res = await fetch(`${HERMES_URL}/memory?${qs}`, {
         method: 'DELETE',
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {
@@ -709,7 +714,7 @@ module.exports = async (fastify) => {
       const res = await fetch(`${HERMES_URL}/feedback?${qs}`, {
         method: 'DELETE',
         headers: { 'X-Agent-Key': AGENT_SECRET },
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
     } catch (err) {

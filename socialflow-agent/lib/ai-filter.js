@@ -13,6 +13,109 @@ const API_URL = process.env.API_URL || 'http://localhost:3000'
 const SERVICE_KEY = process.env.AGENT_SECRET_KEY || process.env.AGENT_USER_TOKEN || ''
 const BATCH_SIZE = 10 // groups per AI call — small batch = more accurate
 
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasTerm(text, term) {
+  const haystack = normalizeText(text)
+  const needle = normalizeText(term)
+  if (!needle) return false
+  if (needle.length <= 2) {
+    return new RegExp(`(^|[^a-z0-9])${escapeRegex(needle)}($|[^a-z0-9])`).test(haystack)
+  }
+  return haystack.includes(needle)
+}
+
+function topicTerms(topic) {
+  const stop = new Set(['cho', 'voi', 'and', 'the', 'nhom', 'cong', 'dong', 'viet', 'nam', 'vn', 'tren', 'facebook'])
+  const raw = normalizeText(topic)
+    .split(/[,;|/]+|\s+-\s+|\s+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(s => s.length >= 2 && !stop.has(s))
+  return [...new Set(raw)]
+}
+
+const STRICT_POSITIVE_TERMS = [
+  'openclaw', 'open claw', 'clawdbot', 'moltbot',
+  'vps', 'hosting', 'server', 'may chu', 'cloud',
+  'ai', 'ai agent', 'agent', 'robot', 'bot', 'automation',
+  'xiaozhi', 'xiao zhi', '3d', 'in 3d',
+  'dev', 'developer', 'lap trinh', 'coding', 'code',
+  'claude', 'chatgpt', 'tool ai', 'saas',
+]
+
+const STRICT_NEGATIVE_TERMS = [
+  'day nau', 'nau an', 'sua hat', 'am thuc', 'mon ngon', 'bep',
+  'mua ban', 'rao vat', 'thanh ly', 'cho do cu', 'do cu',
+  'bat dong san', 'nha dat', 'phong tro',
+  'me va be', 'me bau', 'giam can', 'my pham', 'thoi trang',
+  'crypto', 'trading', 'airdrop', 'binance', 'forex',
+  'ca cuoc', 'ca do', 'game mobile',
+  'cong dong da nang', 'hoi dong huong',
+]
+
+function isStrictTechTopic(topic) {
+  const text = normalizeText(topic)
+  return STRICT_POSITIVE_TERMS.some(term => hasTerm(text, term))
+}
+
+function hasStrongTopicSignal(group, topic) {
+  // Only trust organic group content here. DB topic/tags can be campaign-assigned
+  // metadata, so using them as evidence can keep wrongly tagged groups alive.
+  const text = normalizeText(`${group?.name || ''} ${group?.description || ''}`)
+  const terms = [...topicTerms(topic), ...STRICT_POSITIVE_TERMS]
+  return terms.some(term => hasTerm(text, term))
+}
+
+function hasHardNegativeSignal(group) {
+  const text = normalizeText(`${group?.name || ''} ${group?.description || ''}`)
+  return STRICT_NEGATIVE_TERMS.some(term => hasTerm(text, term))
+}
+
+function strictGroupPrecheck(group, topic) {
+  const strictTech = isStrictTechTopic(topic)
+  const strongSignal = hasStrongTopicSignal(group, topic)
+  const hardNegative = hasHardNegativeSignal(group)
+
+  if (hardNegative && !strongSignal) {
+    return { pass: false, reason: 'hard_negative_category', strictTech, strongSignal, hardNegative }
+  }
+  if (strictTech && !strongSignal) {
+    return { pass: false, reason: 'no_strong_campaign_signal', strictTech, strongSignal, hardNegative }
+  }
+  return { pass: true, reason: 'strict_precheck_pass', strictTech, strongSignal, hardNegative }
+}
+
+function sanitizeSearchKeywords(keywords, topic) {
+  const list = [...new Set((keywords || []).map(k => String(k || '').trim()).filter(k => k.length > 1))]
+  if (!isStrictTechTopic(topic)) return list.slice(0, 8)
+
+  const topicList = topicTerms(topic)
+  const kept = list.filter(keyword => {
+    const fakeGroup = { name: keyword, description: '' }
+    if (hasHardNegativeSignal(fakeGroup)) return false
+    return hasStrongTopicSignal(fakeGroup, topic) || topicList.some(term => hasTerm(keyword, term))
+  })
+
+  const fallback = topicList
+    .filter(term => term.length >= 2)
+    .slice(0, 6)
+  return [...new Set([...kept, ...fallback])].slice(0, 8)
+}
+
 const headers = () => ({
   'Content-Type': 'application/json',
   ...(SERVICE_KEY && { Authorization: `Bearer ${SERVICE_KEY}` }),
@@ -42,6 +145,12 @@ ${campaignContext ? `Mục tiêu: ${campaignContext}` : ''}
 ${list}
 
 Chọn nhóm có KHÁCH TIỀM NĂNG cho "${topicExplain}".
+
+LUẬT AN TOÀN BẮT BUỘC:
+- Nếu campaign là tech/OpenClaw/VPS/AI/robot/automation thì CHỈ chọn nhóm có tín hiệu rõ trong tên/mô tả: OpenClaw, VPS, hosting, server, cloud, AI agent, bot, automation, robot, XiaoZhi, 3D, dev, coding, Claude, ChatGPT.
+- KHÔNG chọn nhóm chỉ vì có chữ "kinh doanh", "mua bán", "Facebook", hoặc cộng đồng địa phương.
+- Loại thẳng nhóm nấu ăn/sữa hạt/ẩm thực, mua bán/rao vặt, crypto/trading/airdrop/binance, bất động sản, thời trang, game/cá cược.
+- Nếu phân vân, trả [] cho nhóm đó. Sai một nhóm có thể làm nick bị checkpoint.
 
 ĐỐI TƯỢNG cần tìm: Người có thể CẦN MUA hoặc SỬ DỤNG ${topicExplain}
 Ví dụ: Người làm MMO cần VPS, dev cần hosting, startup cần cloud server, người dùng tool cần VPS chạy bot...
@@ -93,10 +202,16 @@ async function filterRelevantGroups(groups, topic, ownerId, accountId, supabase,
   // Split: cached vs uncached groups
   const cached = []
   const uncached = []
+  const preRejected = []
   for (const g of groups) {
+    const precheck = strictGroupPrecheck(g, safeTopic)
+    if (!precheck.pass) {
+      preRejected.push({ group: g, reason: precheck.reason })
+      continue
+    }
     const eval_ = g.ai_relevance?.[topicKey]
     if (eval_ && eval_.evaluated_at && (Date.now() - new Date(eval_.evaluated_at).getTime()) < CACHE_TTL) {
-      if (eval_.relevant) cached.push(g)
+      if (eval_.relevant && (eval_.score || 0) >= 7) cached.push(g)
       // else: cached as irrelevant → skip
     } else {
       uncached.push(g)
@@ -105,6 +220,17 @@ async function filterRelevantGroups(groups, topic, ownerId, accountId, supabase,
 
   if (cached.length > 0 || uncached.length < groups.length) {
     console.log(`[AI-FILTER] Cache: ${cached.length} relevant, ${groups.length - cached.length - uncached.length} irrelevant, ${uncached.length} new (nick: ${scope})`)
+  }
+  if (preRejected.length > 0) {
+    console.log(`[AI-FILTER] Strict precheck rejected ${preRejected.length}/${groups.length}: ${preRejected.slice(0, 8).map(x => `${x.group.name}(${x.reason})`).join(', ')}`)
+    if (supabase) {
+      for (const { group: g, reason } of preRejected) {
+        if (!g.id) continue
+        const prev = g.ai_relevance || {}
+        prev[topicKey] = { relevant: false, score: 1, reason, evaluated_at: new Date().toISOString() }
+        supabase.from('fb_groups').update({ ai_relevance: prev, score_tier: 'D', ai_note: reason }).eq('id', g.id).then(() => {}).catch(() => {})
+      }
+    }
   }
 
   if (uncached.length === 0) return cached
@@ -123,7 +249,10 @@ async function filterRelevantGroups(groups, topic, ownerId, accountId, supabase,
 
       try {
         const indices = await filterBatch(batch, topic, ownerId, campaignContext)
-        const accepted = indices.map(idx => batch[idx - 1]).filter(Boolean)
+        const accepted = indices
+          .map(idx => batch[idx - 1])
+          .filter(Boolean)
+          .filter(g => strictGroupPrecheck(g, safeTopic).pass)
         const denied = batch.filter(g => !accepted.includes(g))
 
         relevant.push(...accepted)
@@ -208,6 +337,7 @@ function keywordFilter(groups, topic) {
   const BLACKLIST = ['cho thuê nhà', 'phòng trọ', 'bất động sản', 'nhà đất', 'rao vặt', 'mua bán đồ cũ', 've chai', 'thời trang', 'mỹ phẩm', 'giảm cân', 'mẹ bầu', 'nội thất', 'cá cược', 'cá độ']
 
   return groups.filter(g => {
+    if (!strictGroupPrecheck(g, safeTopic).pass) return false
     const text = `${g.name} ${g.description || ''}`.toLowerCase()
     // Reject if name contains blacklisted terms
     if (BLACKLIST.some(bl => text.includes(bl))) return false
@@ -245,7 +375,7 @@ Trả về CHỈ JSON array. VD: ["vps hosting", "thuê server", "cộng đồng
     if (match) {
       const aiKw = JSON.parse(match[0]).filter(k => typeof k === 'string' && k.length > 1)
       if (aiKw.length > 0) {
-        const merged = [...new Set([...baseKeywords, ...aiKw])].slice(0, 6)
+        const merged = sanitizeSearchKeywords([...baseKeywords, ...aiKw], topic).slice(0, 6)
         console.log(`[AI-FILTER] Keyword expansion: "${topic}" → [${merged.join(', ')}]`)
         return merged
       }
@@ -254,7 +384,7 @@ Trả về CHỈ JSON array. VD: ["vps hosting", "thuê server", "cộng đồng
     console.warn(`[AI-FILTER] Keyword expansion failed: ${err.message}`)
   }
 
-  return baseKeywords
+  return sanitizeSearchKeywords(baseKeywords, topic)
 }
 
 /**
@@ -268,6 +398,21 @@ Trả về CHỈ JSON array. VD: ["vps hosting", "thuê server", "cộng đồng
  */
 async function evaluateGroup(groupInfo, topic, ownerId) {
   const { name, description, posts = [], member_count, language } = groupInfo
+  const precheck = strictGroupPrecheck({ name, description, tags: groupInfo.tags, topic: groupInfo.topic }, topic)
+  if (!precheck.pass) {
+    console.log(`[AI-EVAL] "${name}" → ❌ STRICT (${precheck.reason})`)
+    return {
+      relevant: false,
+      reason: precheck.reason,
+      note: 'Nhóm không có tín hiệu đủ sát campaign, bỏ qua để giảm rủi ro checkpoint.',
+      sample_topics: [],
+      score: 1,
+      tier: 'tier3_irrelevant',
+      risk_level: 'high',
+      estimated_value: 'low',
+      language: language || '?',
+    }
+  }
 
   // Format posts for AI — 8 bài cho đủ context đánh giá NỘI DUNG
   const postSamples = posts.slice(0, 8).map((p, i) =>
@@ -333,6 +478,7 @@ TIER 3 — "Không phù hợp" (score 0-4):
 - risk_level "high": nhóm spam nhiều (>80% link), admin reject nhiều, hoặc nhóm chết
 
 QUAN TRỌNG:
+- Với campaign tech/OpenClaw/VPS/AI/robot/automation: chỉ chấm relevant nếu nhóm có tín hiệu rất rõ về tech/sản phẩm/khách hàng kỹ thuật. Nhóm nấu ăn, mua bán, cộng đồng địa phương, crypto/trading/airdrop phải score 0-2 và relevant=false.
 - Đọc TÊN + MÔ TẢ + NỘI DUNG BÀI → kết luận nhóm nói về gì
 - Nhóm tech/dev/AI/automation/MMO/coding/freelancer = ít nhất TIER 2
 - CHỈ TIER 3 nếu CHẮC CHẮN 0% liên quan
@@ -478,4 +624,12 @@ async function extractGroupInfo(page) {
   })
 }
 
-module.exports = { filterRelevantGroups, expandSearchKeywords, evaluateGroup, extractGroupInfo }
+module.exports = {
+  filterRelevantGroups,
+  expandSearchKeywords,
+  evaluateGroup,
+  extractGroupInfo,
+  strictGroupPrecheck,
+  sanitizeSearchKeywords,
+  normalizeText,
+}

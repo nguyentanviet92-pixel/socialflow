@@ -8,9 +8,12 @@
 
 const axios = require('axios')
 
-const API_URL = process.env.API_URL || 'http://localhost:3000'
+let _cfg = {}
+try { _cfg = require('./config') } catch {}
+
+const API_URL = process.env.API_URL || _cfg.API_URL || 'http://localhost:3005'
 const AGENT_SECRET = process.env.AGENT_SECRET || ''
-const AGENT_SECRET_KEY = process.env.AGENT_SECRET_KEY || ((() => { try { return require("./config").AGENT_SECRET_KEY } catch{} })()) || ""
+const AGENT_SECRET_KEY = process.env.AGENT_SECRET_KEY || _cfg.AGENT_SECRET_KEY || ''
 
 const HERMES_ENABLED = !!(AGENT_SECRET || AGENT_SECRET_KEY)
 const CALL_TIMEOUT_MS = 45000

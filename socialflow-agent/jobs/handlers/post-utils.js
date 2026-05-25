@@ -83,9 +83,18 @@ async function checkAccountStatus(page, supabase, account_id) {
   if (status.blocked) {
     console.log(`[POST] Account ${account_id} BLOCKED: ${status.reason} - ${status.detail}`)
 
-    const dbStatus = status.reason === 'session_expired' ? 'dead' : 'checkpoint'
+    const STATUS_MAP = {
+      session_expired: 'expired',
+      checkpoint: 'checkpoint',
+      disabled: 'disabled',
+      locked: 'checkpoint',
+      identity_check: 'checkpoint',
+      restricted: 'at_risk',
+    }
+    const dbStatus = STATUS_MAP[status.reason] || 'checkpoint'
     await supabase.from('accounts').update({
       status: dbStatus,
+      is_active: false,
       last_error: status.detail,
     }).eq('id', account_id)
 

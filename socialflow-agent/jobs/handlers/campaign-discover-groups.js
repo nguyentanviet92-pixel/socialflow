@@ -10,7 +10,7 @@ const { saveDebugScreenshot, friendlyError } = require('./post-utils')
 const { checkHardLimit, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
 const R = require('../../lib/randomizer')
 const { getActionParams } = require('../../lib/plan-executor')
-const { filterRelevantGroups, evaluateGroup, extractGroupInfo } = require('../../lib/ai-filter')
+const { filterRelevantGroups, evaluateGroup, extractGroupInfo, strictGroupPrecheck, sanitizeSearchKeywords } = require('../../lib/ai-filter')
 const { generateMembershipAnswer } = require('../../lib/ai-brain')
 const { ActivityLogger } = require('../../lib/activity-logger')
 
@@ -205,6 +205,18 @@ async function campaignDiscoverGroups(payload, supabase) {
   const maxJoin = Math.min(applyAgeFactor(remaining, nickAge), planJoin)
 
   let page
+  const isTargetClosed = (err) => /Target (page, context or browser|page|context|browser).*closed|browser has been closed/i.test(err?.message || '')
+  const ensureLivePage = async (reason) => {
+    if (page && !page.isClosed()) return page
+    if (page?.isClosed()) {
+      console.warn(`[CAMPAIGN-SCOUT] Page closed before ${reason} — reopening session`)
+      await closeSession(account_id).catch(() => {})
+    }
+    const session = await getPage(account)
+    page = session.page
+    return page
+  }
+
   try {
     const session = await getPage(account)
     page = session.page
@@ -246,6 +258,12 @@ async function campaignDiscoverGroups(payload, supabase) {
       console.log(`[CAMPAIGN-SCOUT] Merged brand keywords → [${keywords.join(', ')}]`)
     }
 
+    const beforeKeywordSanitize = keywords || []
+    keywords = sanitizeSearchKeywords(beforeKeywordSanitize, topic)
+    if (keywords.length !== beforeKeywordSanitize.length) {
+      console.log(`[CAMPAIGN-SCOUT] Strict keyword sanitize: [${beforeKeywordSanitize.join(', ')}] → [${keywords.join(', ')}]`)
+    }
+
     let allGroups = []
     const seenIds = new Set()
 
@@ -261,63 +279,78 @@ async function campaignDiscoverGroups(payload, supabase) {
           } catch {}
         }
       }
-      page.on('response', responseHandler)
+      try {
+        page = await ensureLivePage(`keyword "${keyword}"`)
+        page.on('response', responseHandler)
 
-      const searchUrl = `https://www.facebook.com/search/groups/?q=${encodeURIComponent(keyword)}`
-      console.log(`[CAMPAIGN-SCOUT] Searching groups: "${keyword}"`)
-      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
-      await R.sleepRange(3000, 5000)
+        const searchUrl = `https://www.facebook.com/search/groups/?q=${encodeURIComponent(keyword)}`
+        console.log(`[CAMPAIGN-SCOUT] Searching groups: "${keyword}"`)
+        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await R.sleepRange(3000, 5000)
 
-      // Detect login page / Not Found after navigate — session died
-      const pageStatus = await page.evaluate(() => {
-        const url = window.location.href
-        const text = (document.body?.innerText || '').trim()
-        const isLogin = url.includes('/login') || url.includes('/checkpoint') ||
-          !!document.querySelector('form#login_form, input[name="email"][type="email"]')
-        const isNotFound = text.length < 300 && /not found/i.test(text)
-        return { isLogin, isNotFound, url }
-      }).catch(() => ({ isLogin: false, isNotFound: false }))
+        // Detect login page / Not Found after navigate — session died
+        const pageStatus = await page.evaluate(() => {
+          const url = window.location.href
+          const text = (document.body?.innerText || '').trim()
+          const isLogin = url.includes('/login') || url.includes('/checkpoint') ||
+            !!document.querySelector('form#login_form, input[name="email"][type="email"]')
+          const isNotFound = text.length < 300 && /not found/i.test(text)
+          return { isLogin, isNotFound, url }
+        }).catch(() => ({ isLogin: false, isNotFound: false }))
 
-      if (pageStatus.isLogin || pageStatus.isNotFound) {
-        console.log(`[CAMPAIGN-SCOUT] 🔴 Session expired for ${account_id.slice(0, 8)} — login/NotFound at ${pageStatus.url}`)
-        await supabase.from('accounts').update({ status: 'dead', last_error: 'Session expired detected during group search' }).eq('id', account_id)
-        await closeSession(account_id).catch(() => {})
-        throw new Error('SKIP_session_not_logged_in')
-      }
-
-      // Scroll to load more results + trigger more GraphQL responses
-      const scrollCount = R.randInt(3, 6)
-      for (let i = 0; i < scrollCount; i++) {
-        await humanScroll(page)
-        await R.sleepRange(1500, 2500)
-      }
-
-      // Stop intercepting
-      page.removeListener('response', responseHandler)
-
-      // Layer 1+2: Extract from GraphQL responses
-      let foundGroups = extractGroupsFromResponses(graphqlResponses)
-      console.log(`[CAMPAIGN-SCOUT] GraphQL: ${foundGroups.length} groups, ${graphqlResponses.length} responses intercepted`)
-
-      // Layer 3: DOM fallback if GraphQL got nothing
-      if (foundGroups.length === 0) {
-        foundGroups = await extractGroupsFromDOM(page)
-        console.log(`[CAMPAIGN-SCOUT] DOM fallback: ${foundGroups.length} groups`)
-      }
-
-      console.log(`[CAMPAIGN-SCOUT] Found ${foundGroups.length} groups for "${keyword}"`)
-
-      // Dedup across keywords
-      for (const g of foundGroups) {
-        if (!seenIds.has(g.fb_group_id)) {
-          seenIds.add(g.fb_group_id)
-          allGroups.push(g)
+        if (pageStatus.isLogin || pageStatus.isNotFound) {
+          console.log(`[CAMPAIGN-SCOUT] 🔴 Session expired for ${account_id.slice(0, 8)} — login/NotFound at ${pageStatus.url}`)
+          await supabase.from('accounts').update({
+            status: 'expired',
+            is_active: false,
+            last_error: 'Session expired detected during group search',
+          }).eq('id', account_id)
+          await closeSession(account_id).catch(() => {})
+          throw new Error('SKIP_session_not_logged_in')
         }
-      }
 
-      // Human delay between keyword searches
-      if (keywords.indexOf(keyword) < keywords.length - 1) {
-        await R.sleepRange(3000, 6000)
+        // Scroll to load more results + trigger more GraphQL responses
+        const scrollCount = R.randInt(3, 6)
+        for (let i = 0; i < scrollCount; i++) {
+          await humanScroll(page)
+          await R.sleepRange(1500, 2500)
+        }
+
+        // Layer 1+2: Extract from GraphQL responses
+        let foundGroups = extractGroupsFromResponses(graphqlResponses)
+        console.log(`[CAMPAIGN-SCOUT] GraphQL: ${foundGroups.length} groups, ${graphqlResponses.length} responses intercepted`)
+
+        // Layer 3: DOM fallback if GraphQL got nothing
+        if (foundGroups.length === 0) {
+          foundGroups = await extractGroupsFromDOM(page)
+          console.log(`[CAMPAIGN-SCOUT] DOM fallback: ${foundGroups.length} groups`)
+        }
+
+        console.log(`[CAMPAIGN-SCOUT] Found ${foundGroups.length} groups for "${keyword}"`)
+
+        // Dedup across keywords
+        for (const g of foundGroups) {
+          if (!seenIds.has(g.fb_group_id)) {
+            seenIds.add(g.fb_group_id)
+            allGroups.push(g)
+          }
+        }
+
+        // Human delay between keyword searches
+        if (keywords.indexOf(keyword) < keywords.length - 1) {
+          await R.sleepRange(3000, 6000)
+        }
+      } catch (keywordErr) {
+        if (keywordErr.message === 'SKIP_session_not_logged_in') throw keywordErr
+        if (isTargetClosed(keywordErr) && allGroups.length > 0) {
+          console.warn(`[CAMPAIGN-SCOUT] Page closed during keyword "${keyword}" after ${allGroups.length} groups collected — continuing with collected groups`)
+          await closeSession(account_id).catch(() => {})
+          page = null
+          break
+        }
+        throw keywordErr
+      } finally {
+        try { if (page && !page.isClosed()) page.removeListener('response', responseHandler) } catch {}
       }
     }
 
@@ -404,14 +437,16 @@ async function campaignDiscoverGroups(payload, supabase) {
     // ── Step 0: SCAN UNTAGGED EXISTING GROUPS (518 groups user already joined) ──
     // Mỗi lần scout, AI đánh giá batch group chưa gán nhãn → gán nhãn nếu liên quan
     // Giới hạn 20 group/lần để không tốn quá nhiều API calls
-    const { data: untaggedGroups } = await supabase.from('fb_groups')
-      .select('id, fb_group_id, name, url, member_count, ai_relevance')
-      .eq('account_id', account_id)
-      .is('joined_via_campaign_id', null)
-      .or('tags.is.null,tags.eq.{}')
-      .limit(20)
+    const { data: untaggedGroups } = config?.auto_tag_existing === true
+      ? await supabase.from('fb_groups')
+        .select('id, fb_group_id, name, url, member_count, ai_relevance')
+        .eq('account_id', account_id)
+        .is('joined_via_campaign_id', null)
+        .or('tags.is.null,tags.eq.{}')
+        .limit(20)
+      : { data: [] }
 
-    if (untaggedGroups?.length > 0) {
+    if (config?.auto_tag_existing === true && untaggedGroups?.length > 0) {
       // Filter: chỉ đánh giá group chưa có AI cache cho topic này
       const topicKey = (topic || '').toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
       const needsEval = untaggedGroups.filter(g => {
@@ -537,6 +572,7 @@ async function campaignDiscoverGroups(payload, supabase) {
       visited++
 
       try {
+        page = await ensureLivePage(`visit "${group.name}"`)
         logger.log('visit_group', { target_type: 'group', target_id: group.fb_group_id, target_name: group.name, target_url: group.url })
         await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await R.sleepRange(2000, 4000)
@@ -640,6 +676,28 @@ async function campaignDiscoverGroups(payload, supabase) {
           logger.log('visit_group', {
             target_type: 'group', target_name: group.name, result_status: 'skipped',
             details: { reason: 'high_risk', risk_level: 'high', score: evaluation.score },
+          })
+          continue
+        }
+
+        const strictPrecheck = strictGroupPrecheck(groupInfo, topic)
+        if (!strictPrecheck.pass || !evaluation.relevant || evaluation.score < 8) {
+          console.log(`[CAMPAIGN-SCOUT] ❌ Strict skip "${group.name}" — ${evaluation.reason || strictPrecheck.reason} (score: ${evaluation.score}, precheck:${strictPrecheck.reason})`)
+          try {
+            await supabase.from('fb_groups').update({
+              skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
+              score_tier: 'D',
+            }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
+          } catch {}
+          logger.log('visit_group', {
+            target_type: 'group', target_name: group.name, result_status: 'skipped',
+            details: {
+              reason: evaluation.reason || strictPrecheck.reason,
+              score: evaluation.score,
+              ai_decision: 'strict_reject',
+              risk_level: evaluation.risk_level,
+              precheck: strictPrecheck.reason,
+            },
           })
           continue
         }
@@ -951,7 +1009,80 @@ async function campaignDiscoverGroups(payload, supabase) {
             await R.sleep(gap)
           }
         } else {
-          console.log(`[CAMPAIGN-SCOUT] No join button for ${group.name} (already joined or private)`)
+          const alreadyMember = await page.evaluate(() => {
+            const text = document.body?.innerText || ''
+            const hasComposer = [
+              '[aria-label*="Write something" i]',
+              '[aria-label*="Viết bài" i]',
+              '[aria-label*="Bạn viết gì" i]',
+              '[aria-label*="Create a post" i]',
+              '[aria-label*="Tạo bài viết" i]',
+              '[role="textbox"][contenteditable="true"]',
+            ].some(sel => {
+              try { return !!document.querySelector(sel) } catch { return false }
+            })
+            const joinedText = /\b(Joined|Member|Đã tham gia|Bạn đã tham gia)\b/i.test(text)
+            const pendingText = /pending\s+review|chờ\s+(duyệt|phê\s+duyệt)|request\s+sent|đã\s+gửi\s+yêu\s+cầu/i.test(text)
+            return (hasComposer || joinedText) && !pendingText
+          }).catch(() => false)
+
+          if (alreadyMember) {
+            const groupTags = (topic || '').split(/[,;]+/).map(t => t.trim().toLowerCase()).filter(t => t.length > 1)
+            const globalScore = evaluation?.score || group.ai_join_score || 0
+            const confirmedTier = globalScore >= 8 ? 'A' : globalScore >= 6 ? 'B' : globalScore >= 4 ? 'C' : 'D'
+            const upsertPayload = {
+              account_id,
+              fb_group_id: group.fb_group_id,
+              name: group.name,
+              url: group.url,
+              member_count: group.member_count || 0,
+              member_count_actual: groupInfo?.member_count || group.member_count || 0,
+              joined_via_campaign_id: campaign_id || null,
+              topic: topic || null,
+              tags: groupTags,
+              is_member: true,
+              pending_approval: false,
+              joined_at: new Date().toISOString(),
+              pending_since: null,
+              global_score: globalScore,
+              score_tier: confirmedTier,
+              evaluation_posts: Array.isArray(groupInfo?.posts) ? groupInfo.posts.slice(0, 10) : [],
+              evaluated_at: new Date().toISOString(),
+              language: evaluation?.language || group.language || null,
+              ai_join_score: globalScore,
+              ai_risk_level: evaluation?.risk_level || null,
+            }
+            const { data: upserted } = await supabase.from('fb_groups')
+              .upsert(upsertPayload, { onConflict: 'account_id,fb_group_id' })
+              .select('id').single()
+            if (upserted?.id && campaign_id) {
+              await supabase.from('campaign_groups').upsert({
+                campaign_id,
+                group_id: upserted.id,
+                assigned_nick_id: account_id,
+                score: globalScore,
+                tier: confirmedTier,
+                status: 'active',
+              }, { onConflict: 'campaign_id,group_id' })
+            }
+            if (campaign_id) {
+              try { await supabase.rpc('append_campaign_to_group', {
+                p_account_id: account_id, p_fb_group_id: group.fb_group_id, p_campaign_id: campaign_id,
+              }) } catch {}
+            }
+            tagged++
+            joinedGroups.push(group)
+            console.log(`[CAMPAIGN-SCOUT] ✓ Already member: tagged ${group.name} for campaign`)
+            logger.log('visit_group', {
+              target_type: 'group',
+              target_id: group.fb_group_id,
+              target_name: group.name,
+              target_url: group.url,
+              details: { action: 'tagged_existing_member_from_live_page', campaign_id },
+            })
+          } else {
+            console.log(`[CAMPAIGN-SCOUT] No join button for ${group.name} (not joined, private, or UI changed)`)
+          }
         }
       } catch (err) {
         console.warn(`[CAMPAIGN-SCOUT] Failed to join ${group.name}: ${err.message}`)
@@ -976,7 +1107,9 @@ async function campaignDiscoverGroups(payload, supabase) {
       // Browser already closed inside loop — just rethrow for job runner to mark failed
       throw err
     }
-    if (page) await saveDebugScreenshot(page, `campaign-scout-${account_id}`)
+    if (page && !page.isClosed()) {
+      await saveDebugScreenshot(page, `campaign-scout-${account_id}`).catch(() => {})
+    }
     throw err
   } finally {
     await logger.flush().catch(() => {})

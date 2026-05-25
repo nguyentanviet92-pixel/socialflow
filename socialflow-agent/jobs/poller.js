@@ -29,11 +29,11 @@ const POLL_MAX_MS = parseInt(process.env.POLL_MAX_MS) || 5 * 60 * 1000    // 5 m
 const POLL_MS = Math.round((POLL_MIN_MS + POLL_MAX_MS) / 2) // avg, used in error logs only
 const MEM_PER_NICK_MB = 350 // ~350MB per Chromium instance
 const MIN_CONCURRENT = 1
-const MAX_CONCURRENT_CAP = 2 // Max 2 browser cùng lúc — match MAX_SESSIONS in session-pool
+const MAX_CONCURRENT_CAP = 1 // session-pool enforces one live browser to reduce checkpoint risk
 
 function calcMaxConcurrent() {
   const override = parseInt(process.env.MAX_CONCURRENT)
-  if (override > 0) return override // manual override via env
+  if (override > 0) return Math.min(override, MAX_CONCURRENT_CAP) // never exceed session-pool safety cap
 
   const totalMB = os.totalmem() / (1024 * 1024)
   const freeMB = os.freemem() / (1024 * 1024)
@@ -60,6 +60,18 @@ const POST_TYPES = ['post_page', 'post_page_graph', 'post_group', 'post_profile'
 // All other "utility" jobs (fetch_*, check_*, scan_*) actually use browser, so they
 // compete for the single browser slot like interaction jobs.
 const BROWSER_FREE_TYPES = ['post_page_graph']
+const LOCAL_JOB_PRIORITY = {
+  campaign_nurture: 0,
+  campaign_opportunity_react: 1,
+  comment_post: 2,
+  campaign_send_friend_request: 3,
+  campaign_interact_profile: 4,
+  campaign_post: 5,
+  campaign_discover_groups: 6,
+  nurture_feed: 20,
+  fetch_source_cookie: 30,
+  check_group_membership: 40,
+}
 // Phase 11 fix: utility/system jobs bypass active_hours + warmup + KPI gates.
 // These are background tasks that must run 24/7 regardless of nick "work hours".
 // User-facing actions (campaign_nurture, friend_request, post, interact_profile,
@@ -161,6 +173,30 @@ const randBetween = (min, max) => Math.floor(min + Math.random() * (max - min))
 const randSessionMax = () => randBetween(25, 45) * 60 * 1000   // 25-45 min
 const randRestMs = () => randBetween(45, 120) * 60 * 1000      // 45-120 min
 
+function localJobPriority(job) {
+  return LOCAL_JOB_PRIORITY[job?.type] ?? (UTILITY_TYPES.includes(job?.type) ? 50 : 10)
+}
+
+function sortPendingJobs(jobs = []) {
+  return [...jobs].sort((a, b) => {
+    const pa = localJobPriority(a)
+    const pb = localJobPriority(b)
+    if (pa !== pb) return pa - pb
+    const ja = Number.isFinite(a?.priority) ? a.priority : 99
+    const jb = Number.isFinite(b?.priority) ? b.priority : 99
+    if (ja !== jb) return ja - jb
+    return new Date(a?.scheduled_at || 0).getTime() - new Date(b?.scheduled_at || 0).getTime()
+  })
+}
+
+function nextVnHourIso(hour, minuteJitterMax = 14) {
+  const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
+  const target = new Date(vnNow)
+  target.setUTCHours(hour, randBetween(0, minuteJitterMax + 1), randBetween(0, 60), 0)
+  if (target <= vnNow) target.setUTCDate(target.getUTCDate() + 1)
+  return new Date(target.getTime() - 7 * 3600 * 1000).toISOString()
+}
+
 // 2026-05-04: campaign_nurture maps to 'comment', not 'like'.
 //   Reason: nurture session does likes + comments + browse together; comment
 //   is the KPI driver (we want substantive comments). Mapping to 'like' meant
@@ -221,12 +257,13 @@ async function poll() {
   }
   try {
     const slots = MAX_CONCURRENT - pool.interactionNicks.size
+    const fetchSlots = Math.max(slots, 8)
     let jobs, pollError
 
     if (useApi()) {
       // ── REST API mode: job polling via HTTP ──
       try {
-        jobs = await api.getPendingJobs(slots)
+        jobs = await api.getPendingJobs(fetchSlots)
       } catch (err) {
         pollError = err
         console.error(`[POLL] API error: ${err.message}`)
@@ -240,7 +277,7 @@ async function poll() {
         .lte('scheduled_at', new Date().toISOString())
         .order('priority', { ascending: true })
         .order('scheduled_at', { ascending: true })
-        .limit(slots)
+        .limit(fetchSlots)
 
       if (AGENT_USER_ID) {
         query = query.eq('created_by', AGENT_USER_ID)
@@ -277,6 +314,7 @@ async function poll() {
     // 2026-05-04 DEBUG: agent has been polling /pending every 30s for 15+ min
     // and rejecting all returned jobs locally — log which gate kills each one.
     const _dbgSkip = (job, reason) => console.log(`[POLLER-DBG] skip ${job.type} ${(job.payload?.account_id || '?').slice(0,8)} — ${reason}`)
+    jobs = sortPendingJobs(jobs)
     for (const job of jobs) {
       const accId = job.payload?.account_id
       const isPostJob = POST_TYPES.includes(job.type)
@@ -284,6 +322,11 @@ async function poll() {
       // 1 nick = 1 browser = 1 job tại 1 thời điểm
       // Job sau ĐỢI job trước xong — không skip, không cancel, chỉ defer
       const isUtility = UTILITY_TYPES.includes(job.type)
+      const isBrowserJob = !BROWSER_FREE_TYPES.includes(job.type)
+      if (isBrowserJob && pool.isBusy()) {
+        _dbgSkip(job, `browser slots full ${pool.interactionNicks.size}/${MAX_CONCURRENT}`)
+        continue
+      }
       if (accId && pool.isRunning(accId)) { _dbgSkip(job, 'pool.isRunning'); continue }
 
       // Per-nick post cooldown (not global — each nick tracks independently)
@@ -384,16 +427,24 @@ async function poll() {
           // Giảm tương tác 0h - 5h sáng (skip 85% công việc)
           if (vnHour >= 0 && vnHour < 5) {
             if (Math.random() < 0.85) {
-              _dbgSkip(job, `sleep hour 0-5h (reduced interaction)`)
-              updateJobStatus(job.id, 'done', { skipped: true, reason: 'sleep_hour_0_5h' }).catch(() => {})
+              const scheduledAt = nextVnHourIso(Math.max(5, startH || 5), 20)
+              _dbgSkip(job, `sleep hour 0-5h → reschedule ${scheduledAt}`)
+              updateJobStatus(job.id, 'pending', {
+                scheduled_at: scheduledAt,
+                error_message: 'sleep_hour_0_5h_rescheduled',
+              }).catch(() => {})
               continue
             }
           }
 
           if (!is247) {
             if (vnHour < startH || vnHour >= endH) {
-              _dbgSkip(job, `active_hours ${startH}-${endH}h, now ${vnHour}h`)
-              updateJobStatus(job.id, 'done', { skipped: true, reason: `active_hours_${vnHour}h` }).catch(() => {})
+              const scheduledAt = nextVnHourIso(startH, 20)
+              _dbgSkip(job, `active_hours ${startH}-${endH}h, now ${vnHour}h → reschedule ${scheduledAt}`)
+              updateJobStatus(job.id, 'pending', {
+                scheduled_at: scheduledAt,
+                error_message: `active_hours_${vnHour}h_rescheduled`,
+              }).catch(() => {})
               continue
             }
           }
@@ -763,7 +814,10 @@ async function executeJob(job) {
       job_id: job.id,
       account_id: job.payload?.account_id || null,
       campaign_id: job.payload?.campaign_id || null,
-      error_type: classified.type,
+      // VPS schema currently does not accept SKIP as a job_failures.error_type.
+      // Keep the skip reason in error_message/result, but avoid masking the
+      // real handler outcome with a failed diagnostics insert.
+      error_type: classified.type === 'SKIP' ? 'UNKNOWN' : classified.type,
       error_message: err.message,
       error_stack: err.stack?.substring(0, 2000),
       handler_name: handlerKey,
@@ -823,15 +877,15 @@ async function executeJob(job) {
         try {
           const { data: existing } = await supabase.from('jobs')
             .select('id')
-            .eq('type', 'check-health')
+            .eq('type', 'check_health')
             .eq('payload->>account_id', job.payload.account_id)
             .in('status', ['pending', 'claimed', 'running'])
             .limit(1)
           if (!existing?.length) {
             await supabase.from('jobs').insert({
-              type: 'check-health',
+              type: 'check_health',
               priority: 1, // CRITICAL
-              payload: { account_id: job.payload.account_id, action: 'check-health', auto_refresh: true },
+              payload: { account_id: job.payload.account_id, action: 'check_health', auto_refresh: true },
               status: 'pending',
               scheduled_at: new Date(Date.now() + 60000).toISOString(), // 1 phut sau
               created_by: job.created_by,

@@ -64,6 +64,16 @@ const PATTERNS = [
 
 function classifyError(message, stack) {
   const text = (message || '') + (stack ? ' ' + stack : '')
+  // Auth loss often arrives as "Account blocked: Session expired/Login form".
+  // Catch it before the broad CHECKPOINT pattern sees the word "blocked".
+  if (/session\s+expired|please\s+log\s+in|cookie\s+expired|login\s+(popup|form\s+detected)|saved-login\s+chooser|page\s+shows\s+not\s+found|need\s+re-login|hết\s+phiên|đăng\s+nhập\s+lại|Account\s+blocked:\s*(Session expired|Login form|Saved-login|Page shows Not Found)/i.test(text)) {
+    return {
+      type: 'SESSION_EXPIRED',
+      newStatus: 'expired',
+      alertLevel: 'urgent',
+      isBrowserCrash: false,
+    }
+  }
   for (const p of PATTERNS) {
     if (p.re.test(text)) {
       return {

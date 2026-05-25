@@ -6,14 +6,17 @@
 const axios = require('axios')
 const hermes = require('./hermes-client')
 
-const API_URL = process.env.API_URL || 'http://localhost:3000'
+let _cfg = {}
+try { _cfg = require('./config') } catch {}
+
+const API_URL = process.env.API_URL || _cfg.API_URL || 'http://localhost:3005'
 // Auth priority: AGENT_SECRET_KEY (stable) > SERVICE_ROLE > user JWT (expires)
-const SERVICE_KEY = process.env.AGENT_SECRET_KEY || process.env.AGENT_USER_TOKEN || ''
+const SERVICE_KEY = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY || _cfg.AGENT_SECRET_KEY || process.env.AGENT_USER_TOKEN || ''
 
 // Hermes routing — when AGENT_SECRET is set, route through Hermes for comment generation
 // (skill-based, self-learning, better quality than generic /ai/comment)
-const HERMES_ENABLED = !!process.env.AGENT_SECRET
-const AGENT_SECRET = process.env.AGENT_SECRET || ''
+const AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY || _cfg.AGENT_SECRET_KEY || ''
+const HERMES_ENABLED = !!AGENT_SECRET
 
 async function callHermesComment(payload, accountId) {
   const t0 = Date.now()

@@ -15,6 +15,7 @@ const { generateComment, generateOpportunityComment } = require('../../lib/ai-co
 const { evaluatePosts, qualityGateComment, generateSmartComment, evaluateLeadQuality, scanGroupPosts, getBestPosts, detectGroupLanguage } = require('../../lib/ai-brain')
 const { getSelectors, toMobileUrl, COMMENT_INPUT_SELECTORS, COMMENT_SUBMIT_SELECTORS, COMMENT_LINK_SELECTORS } = require('../../lib/mobile-selectors')
 const { ActivityLogger } = require('../../lib/activity-logger')
+const { strictGroupPrecheck } = require('../../lib/ai-filter')
 
 // Group visit rate limit — max 2 nicks per group per 30 min (module-level cache)
 const groupVisitCache = new Map() // groupFbId → [{accountId, timestamp}]
@@ -484,6 +485,44 @@ async function campaignNurture(payload, supabase) {
       }
     } catch (err) {
       console.warn(`[NURTURE] Inline scout failed: ${err.message}`)
+    }
+  }
+
+  if (groups?.length && topic && config?.allow_offtopic_groups !== true) {
+    const beforeStrict = groups.length
+    const rejected = []
+    groups = groups.filter(g => {
+      const precheck = strictGroupPrecheck(g, topic)
+      if (precheck.pass) return true
+      rejected.push({ group: g, reason: precheck.reason })
+      return false
+    })
+    if (rejected.length > 0) {
+      console.log(`[NURTURE] Strict topic guard dropped ${rejected.length}/${beforeStrict}: ${rejected.slice(0, 8).map(x => `${x.group.name}(${x.reason})`).join(', ')}`)
+      for (const { group, reason } of rejected) {
+        try {
+          await supabase.from('fb_groups').update({
+            score_tier: 'D',
+            ai_note: reason,
+          }).eq('account_id', account_id).eq('fb_group_id', group.fb_group_id)
+          if (campaign_id && group.id) {
+            await supabase.from('campaign_groups')
+              .update({ status: 'paused', tier: 'D', score: 1 })
+              .eq('campaign_id', campaign_id)
+              .eq('group_id', group.id)
+          }
+        } catch {}
+        try {
+          logger.log('visit_group', {
+            target_type: 'group',
+            target_id: group.fb_group_id,
+            target_name: group.name,
+            target_url: group.url,
+            result_status: 'skipped',
+            details: { reason, action: 'strict_topic_guard' },
+          })
+        } catch {}
+      }
     }
   }
 
@@ -972,9 +1011,9 @@ async function campaignNurture(payload, supabase) {
                 language: aiResult.language || 'unknown',
               }
 
-              // Decision rules: lowered thresholds for more engagement
-              if (aiResult.score >= 3 || aiResult.relevant) {
-                aiDecision.action = 'engage'     // like + comment (was: score >= 5)
+              // Strict campaign guard: only engage groups that are clearly relevant.
+              if (aiResult.relevant && aiResult.score >= 7 && aiResult.risk_level !== 'high') {
+                aiDecision.action = 'engage'
               } else {
                 aiDecision.action = 'reject'     // skip entirely
               }
@@ -2578,11 +2617,29 @@ async function campaignNurture(payload, supabase) {
               // Some FB layouts submit on Enter, some need a Send button click,
               // some require Ctrl+Enter. Detect success by checking the textbox
               // contents got cleared (or comment count visibly bumped).
+              const commentBoxMarker = `sf-cmt-${Date.now()}-${Math.random().toString(36).slice(2)}`
+              await targetPage.evaluate(() => {
+                document.querySelectorAll('[data-socialflow-comment-box]').forEach(el => el.removeAttribute('data-socialflow-comment-box'))
+              }).catch(() => {})
+              await commentBox.evaluate((el, marker) => {
+                el.setAttribute('data-socialflow-comment-box', marker)
+                el.focus()
+              }, commentBoxMarker).catch(() => {})
+
               await commentBox.click({ force: true, timeout: 5000 })
               await R.sleepRange(500, 1000)
               for (const char of commentText) {
                 await targetPage.keyboard.type(char, { delay: Math.random() * 80 + 30 })
               }
+              await commentBox.evaluate((el) => {
+                try {
+                  const event = new InputEvent('input', { bubbles: true, inputType: 'insertText', data: null })
+                  el.dispatchEvent(event)
+                } catch {
+                  el.dispatchEvent(new Event('input', { bubbles: true }))
+                }
+                el.dispatchEvent(new Event('change', { bubbles: true }))
+              }).catch(() => {})
               await R.sleepRange(800, 1500)
 
               // 2026-05-06: SUBMIT VERIFICATION OVERHAUL.
@@ -2595,6 +2652,9 @@ async function campaignNurture(payload, supabase) {
               // only used as fallback — and on detach we now return FALSE
               // (assume not submitted).
               const txtBefore = await commentBox.evaluate(el => (el.innerText || el.value || '').trim()).catch(() => '')
+              if (!txtBefore || !txtBefore.toLowerCase().includes((commentText || '').toLowerCase().slice(0, 10))) {
+                console.warn(`[NURTURE-DBG] Comment text may not be in textbox before submit (box="${txtBefore.substring(0, 40)}")`)
+              }
               const isCleared = async () => {
                 try {
                   const txt = await commentBox.evaluate(el => (el.innerText || el.value || '').trim())
@@ -2683,6 +2743,7 @@ async function campaignNurture(payload, supabase) {
                 try {
                   await action()
                 } catch (e) {
+                  console.warn(`[NURTURE-DBG] Submit method ${methodLabel} failed early: ${e.message}`)
                   return false
                 }
                 await R.sleepRange(1800, 2800)
@@ -2696,37 +2757,133 @@ async function campaignNurture(payload, supabase) {
                 return false
               }
 
+              const clickScopedSubmitButton = async ({ iconOnly = false } = {}) => {
+                const clicked = await commentBox.evaluate((tb, opts) => {
+                  const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim()
+                  const terms = [
+                    'post',
+                    'send',
+                    'submit',
+                    'comment',
+                    'press enter to post',
+                    '\u0111\u0103ng',
+                    'g\u1eedi',
+                    'b\u00ecnh lu\u1eadn',
+                    'nh\u1ea5n enter \u0111\u1ec3 \u0111\u0103ng',
+                  ]
+                  const badTerms = /like|share|emoji|gif|photo|sticker|avatar|more|menu|close|cancel|back|tag|camera|attachment/
+                  const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length))
+                  const isDisabled = (el) => {
+                    if (!el) return true
+                    if (el.disabled) return true
+                    if (el.getAttribute('aria-disabled') === 'true') return true
+                    if (el.closest('[aria-disabled="true"]')) return true
+                    return false
+                  }
+                  const tbRect = tb.getBoundingClientRect()
+                  const roots = []
+                  let cur = tb
+                  for (let depth = 0; cur && depth < 9; depth++, cur = cur.parentElement) {
+                    roots.push({ el: cur, depth })
+                  }
+                  const candidates = []
+                  for (const root of roots) {
+                    const rr = root.el.getBoundingClientRect()
+                    if (!rr.width || !rr.height) continue
+                    if (root.depth > 3 && rr.width > window.innerWidth * 0.98 && rr.height > window.innerHeight * 0.85) continue
+                    for (const btn of root.el.querySelectorAll('[role="button"], button, [aria-label], input[type="submit"]')) {
+                      if (btn === tb || tb.contains(btn) || !isVisible(btn) || isDisabled(btn)) continue
+                      const br = btn.getBoundingClientRect()
+                      const label = norm([
+                        btn.getAttribute('aria-label'),
+                        btn.getAttribute('title'),
+                        btn.getAttribute('data-testid'),
+                        btn.getAttribute('name'),
+                        btn.value,
+                        btn.innerText,
+                      ].filter(Boolean).join(' '))
+                      if (badTerms.test(label)) continue
+                      const hasTerm = terms.some(term => label.includes(term))
+                      const hasIcon = !!btn.querySelector('svg, i, [role="img"]')
+                      const noText = !norm(btn.innerText)
+                      const followsTextbox = !!(tb.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING)
+                      const nearY = br.top >= tbRect.top - 70 && br.top <= tbRect.bottom + 170
+                      const nearX = br.left >= tbRect.left - 140 && br.left <= tbRect.right + 280
+                      const rightSide = br.left >= tbRect.left
+                      if (!hasTerm && !(opts.iconOnly && hasIcon && noText && followsTextbox && nearY && nearX)) continue
+                      let score = 0
+                      if (hasTerm) score += 100
+                      if (followsTextbox) score += 25
+                      if (nearY) score += 20
+                      if (nearX) score += 15
+                      if (rightSide) score += 8
+                      if (opts.iconOnly && hasIcon && noText) score += 25
+                      score -= root.depth * 3
+                      candidates.push({
+                        btn,
+                        label: label || 'icon',
+                        score,
+                        depth: root.depth,
+                        x: br.left,
+                      })
+                    }
+                  }
+                  candidates.sort((a, b) => (b.score - a.score) || (b.x - a.x))
+                  const chosen = candidates[0]
+                  if (!chosen) return { clicked: false, reason: 'no_scoped_submit' }
+                  chosen.btn.click()
+                  return {
+                    clicked: true,
+                    label: chosen.label,
+                    score: chosen.score,
+                    depth: chosen.depth,
+                  }
+                }, { iconOnly })
+                if (!clicked?.clicked) throw new Error(clicked?.reason || 'no scoped submit btn')
+                console.log(`[NURTURE-DBG] Clicked scoped submit (${iconOnly ? 'icon' : 'label'}): ${clicked.label} score=${clicked.score} depth=${clicked.depth}`)
+                return clicked
+              }
+
+              const getSubmitDiagnostics = async () => {
+                return await commentBox.evaluate((tb) => {
+                  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim()
+                  const tbRect = tb.getBoundingClientRect()
+                  const out = []
+                  let cur = tb
+                  for (let depth = 0; cur && depth < 6; depth++, cur = cur.parentElement) {
+                    for (const btn of cur.querySelectorAll('[role="button"], button, [aria-label], input[type="submit"]')) {
+                      const br = btn.getBoundingClientRect()
+                      if (!(br.width || br.height || btn.getClientRects().length)) continue
+                      if (Math.abs(br.top - tbRect.top) > 260) continue
+                      out.push({
+                        depth,
+                        aria: norm(btn.getAttribute('aria-label')),
+                        text: norm(btn.innerText).slice(0, 60),
+                        title: norm(btn.getAttribute('title')),
+                        disabled: btn.disabled || btn.getAttribute('aria-disabled') === 'true',
+                        x: Math.round(br.left),
+                        y: Math.round(br.top),
+                      })
+                      if (out.length >= 10) return out
+                    }
+                  }
+                  return out
+                }).catch(() => null)
+              }
+
               // M1 — Enter key (works on most desktop FB layouts)
               await runSubmitWith(
-                () => targetPage.keyboard.press('Enter'),
+                async () => {
+                  await commentBox.click({ force: true, timeout: 3000 }).catch(() => {})
+                  if (typeof commentBox.press === 'function') await commentBox.press('Enter')
+                  else await targetPage.keyboard.press('Enter')
+                },
                 'enter'
               )
 
               // M2 — Click an explicit Send/Post/Đăng button if Enter didn't take
               if (!submitted) {
-                await runSubmitWith(async () => {
-                  const clicked = await targetPage.evaluate(() => {
-                    const norm = (s) => (s || '').toLowerCase().trim()
-                    for (const btn of document.querySelectorAll('[role="button"], button, [aria-label]')) {
-                      const l = norm(btn.getAttribute('aria-label'))
-                      if (l === 'post' || l === 'đăng' || l === 'gửi' ||
-                          l === 'comment' || l === 'bình luận' ||
-                          l === 'send' || l === 'submit' ||
-                          l === 'press enter to post' || l === 'nhấn enter để đăng' ||
-                          l.startsWith('send ') || l.startsWith('post ')) {
-                        if (btn.offsetParent !== null) { btn.click(); return l || 'aria' }
-                      }
-                    }
-                    for (const btn of document.querySelectorAll('[role="button"], button')) {
-                      const t = norm(btn.innerText)
-                      if (t === 'post' || t === 'đăng' || t === 'gửi' || t === 'send' || t === 'submit') {
-                        if (btn.offsetParent !== null) { btn.click(); return 't:' + t }
-                      }
-                    }
-                    return null
-                  })
-                  if (!clicked) throw new Error('no submit btn')
-                }, 'click_btn')
+                await runSubmitWith(() => clickScopedSubmitButton(), 'scoped_click_btn')
               }
 
               // M3 — Ctrl+Enter (mobile + some new FB layouts)
@@ -2741,27 +2898,23 @@ async function campaignNurture(payload, supabase) {
               // CRITICAL: must use targetPage.evaluate, otherwise document.* runs
               // on the stale main feed when S5 succeeded.
               if (!submitted) {
-                await runSubmitWith(async () => {
-                  const clicked = await targetPage.evaluate(() => {
-                    const tb = document.querySelector('div[contenteditable="true"][role="textbox"]')
-                    if (!tb) return false
-                    const container = tb.closest('[role="region"], [role="dialog"], form') || tb.parentElement?.parentElement
-                    if (!container) return false
-                    for (const btn of container.querySelectorAll('[role="button"], button')) {
-                      if (btn.offsetParent === null) continue
-                      const hasIcon = !!btn.querySelector('svg, i, [role="img"]')
-                      const hasText = (btn.innerText || '').trim().length > 0
-                      if (hasIcon && !hasText) { btn.click(); return true }
-                    }
-                    return false
-                  })
-                  if (!clicked) throw new Error('no icon btn')
-                }, 'icon_btn')
+                await runSubmitWith(() => clickScopedSubmitButton({ iconOnly: true }), 'scoped_icon_btn')
               }
 
               if (!submitted) {
                 commentDebug.gen_failed++ // reuse counter — submit-stage failure
                 result.errors.push('comment: submit failed (all 4 methods)')
+                const submitDiag = await getSubmitDiagnostics()
+                if (submitDiag) console.warn(`[NURTURE-DBG] Submit candidates near composer: ${JSON.stringify(submitDiag).slice(0, 900)}`)
+                if (commentLogId) {
+                  try {
+                    await supabase.from('comment_logs').update({
+                      status: 'failed',
+                      error_message: 'submit_failed_all_methods',
+                      finished_at: new Date().toISOString(),
+                    }).eq('id', commentLogId)
+                  } catch {}
+                }
                 console.log(`[NURTURE] ❌ All submit methods failed for post #${post.index}`)
                 // Still count time-wise — wait a bit before next post so we don't hammer
                 await R.sleepRange(3000, 5000)

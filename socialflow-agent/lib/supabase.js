@@ -10,11 +10,14 @@ const AGENT_SECRET = process.env.AGENT_SECRET  || process.env.AGENT_SECRET_KEY |
 
 let supabase
 
-if (DATABASE_URL) {
+if (DATABASE_URL && require('fs').existsSync(require('path').join(__dirname, 'pg-supabase.js'))) {
   const { createClient } = require('./pg-supabase')
   supabase = createClient(DATABASE_URL)
   console.log('[DB] Direct PostgreSQL')
 } else if (API_URL && AGENT_SECRET) {
+  if (DATABASE_URL) {
+    console.warn('[DB] DATABASE_URL set but direct PG wrapper is unavailable; using VPS API proxy')
+  }
   const { createClient } = require('./http-supabase')
   supabase = createClient(API_URL, AGENT_SECRET)
   console.log('[DB] VPS API proxy')

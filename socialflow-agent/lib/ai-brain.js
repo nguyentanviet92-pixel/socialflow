@@ -265,14 +265,14 @@ CHỈ trả về JSON, không giải thích.`
       // discussion. User feedback: "tập trung vào bài có giá trị đừng cmt
       // chung chung". Quality > quantity.
       const filtered = results
-        .filter(r => r.score >= 6 && r.index >= 1 && r.index <= posts.length && !adIdxSet.has(r.index))
+        .filter(r => r.score >= 5 && r.index >= 1 && r.index <= posts.length)
         .filter(r => r.action !== 'skip')
         .sort((a, b) => b.score - a.score)
         .slice(0, maxPicks || 2)
 
       if (filtered.length > 0) return filtered
 
-      console.log(`[AI-BRAIN] No posts scored >= 6 — all scores: ${results.map(r => r.score).join(',')}`)
+      console.log(`[AI-BRAIN] No posts scored >= 5 — all scores: ${results.map(r => r.score).join(',')}`)
       return []
     }
   } catch (err) {

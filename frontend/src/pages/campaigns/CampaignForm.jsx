@@ -57,6 +57,10 @@ export default function CampaignForm() {
     cron_expression: `${randMin()} 6,10,14,18,22 * * *`,
   })
 
+  // === NEW STATES ===
+  const [targetGroupsText, setTargetGroupsText] = useState('')
+  const [brandProducts, setBrandProducts] = useState([{ name: '', description: '' }])
+
   // Section 3: Ads (AI decides opportunity contextually — no keyword matching)
   const [adsEnabled, setAdsEnabled] = useState(false)
   const [brand, setBrand] = useState({
@@ -64,6 +68,7 @@ export default function CampaignForm() {
     brand_description: '',
     example_comment: '',
     brand_voice: 'casual',
+    ad_approach: 'soft_sell', // NEW
   })
 
   // Section 4: Accounts
@@ -112,6 +117,8 @@ export default function CampaignForm() {
         cron_expression: existing.cron_expression || '0 9 * * *',
       })
       setSelectedAccountIds(existing.account_ids || [])
+      setTargetGroupsText((existing.target_groups || []).join('\n'))
+
       if (existing.brand_config) {
         setAdsEnabled(true)
         setBrand({
@@ -119,7 +126,23 @@ export default function CampaignForm() {
           brand_description: existing.brand_config.brand_description || '',
           example_comment: existing.brand_config.example_comment || '',
           brand_voice: existing.brand_config.brand_voice || 'casual',
+          ad_approach: existing.brand_config.ad_approach || 'soft_sell',
         })
+        if (existing.brand_config.products && Array.isArray(existing.brand_config.products)) {
+          setBrandProducts(existing.brand_config.products)
+        } else {
+          setBrandProducts([{ name: '', description: '' }])
+        }
+      } else {
+        setAdsEnabled(false)
+        setBrand({
+          brand_name: '',
+          brand_description: '',
+          example_comment: '',
+          brand_voice: 'casual',
+          ad_approach: 'soft_sell',
+        })
+        setBrandProducts([{ name: '', description: '' }])
       }
       if (existing.ai_plan) {
         setAiPlan(existing.ai_plan)
@@ -248,6 +271,11 @@ export default function CampaignForm() {
     brand_description: brand.brand_description.trim(),
     example_comment: brand.example_comment.trim(),
     brand_voice: brand.brand_voice,
+    ad_approach: brand.ad_approach || 'soft_sell',
+    products: brandProducts.filter(p => p.name.trim()).map(p => ({
+      name: p.name.trim(),
+      description: p.description.trim()
+    })),
   } : null
 
   // === Mutations ===
@@ -306,6 +334,7 @@ export default function CampaignForm() {
         ai_plan_confirmed: planConfirmed,
         brand_config: brandPayload,
         ad_mode: brandPayload ? 'ad_enabled' : 'normal',
+        target_groups: targetGroupsText.split('\n').map(g => g.trim()).filter(Boolean),
       }
       let cid
       if (isEdit) { await api.put(`/campaigns/${id}`, payload); cid = id }
@@ -390,6 +419,20 @@ export default function CampaignForm() {
               className="w-full border border-app-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
+          <div>
+            <label className="text-xs font-medium text-app-muted mb-1 block flex justify-between items-center">
+              <span>Danh sách nhóm chỉ định <span className="text-app-muted/50">(Tùy chọn)</span></span>
+              <span className="text-[10px] text-app-dim font-mono-ui">Mỗi dòng một nhóm</span>
+            </label>
+            <textarea
+              value={targetGroupsText}
+              onChange={e => { setTargetGroupsText(e.target.value); resetPlan() }}
+              rows={3}
+              placeholder="Dán link hoặc ID nhóm Facebook, ví dụ:&#10;https://www.facebook.com/groups/vpsvietnam&#10;1234567890"
+              className="w-full border border-app-border rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono bg-app-base/10"
+            />
+            <p className="text-[10px] text-app-dim mt-1">Nếu bỏ trống, hệ thống sẽ tự động quét nhóm theo chủ đề hoặc nhóm đã tham gia.</p>
+          </div>
         </div>
 
         {/* === Section 2: Mission (MAIN INPUT) === */}
@@ -458,6 +501,106 @@ export default function CampaignForm() {
                   placeholder="VD: AI Agent tự động hóa công việc — phù hợp cho người dùng VPS / cần host nhẹ"
                   className="w-full border border-app-border rounded-lg px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
                 />
+              </div>
+
+              {/* === NEW: Ad Approach === */}
+              <div>
+                <label className="text-xs font-medium text-app-muted mb-2 block">Góc tiếp cận quảng cáo *</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setBrand({ ...brand, ad_approach: 'soft_sell' }); resetPlan() }}
+                    className={`flex flex-col text-left p-3 rounded-xl border transition-all ${
+                      brand.ad_approach === 'soft_sell'
+                        ? 'bg-orange-500/10 border-orange-500/50 shadow-sm shadow-orange-500/10'
+                        : 'bg-app-base border-app-border hover:bg-app-hover text-app-muted'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-semibold text-xs text-app-primary mb-1">
+                      <span className={`${brand.ad_approach === 'soft_sell' ? 'text-orange-500' : 'text-app-muted'}`}>🎭</span>
+                      Chia sẻ trải nghiệm (Soft Sell)
+                    </div>
+                    <span className="text-[10px] text-app-muted leading-relaxed">
+                      Nick đóng vai khách hàng hoặc người có kinh nghiệm để chia sẻ một cách khách quan nhất. (Khuyên dùng)
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setBrand({ ...brand, ad_approach: 'hard_sell' }); resetPlan() }}
+                    className={`flex flex-col text-left p-3 rounded-xl border transition-all ${
+                      brand.ad_approach === 'hard_sell'
+                        ? 'bg-orange-500/10 border-orange-500/50 shadow-sm shadow-orange-500/10'
+                        : 'bg-app-base border-app-border hover:bg-app-hover text-app-muted'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-semibold text-xs text-app-primary mb-1">
+                      <span className={`${brand.ad_approach === 'hard_sell' ? 'text-orange-500' : 'text-app-muted'}`}>📢</span>
+                      Giới thiệu trực tiếp (Hard Sell)
+                    </div>
+                    <span className="text-[10px] text-app-muted leading-relaxed">
+                      Giới thiệu trực diện thông tin dịch vụ, tính năng nổi bật của sản phẩm, kèm hotline/ưu đãi.
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* === NEW: Sub-products dynamic manager === */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-app-muted block">Danh sách sản phẩm / Phân khúc cụ thể (Tùy chọn)</label>
+                  <button
+                    type="button"
+                    onClick={() => setBrandProducts([...brandProducts, { name: '', description: '' }])}
+                    className="text-[10px] text-orange-500 hover:underline flex items-center gap-1"
+                  >
+                    + Thêm sản phẩm
+                  </button>
+                </div>
+                
+                <div className="space-y-2">
+                  {brandProducts.map((prod, index) => {
+                    const updateProd = (field, val) => {
+                      const next = [...brandProducts]
+                      next[index] = { ...next[index], [field]: val }
+                      setBrandProducts(next)
+                      resetPlan()
+                    }
+                    const removeProd = () => {
+                      const next = brandProducts.filter((_, i) => i !== index)
+                      setBrandProducts(next.length ? next : [{ name: '', description: '' }])
+                      resetPlan()
+                    }
+                    return (
+                      <div key={index} className="flex gap-2 items-start p-2.5 rounded-lg border border-app-border/40 bg-app-base/20 hover:border-app-border/80 transition-colors">
+                        <div className="flex-1 space-y-2">
+                          <input
+                            type="text"
+                            value={prod.name}
+                            onChange={e => updateProd('name', e.target.value)}
+                            placeholder="Tên sản phẩm (VD: Cloud VPS Pro)"
+                            className="w-full bg-transparent border-0 border-b border-app-border focus:border-orange-500 focus:ring-0 px-0.5 py-1 text-xs text-app-primary placeholder:text-app-muted/50"
+                          />
+                          <input
+                            type="text"
+                            value={prod.description}
+                            onChange={e => updateProd('description', e.target.value)}
+                            placeholder="Tính năng nổi bật (VD: 4 vCPU, 8GB RAM, SSD NVMe, giảm 20%)"
+                            className="w-full bg-transparent border-0 border-b border-app-border/40 focus:border-orange-500 focus:ring-0 px-0.5 py-1 text-[11px] text-app-muted placeholder:text-app-muted/40"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={removeProd}
+                          className="p-1 text-app-dim hover:text-danger rounded hover:bg-app-hover transition-colors mt-0.5"
+                          title="Xóa sản phẩm"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
 
               <div>
