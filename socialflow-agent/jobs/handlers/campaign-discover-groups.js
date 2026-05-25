@@ -239,35 +239,62 @@ async function campaignDiscoverGroups(payload, supabase) {
       console.log(`[CAMPAIGN-SCOUT] Warm-up done`)
     }
 
-    // Use keywords from AI plan params first, then AI expansion fallback
-    const planJoinStep = (parsed_plan || []).find(s => s.action === 'join_group')
-    let keywords
-    if (planJoinStep?.params?.keywords?.length) {
-      keywords = planJoinStep.params.keywords
-      console.log(`[CAMPAIGN-SCOUT] Using plan keywords: [${keywords.join(', ')}]`)
-    } else {
-      const { expandSearchKeywords } = require('../../lib/ai-filter')
-      keywords = await expandSearchKeywords(topic, payload.mission, payload.owner_id)
-    }
-
-    // Fix 3 (Phase 6): merge brand keywords passed in by the scheduler so scout
-    // searches both the topic AND the brand's own keywords. Dedup, cap at 8.
-    if (Array.isArray(payload.brand_keywords) && payload.brand_keywords.length) {
-      const merged = [...new Set([...(keywords || []), ...payload.brand_keywords.filter(k => k && k.length > 1)])]
-      keywords = merged.slice(0, 8)
-      console.log(`[CAMPAIGN-SCOUT] Merged brand keywords → [${keywords.join(', ')}]`)
-    }
-
-    const beforeKeywordSanitize = keywords || []
-    keywords = sanitizeSearchKeywords(beforeKeywordSanitize, topic)
-    if (keywords.length !== beforeKeywordSanitize.length) {
-      console.log(`[CAMPAIGN-SCOUT] Strict keyword sanitize: [${beforeKeywordSanitize.join(', ')}] → [${keywords.join(', ')}]`)
-    }
-
     let allGroups = []
     const seenIds = new Set()
+    let keywords = []
 
-    for (const keyword of keywords) {
+    if (payload.target_fb_group_id) {
+      console.log(`[CAMPAIGN-SCOUT] Direct group join mode triggered for group: ${payload.target_fb_group_id}`)
+      const { data: targetGroupDb } = await supabase
+        .from('fb_groups')
+        .select('*')
+        .eq('fb_group_id', payload.target_fb_group_id)
+        .eq('account_id', account_id)
+        .maybeSingle()
+
+      if (targetGroupDb) {
+        allGroups.push({
+          fb_group_id: targetGroupDb.fb_group_id,
+          name: targetGroupDb.name || `Group ${targetGroupDb.fb_group_id}`,
+          url: targetGroupDb.url || `https://www.facebook.com/groups/${targetGroupDb.fb_group_id}`,
+          member_count: targetGroupDb.member_count || 0,
+          ai_relevance: targetGroupDb.ai_relevance,
+        })
+      } else {
+        allGroups.push({
+          fb_group_id: payload.target_fb_group_id,
+          name: `Group ${payload.target_fb_group_id}`,
+          url: payload.target_group_url || `https://www.facebook.com/groups/${payload.target_fb_group_id}`,
+          member_count: 0,
+        })
+      }
+      console.log(`[CAMPAIGN-SCOUT] Targeting single group directly: ${allGroups[0].url}`)
+    } else {
+      // Use keywords from AI plan params first, then AI expansion fallback
+      const planJoinStep = (parsed_plan || []).find(s => s.action === 'join_group')
+      if (planJoinStep?.params?.keywords?.length) {
+        keywords = planJoinStep.params.keywords
+        console.log(`[CAMPAIGN-SCOUT] Using plan keywords: [${keywords.join(', ')}]`)
+      } else {
+        const { expandSearchKeywords } = require('../../lib/ai-filter')
+        keywords = await expandSearchKeywords(topic, payload.mission, payload.owner_id)
+      }
+
+      // Fix 3 (Phase 6): merge brand keywords passed in by the scheduler so scout
+      // searches both the topic AND the brand's own keywords. Dedup, cap at 8.
+      if (Array.isArray(payload.brand_keywords) && payload.brand_keywords.length) {
+        const merged = [...new Set([...(keywords || []), ...payload.brand_keywords.filter(k => k && k.length > 1)])]
+        keywords = merged.slice(0, 8)
+        console.log(`[CAMPAIGN-SCOUT] Merged brand keywords → [${keywords.join(', ')}]`)
+      }
+
+      const beforeKeywordSanitize = keywords || []
+      keywords = sanitizeSearchKeywords(beforeKeywordSanitize, topic)
+      if (keywords.length !== beforeKeywordSanitize.length) {
+        console.log(`[CAMPAIGN-SCOUT] Strict keyword sanitize: [${beforeKeywordSanitize.join(', ')}] → [${keywords.join(', ')}]`)
+      }
+
+      for (const keyword of keywords) {
       // Intercept GraphQL responses during page load
       const graphqlResponses = []
       const responseHandler = async (response) => {
@@ -356,11 +383,12 @@ async function campaignDiscoverGroups(payload, supabase) {
 
     console.log(`[CAMPAIGN-SCOUT] Total unique groups: ${allGroups.length} from ${keywords.length} keyword(s)`)
 
-    if (allGroups.length === 0) {
-      await saveDebugScreenshot(page, `campaign-scout-${account_id}`)
-      // Save DOM for debugging
-      const debugHtml = await page.evaluate(() => document.querySelectorAll('a[href*="/groups/"]').length).catch(() => 0)
-      console.log(`[CAMPAIGN-SCOUT] Debug: ${debugHtml} group links in DOM`)
+      if (allGroups.length === 0) {
+        await saveDebugScreenshot(page, `campaign-scout-${account_id}`)
+        // Save DOM for debugging
+        const debugHtml = await page.evaluate(() => document.querySelectorAll('a[href*="/groups/"]').length).catch(() => 0)
+        console.log(`[CAMPAIGN-SCOUT] Debug: ${debugHtml} group links in DOM`)
+      }
     }
 
     // Get groups ALREADY joined by ANY nick in this campaign (cross-nick dedup)
@@ -430,7 +458,23 @@ async function campaignDiscoverGroups(payload, supabase) {
     // AI relevance filter on BOTH toJoin + toTag (all potential candidates from search)
     const allCandidates = [...toJoin, ...toTag]
     const relevant = allCandidates.length > 0
-      ? await filterRelevantGroups(allCandidates, topic, payload.owner_id, account_id, supabase)
+      ? (payload.target_fb_group_id
+          ? allCandidates.map(g => {
+              const topicKey = (topic || '').toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
+              const existingRelevance = g.ai_relevance || {}
+              existingRelevance[topicKey] = {
+                relevant: true,
+                score: 10,
+                tier: 'A',
+                reason: 'Designated target group from user input',
+                lang: 'vi',
+                evaluated_at: new Date().toISOString(),
+              }
+              g.ai_relevance = existingRelevance
+              return g
+            })
+          : await filterRelevantGroups(allCandidates, topic, payload.owner_id, account_id, supabase)
+        )
       : []
     console.log(`[CAMPAIGN-SCOUT] After AI filter: ${allCandidates.length} → ${relevant.length} relevant`)
 
@@ -588,16 +632,29 @@ async function campaignDiscoverGroups(payload, supabase) {
         // ═══ AI GROUP EVALUATION: crawl info + AI decides join or skip ═══
         // AI fail = skip THIS group THIS run (NOT failure, will retry next run)
         let evaluation = null
-        try {
-          evaluation = await evaluateGroup(groupInfo, topic, payload.owner_id)
-        } catch (aiErr) {
-          // AI unavailable — skip group this run, will retry next time
-          console.log(`[CAMPAIGN-SCOUT] ⚠️ AI eval failed for "${group.name}": ${aiErr.message} — skip this run, retry later`)
-          logger.log('visit_group', {
-            target_type: 'group', target_name: group.name, result_status: 'skipped',
-            details: { reason: 'ai_eval_failed', error: aiErr.message },
-          })
-          continue // NOT a failure, just skip
+        if (payload.target_fb_group_id) {
+          evaluation = {
+            relevant: true,
+            score: 10,
+            tier: 'A',
+            risk_level: 'low',
+            language: 'vi',
+            reason: 'User designated target group',
+            note: 'Designated target group'
+          }
+          console.log(`[CAMPAIGN-SCOUT] designated target group — bypassing AI evaluation`)
+        } else {
+          try {
+            evaluation = await evaluateGroup(groupInfo, topic, payload.owner_id)
+          } catch (aiErr) {
+            // AI unavailable — skip group this run, will retry next time
+            console.log(`[CAMPAIGN-SCOUT] ⚠️ AI eval failed for "${group.name}": ${aiErr.message} — skip this run, retry later`)
+            logger.log('visit_group', {
+              target_type: 'group', target_name: group.name, result_status: 'skipped',
+              details: { reason: 'ai_eval_failed', error: aiErr.message },
+            })
+            continue // NOT a failure, just skip
+          }
         }
 
         // Cache AI eval result to DB (both accept and reject)
@@ -620,41 +677,44 @@ async function campaignDiscoverGroups(payload, supabase) {
           ai_note: (evaluation.note || evaluation.reason || '').slice(0, 300),
         }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
 
-        // Language filter: skip non-VN — BUT override if group name contains topic keyword
-        // "OpenClaw VN" có thể bị AI đánh là tiếng Anh vì tên tiếng Anh → sai
-        // Phase 1: campaign.language has priority over legacy config.allowed_languages
-        const allowedLangs = campaignLanguage === 'mixed'
-          ? ['vi', 'en']
-          : (config?.allowed_languages || campaignAllowedLangs)
-        const topicKws = (topic || '').toLowerCase().split(/[\s,]+/).filter(k => k.length > 2)
-        const nameContainsTopic = topicKws.some(kw => (group.name || '').toLowerCase().includes(kw))
+        // Only enforce gates if NOT direct target group mode
+        if (!payload.target_fb_group_id) {
+          // Language filter: skip non-VN — BUT override if group name contains topic keyword
+          // "OpenClaw VN" có thể bị AI đánh là tiếng Anh vì tên tiếng Anh → sai
+          // Phase 1: campaign.language has priority over legacy config.allowed_languages
+          const allowedLangs = campaignLanguage === 'mixed'
+            ? ['vi', 'en']
+            : (config?.allowed_languages || campaignAllowedLangs)
+          const topicKws = (topic || '').toLowerCase().split(/[\s,]+/).filter(k => k.length > 2)
+          const nameContainsTopic = topicKws.some(kw => (group.name || '').toLowerCase().includes(kw))
 
-        // 2026-05-02: STRICT language gate per user request.
-        // Campaign chọn 'vi' → cấm join nhóm khác tiếng (FB auto-translate
-        // gây hiểu nhầm, comment dịch sai → admin/spam-detector flag).
-        // Override only allowed when campaign.language='mixed'.
-        if (evaluation.language && !allowedLangs.includes(evaluation.language) && evaluation.language !== '?') {
-          console.log(`[CAMPAIGN-SCOUT] 🌐 STRICT skip "${group.name}" — lang: ${evaluation.language} (allowed: ${allowedLangs.join(',')})`)
-          logger.log('visit_group', {
-            target_type: 'group', target_name: group.name, result_status: 'skipped',
-            details: { reason: `lang_${evaluation.language}_strict`, language: evaluation.language, name_contains_topic: nameContainsTopic, score: evaluation.score },
-          })
-          continue
-        }
+          // 2026-05-02: STRICT language gate per user request.
+          // Campaign chọn 'vi' → cấm join nhóm khác tiếng (FB auto-translate
+          // gây hiểu nhầm, comment dịch sai → admin/spam-detector flag).
+          // Override only allowed when campaign.language='mixed'.
+          if (evaluation.language && !allowedLangs.includes(evaluation.language) && evaluation.language !== '?') {
+            console.log(`[CAMPAIGN-SCOUT] 🌐 STRICT skip "${group.name}" — lang: ${evaluation.language} (allowed: ${allowedLangs.join(',')})`)
+            logger.log('visit_group', {
+              target_type: 'group', target_name: group.name, result_status: 'skipped',
+              details: { reason: `lang_${evaluation.language}_strict`, language: evaluation.language, name_contains_topic: nameContainsTopic, score: evaluation.score },
+            })
+            continue
+          }
 
-        // 2026-05-02: minimum member count gate.
-        // Campaign config field `min_member_count` (default 100) — skip groups
-        // smaller. Reasoning: tiny groups have low engagement + low ROI per
-        // join effort + admin tend to be more aggressive on spam-detection.
-        const minMembers = config?.min_member_count || campaign.min_member_count || 100
-        const memberCount = groupInfo?.member_count || group.member_count || 0
-        if (memberCount > 0 && memberCount < minMembers) {
-          console.log(`[CAMPAIGN-SCOUT] 👥 Skip "${group.name}" — only ${memberCount} members < ${minMembers} threshold`)
-          logger.log('visit_group', {
-            target_type: 'group', target_name: group.name, result_status: 'skipped',
-            details: { reason: 'member_count_below_threshold', member_count: memberCount, min_required: minMembers },
-          })
-          continue
+          // 2026-05-02: minimum member count gate.
+          // Campaign config field `min_member_count` (default 100) — skip groups
+          // smaller. Reasoning: tiny groups have low engagement + low ROI per
+          // join effort + admin tend to be more aggressive on spam-detection.
+          const minMembers = config?.min_member_count || campaign.min_member_count || 100
+          const memberCount = groupInfo?.member_count || group.member_count || 0
+          if (memberCount > 0 && memberCount < minMembers) {
+            console.log(`[CAMPAIGN-SCOUT] 👥 Skip "${group.name}" — only ${memberCount} members < ${minMembers} threshold`)
+            logger.log('visit_group', {
+              target_type: 'group', target_name: group.name, result_status: 'skipped',
+              details: { reason: 'member_count_below_threshold', member_count: memberCount, min_required: minMembers },
+            })
+            continue
+          }
         }
 
         // Save ai_join_score + risk_level to fb_groups for future reference
@@ -665,77 +725,82 @@ async function campaignDiscoverGroups(payload, supabase) {
           }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
         } catch {}
 
-        // GATE 1: High risk → skip + blacklist 30 days
-        if (evaluation.risk_level === 'high') {
-          console.log(`[CAMPAIGN-SCOUT] ⛔ Skip "${group.name}" — HIGH RISK (spam/unsafe), blacklisted 30 days`)
-          try {
-            await supabase.from('fb_groups').update({
-              skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
-            }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
-          } catch {}
-          logger.log('visit_group', {
-            target_type: 'group', target_name: group.name, result_status: 'skipped',
-            details: { reason: 'high_risk', risk_level: 'high', score: evaluation.score },
-          })
-          continue
-        }
-
-        const strictPrecheck = strictGroupPrecheck(groupInfo, topic)
-        if (!strictPrecheck.pass || !evaluation.relevant || evaluation.score < 8) {
-          console.log(`[CAMPAIGN-SCOUT] ❌ Strict skip "${group.name}" — ${evaluation.reason || strictPrecheck.reason} (score: ${evaluation.score}, precheck:${strictPrecheck.reason})`)
-          try {
-            await supabase.from('fb_groups').update({
-              skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
-              score_tier: 'D',
-            }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
-          } catch {}
-          logger.log('visit_group', {
-            target_type: 'group', target_name: group.name, result_status: 'skipped',
-            details: {
-              reason: evaluation.reason || strictPrecheck.reason,
-              score: evaluation.score,
-              ai_decision: 'strict_reject',
-              risk_level: evaluation.risk_level,
-              precheck: strictPrecheck.reason,
-            },
-          })
-          continue
-        }
-
-        if (!evaluation.relevant) {
-          // OVERRIDE: nếu tên group chứa topic keyword → approve dù AI reject
-          if (nameContainsTopic) {
-            console.log(`[CAMPAIGN-SCOUT] ⚠️ AI rejected "${group.name}" BUT name matches topic → OVERRIDE, keeping`)
-            evaluation.relevant = true
-            evaluation.score = Math.max(evaluation.score, 6)
-            evaluation.reason = `name_match_override: ${evaluation.reason}`
-          } else {
-            console.log(`[CAMPAIGN-SCOUT] ❌ Skip "${group.name}" — ${evaluation.reason} (score: ${evaluation.score})`)
-            // Blacklist low-score groups for 30 days
-            if (evaluation.score < 4) {
-              try {
-                await supabase.from('fb_groups').update({
-                  skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
-                }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
-              } catch {}
-            }
+        // Only enforce gates if NOT direct target group mode
+        if (!payload.target_fb_group_id) {
+          // GATE 1: High risk → skip + blacklist 30 days
+          if (evaluation.risk_level === 'high') {
+            console.log(`[CAMPAIGN-SCOUT] ⛔ Skip "${group.name}" — HIGH RISK (spam/unsafe), blacklisted 30 days`)
+            try {
+              await supabase.from('fb_groups').update({
+                skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
+              }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
+            } catch {}
             logger.log('visit_group', {
               target_type: 'group', target_name: group.name, result_status: 'skipped',
-              details: { reason: evaluation.reason, score: evaluation.score, ai_decision: 'reject', risk_level: evaluation.risk_level },
+              details: { reason: 'high_risk', risk_level: 'high', score: evaluation.score },
             })
             continue
           }
-        }
 
-        // GATE 2: Borderline groups (score 5-6) — only for warm nicks (>60 days)
-        const nickAge = getNickAgeDays(account)
-        if (evaluation.score >= 5 && evaluation.score <= 6 && nickAge < 60) {
-          console.log(`[CAMPAIGN-SCOUT] ⏭️ Borderline "${group.name}" (score: ${evaluation.score}) — nick too young (${nickAge}d < 60d), skipping`)
-          logger.log('visit_group', {
-            target_type: 'group', target_name: group.name, result_status: 'skipped',
-            details: { reason: 'borderline_nick_young', score: evaluation.score, nick_age: nickAge },
-          })
-          continue
+          const strictPrecheck = strictGroupPrecheck(groupInfo, topic)
+          if (!strictPrecheck.pass || !evaluation.relevant || evaluation.score < 8) {
+            console.log(`[CAMPAIGN-SCOUT] ❌ Strict skip "${group.name}" — ${evaluation.reason || strictPrecheck.reason} (score: ${evaluation.score}, precheck:${strictPrecheck.reason})`)
+            try {
+              await supabase.from('fb_groups').update({
+                skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
+                score_tier: 'D',
+              }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
+            } catch {}
+            logger.log('visit_group', {
+              target_type: 'group', target_name: group.name, result_status: 'skipped',
+              details: {
+                reason: evaluation.reason || strictPrecheck.reason,
+                score: evaluation.score,
+                ai_decision: 'strict_reject',
+                risk_level: evaluation.risk_level,
+                precheck: strictPrecheck.reason,
+              },
+            })
+            continue
+          }
+
+          if (!evaluation.relevant) {
+            // OVERRIDE: nếu tên group chứa topic keyword → approve dù AI reject
+            const topicKws = (topic || '').toLowerCase().split(/[\s,]+/).filter(k => k.length > 2)
+            const nameContainsTopic = topicKws.some(kw => (group.name || '').toLowerCase().includes(kw))
+            if (nameContainsTopic) {
+              console.log(`[CAMPAIGN-SCOUT] ⚠️ AI rejected "${group.name}" BUT name matches topic → OVERRIDE, keeping`)
+              evaluation.relevant = true
+              evaluation.score = Math.max(evaluation.score, 6)
+              evaluation.reason = `name_match_override: ${evaluation.reason}`
+            } else {
+              console.log(`[CAMPAIGN-SCOUT] ❌ Skip "${group.name}" — ${evaluation.reason} (score: ${evaluation.score})`)
+              // Blacklist low-score groups for 30 days
+              if (evaluation.score < 4) {
+                try {
+                  await supabase.from('fb_groups').update({
+                    skip_until: new Date(Date.now() + 30 * 86400000).toISOString(),
+                  }).eq('fb_group_id', group.fb_group_id).eq('account_id', account_id)
+                } catch {}
+              }
+              logger.log('visit_group', {
+                target_type: 'group', target_name: group.name, result_status: 'skipped',
+                details: { reason: evaluation.reason, score: evaluation.score, ai_decision: 'reject', risk_level: evaluation.risk_level },
+              })
+              continue
+            }
+          }
+
+          // GATE 2: Borderline groups (score 5-6) — only for warm nicks (>60 days)
+          const nickAge = getNickAgeDays(account)
+          if (evaluation.score >= 5 && evaluation.score <= 6 && nickAge < 60) {
+            console.log(`[CAMPAIGN-SCOUT] ⏭️ Borderline "${group.name}" (score: ${evaluation.score}) — nick too young (${nickAge}d < 60d), skipping`)
+            logger.log('visit_group', {
+              target_type: 'group', target_name: group.name, result_status: 'skipped',
+              details: { reason: 'borderline_nick_young', score: evaluation.score, nick_age: nickAge },
+            })
+            continue
+          }
         }
 
         console.log(`[CAMPAIGN-SCOUT] ✅ "${group.name}" — ${evaluation.reason} (score: ${evaluation.score}, risk: ${evaluation.risk_level || 'low'})`)
