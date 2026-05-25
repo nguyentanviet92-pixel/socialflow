@@ -16,24 +16,14 @@ const api = getApiClient()
 
 const AGENT_ID = process.env.AGENT_ID || `${os.hostname()}-${process.pid}`
 const AGENT_USER_ID = process.env.AGENT_USER_ID || null  // set when user logs in via Electron
-// 2026-05-04: switched from fixed-interval polling (15s) to randomized
-// 1-5 min cadence. Constant 15s pings show up as a perfectly periodic
-// traffic pattern at the API edge — easy to fingerprint as automation.
-// Random interval makes the agent look more like a human checking in,
-// while still draining the queue fast enough for nurture/scout work
-// (jobs are scheduled hours in advance so 5min lag is negligible).
-// POLL_MS still exists for log messages; the actual delay is computed
-// per-tick by scheduleNextPoll().
-const POLL_MIN_MS = parseInt(process.env.POLL_MIN_MS) || 60 * 1000        // 1 min
-const POLL_MAX_MS = parseInt(process.env.POLL_MAX_MS) || 5 * 60 * 1000    // 5 min
-const POLL_MS = Math.round((POLL_MIN_MS + POLL_MAX_MS) / 2) // avg, used in error logs only
+const POLL_MS = process.env.DATABASE_URL ? 5000 : 15000 // Self-hosted: 5s (no Realtime), Cloud: 15s (Realtime handles instant)
 const MEM_PER_NICK_MB = 350 // ~350MB per Chromium instance
 const MIN_CONCURRENT = 1
-const MAX_CONCURRENT_CAP = 1 // session-pool enforces one live browser to reduce checkpoint risk
+const MAX_CONCURRENT_CAP = parseInt(process.env.MAX_CONCURRENT) || 2 // Max browser cùng lúc — có thể mở rộng qua env
 
 function calcMaxConcurrent() {
   const override = parseInt(process.env.MAX_CONCURRENT)
-  if (override > 0) return Math.min(override, MAX_CONCURRENT_CAP) // never exceed session-pool safety cap
+  if (override > 0) return override // manual override via env
 
   const totalMB = os.totalmem() / (1024 * 1024)
   const freeMB = os.freemem() / (1024 * 1024)
@@ -60,18 +50,6 @@ const POST_TYPES = ['post_page', 'post_page_graph', 'post_group', 'post_profile'
 // All other "utility" jobs (fetch_*, check_*, scan_*) actually use browser, so they
 // compete for the single browser slot like interaction jobs.
 const BROWSER_FREE_TYPES = ['post_page_graph']
-const LOCAL_JOB_PRIORITY = {
-  campaign_nurture: 0,
-  campaign_opportunity_react: 1,
-  comment_post: 2,
-  campaign_send_friend_request: 3,
-  campaign_interact_profile: 4,
-  campaign_post: 5,
-  campaign_discover_groups: 6,
-  nurture_feed: 20,
-  fetch_source_cookie: 30,
-  check_group_membership: 40,
-}
 // Phase 11 fix: utility/system jobs bypass active_hours + warmup + KPI gates.
 // These are background tasks that must run 24/7 regardless of nick "work hours".
 // User-facing actions (campaign_nurture, friend_request, post, interact_profile,
@@ -165,49 +143,22 @@ const nickBudgetExhaustedLog = new Set() // "budget_log:{accId}:{actionType}" �
 const nickWarmupBlockedLog = new Set()   // "{accId}:{actionType}" — suppress warm-up spam logs (1 log/nick/action)
 // Phase 16: group visit isolation — max 2 different nicks visiting same group in 30min
 const groupVisitLog = new Map()        // fb_group_id → [{ nickId, ts }]
-const BUDGET_CACHE_TTL = 60000         // 1 min
-const STATUS_CACHE_TTL = 60000         // 1 min
+const campaignStatusCache = new Map()   // campaign_id → { status, fetchedAt }
+const BUDGET_CACHE_TTL = 300000         // 5 min (was 1 min, VPS calls optimized)
+const STATUS_CACHE_TTL = 300000         // 5 min (was 1 min)
 const MAX_HOURLY_ACTIONS = 50          // cumulative across all types
 // Randomized ranges — avoid fixed patterns that FB can detect
 const randBetween = (min, max) => Math.floor(min + Math.random() * (max - min))
 const randSessionMax = () => randBetween(25, 45) * 60 * 1000   // 25-45 min
-const randRestMs = () => randBetween(45, 120) * 60 * 1000      // 45-120 min
+// Rest range tuned for 3-5 active nicks: 20-45 min keeps natural rotation
+// (while nick A rests, B+C work). Was 45-120 min — too long with few nicks,
+// caused all-nicks-resting deadlock and 0 throughput. Still humanized, just
+// not aggressive on a small pool.
+const randRestMs = () => randBetween(20, 45) * 60 * 1000        // 20-45 min
 
-function localJobPriority(job) {
-  return LOCAL_JOB_PRIORITY[job?.type] ?? (UTILITY_TYPES.includes(job?.type) ? 50 : 10)
-}
-
-function sortPendingJobs(jobs = []) {
-  return [...jobs].sort((a, b) => {
-    const pa = localJobPriority(a)
-    const pb = localJobPriority(b)
-    if (pa !== pb) return pa - pb
-    const ja = Number.isFinite(a?.priority) ? a.priority : 99
-    const jb = Number.isFinite(b?.priority) ? b.priority : 99
-    if (ja !== jb) return ja - jb
-    return new Date(a?.scheduled_at || 0).getTime() - new Date(b?.scheduled_at || 0).getTime()
-  })
-}
-
-function nextVnHourIso(hour, minuteJitterMax = 14) {
-  const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
-  const target = new Date(vnNow)
-  target.setUTCHours(hour, randBetween(0, minuteJitterMax + 1), randBetween(0, 60), 0)
-  if (target <= vnNow) target.setUTCDate(target.getUTCDate() + 1)
-  return new Date(target.getTime() - 7 * 3600 * 1000).toISOString()
-}
-
-// 2026-05-04: campaign_nurture maps to 'comment', not 'like'.
-//   Reason: nurture session does likes + comments + browse together; comment
-//   is the KPI driver (we want substantive comments). Mapping to 'like' meant
-//   when a nick hit the like cap (e.g. used=16/max=11), the WHOLE session
-//   was skipped pre-claim — comment budget could still have 7/8 left, but
-//   never got used. Now: claim if comment has room. In-session, each like
-//   call still hits increment_budget('like') and short-circuits on its own
-//   when the per-action cap fills, so we never over-like.
 const JOB_ACTION_MAP = {
   post_page: 'post', post_page_graph: 'post', post_group: 'post', post_profile: 'post',
-  campaign_post: 'post', campaign_nurture: 'comment', campaign_discover_groups: 'join_group',
+  campaign_post: 'post', campaign_nurture: 'like', campaign_discover_groups: 'join_group',
   campaign_send_friend_request: 'friend_request', campaign_interact_profile: 'like',
   campaign_scan_members: 'scan', campaign_group_monitor: 'scan',
   campaign_opportunity_react: 'comment', comment_post: 'comment',
@@ -236,17 +187,34 @@ async function getExcludedUserIds() {
   return preferenceCache.data
 }
 
+async function checkCampaignActive(campaignId) {
+  const now = Date.now()
+  const cached = campaignStatusCache.get(campaignId)
+  if (cached && (now - cached.fetchedAt < STATUS_CACHE_TTL)) {
+    return ['active', 'running'].includes(cached.status)
+  }
+  try {
+    const { data } = await supabase.from('campaigns')
+      .select('status')
+      .eq('id', campaignId)
+      .single()
+    const status = data?.status || 'inactive'
+    campaignStatusCache.set(campaignId, { status, fetchedAt: now })
+    return ['active', 'running'].includes(status)
+  } catch (err) {
+    return true
+  }
+}
+
 let _polling = false
 let _lastPollAt = 0
+let _consecutiveEmptyPolls = 0
+let _pollTimeout = null
 
 let _pollCount = 0
-async function idleAssign() {
-  // DISABLE idle auto-assign: It conflicts with hermes-orchestrator and creates an infinite loop of discover_groups jobs.
-  return
-}
 async function poll() {
-  if (_polling) return  // prevent concurrent polls (realtime + interval race)
-  if (pool.isBusy()) return  // all interaction slots taken
+  if (_polling) return false  // prevent concurrent polls (realtime + interval race)
+  if (pool.isBusy()) return false  // all interaction slots taken
 
   _polling = true
   _lastPollAt = Date.now()
@@ -257,13 +225,12 @@ async function poll() {
   }
   try {
     const slots = MAX_CONCURRENT - pool.interactionNicks.size
-    const fetchSlots = Math.max(slots, 8)
     let jobs, pollError
 
     if (useApi()) {
       // ── REST API mode: job polling via HTTP ──
       try {
-        jobs = await api.getPendingJobs(fetchSlots)
+        jobs = await api.getPendingJobs(slots)
       } catch (err) {
         pollError = err
         console.error(`[POLL] API error: ${err.message}`)
@@ -277,7 +244,7 @@ async function poll() {
         .lte('scheduled_at', new Date().toISOString())
         .order('priority', { ascending: true })
         .order('scheduled_at', { ascending: true })
-        .limit(fetchSlots)
+        .limit(slots)
 
       if (AGENT_USER_ID) {
         query = query.eq('created_by', AGENT_USER_ID)
@@ -308,13 +275,10 @@ async function poll() {
           await sessionPool.closeAll()
         }
       }
-      return
+      return false
     }
 
-    // 2026-05-04 DEBUG: agent has been polling /pending every 30s for 15+ min
-    // and rejecting all returned jobs locally — log which gate kills each one.
-    const _dbgSkip = (job, reason) => console.log(`[POLLER-DBG] skip ${job.type} ${(job.payload?.account_id || '?').slice(0,8)} — ${reason}`)
-    jobs = sortPendingJobs(jobs)
+    let hasClaimedAny = false
     for (const job of jobs) {
       const accId = job.payload?.account_id
       const isPostJob = POST_TYPES.includes(job.type)
@@ -322,12 +286,7 @@ async function poll() {
       // 1 nick = 1 browser = 1 job tại 1 thời điểm
       // Job sau ĐỢI job trước xong — không skip, không cancel, chỉ defer
       const isUtility = UTILITY_TYPES.includes(job.type)
-      const isBrowserJob = !BROWSER_FREE_TYPES.includes(job.type)
-      if (isBrowserJob && pool.isBusy()) {
-        _dbgSkip(job, `browser slots full ${pool.interactionNicks.size}/${MAX_CONCURRENT}`)
-        continue
-      }
-      if (accId && pool.isRunning(accId)) { _dbgSkip(job, 'pool.isRunning'); continue }
+      if (accId && pool.isRunning(accId)) continue // sẽ được pick up ở poll cycle tiếp theo
 
       // Per-nick post cooldown (not global — each nick tracks independently)
       if (isPostJob && accId) {
@@ -335,8 +294,7 @@ async function poll() {
         if (cd && cd.lastPostAt > 0) {
           const elapsed = Date.now() - cd.lastPostAt
           if (elapsed < cd.cooldownMs) {
-            _dbgSkip(job, `post cooldown (${Math.round((cd.cooldownMs - elapsed) / 1000)}s left)`)
-            continue
+            continue // this nick is cooling down, try next job
           }
         }
       }
@@ -348,10 +306,7 @@ async function poll() {
         const lastAt = nickActionTimestamps.get(gapKey)
         if (lastAt) {
           const minGap = getMinGapMs(actionType)
-          if (Date.now() - lastAt < minGap) {
-            _dbgSkip(job, `action gap ${actionType} (${Math.round((minGap - (Date.now() - lastAt)) / 1000)}s left)`)
-            continue
-          }
+          if (Date.now() - lastAt < minGap) continue
         }
       }
 
@@ -379,7 +334,22 @@ async function poll() {
             }
           } catch {}
           console.log(`[POLLER] Nick ${accId.slice(0,8)} not active — CANCELLED ${job.type} job ${job.id}`)
-          _dbgSkip(job, 'checkAccountActive=false → cancelled')
+          continue
+        }
+      }
+
+      // Per-campaign active status check (skip and immediately cancel jobs belonging to deactivated campaigns)
+      if (job.payload?.campaign_id) {
+        const campaignActive = await checkCampaignActive(job.payload.campaign_id)
+        if (!campaignActive) {
+          try {
+            if (useApi()) {
+              await api.cancelInactiveJob(job.id, accId)
+            } else {
+              await supabase.from('jobs').update({ status: 'cancelled', error_message: 'campaign_inactive' }).eq('id', job.id).eq('status', 'pending')
+            }
+          } catch {}
+          console.log(`[POLLER] Campaign ${job.payload.campaign_id.slice(0, 8)} is INACTIVE — CANCELLED ${job.type} job ${job.id}`)
           continue
         }
       }
@@ -415,44 +385,26 @@ async function poll() {
 
       // Per-nick active hours check (Asia/Ho_Chi_Minh timezone)
       // 24/7 mode: active_hours_start=0 AND active_hours_end=24 → bypass entirely
-      if (accId && !UTILITY_TYPES.includes(job.type)) {
+      // force_now bypasses (admin manual emit overrides hours).
+      if (accId && !UTILITY_TYPES.includes(job.type) && !job.payload?.force_now) {
         const cached = accountStatusCache.get(accId)
         if (cached) {
           const startH = cached.active_hours_start ?? 7
           const endH = cached.active_hours_end ?? 23
           const is247 = startH === 0 && endH === 24
-          const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
-          const vnHour = vnNow.getUTCHours()
-
-          // Giảm tương tác 0h - 5h sáng (skip 85% công việc)
-          if (vnHour >= 0 && vnHour < 5) {
-            if (Math.random() < 0.85) {
-              const scheduledAt = nextVnHourIso(Math.max(5, startH || 5), 20)
-              _dbgSkip(job, `sleep hour 0-5h → reschedule ${scheduledAt}`)
-              updateJobStatus(job.id, 'pending', {
-                scheduled_at: scheduledAt,
-                error_message: 'sleep_hour_0_5h_rescheduled',
-              }).catch(() => {})
-              continue
-            }
-          }
-
           if (!is247) {
+            const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
+            const vnHour = vnNow.getUTCHours()
             if (vnHour < startH || vnHour >= endH) {
-              const scheduledAt = nextVnHourIso(startH, 20)
-              _dbgSkip(job, `active_hours ${startH}-${endH}h, now ${vnHour}h → reschedule ${scheduledAt}`)
-              updateJobStatus(job.id, 'pending', {
-                scheduled_at: scheduledAt,
-                error_message: `active_hours_${vnHour}h_rescheduled`,
-              }).catch(() => {})
-              continue
+              continue // outside active hours — job stays pending
             }
           }
         }
       }
 
       // Per-nick warm-up check (block certain actions for young nicks)
-      if (accId && actionType && actionType !== 'utility') {
+      // force_now bypasses warmup (admin override; user accepts risk).
+      if (accId && actionType && actionType !== 'utility' && !job.payload?.force_now) {
         const cached = accountStatusCache.get(accId)
         if (cached?.created_at) {
           const ageDays = Math.floor((Date.now() - new Date(cached.created_at).getTime()) / 86400000)
@@ -464,8 +416,6 @@ async function poll() {
               nickWarmupBlockedLog.add(warmupKey)
               console.log(`[POLLER] Nick ${accId.slice(0,8)} warm-up blocked: ${warmup.reason} (suppressing further logs)`)
             }
-            _dbgSkip(job, `warmup ${warmup.reason}`)
-            updateJobStatus(job.id, 'done', { skipped: true, reason: `warmup_${warmup.reason.replace(/\s+/g, '_')}` }).catch(() => {})
             continue
           }
         }
@@ -481,7 +431,8 @@ async function poll() {
       }
       const kpiField = KPI_FIELD_MAP[job.type]
       const campaignIdForKpi = job.payload?.campaign_id
-      if (accId && campaignIdForKpi && kpiField) {
+      // force_now bypasses KPI gate (admin run regardless of daily target met).
+      if (accId && campaignIdForKpi && kpiField && !job.payload?.force_now) {
         try {
           // VN date (UTC+7) — must match kpi-calculator.js + activity-logger.js
           const today = new Date(Date.now() + 7 * 3600000).toISOString().split('T')[0]
@@ -498,8 +449,6 @@ async function poll() {
             const hasTargets = (kpiRow.target_likes || 0) > 0 || (kpiRow.target_comments || 0) > 0
             if (kpiRow.kpi_met && hasTargets) {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} KPI met today — yielding slot`)
-              _dbgSkip(job, 'KPI met today')
-              updateJobStatus(job.id, 'done', { skipped: true, reason: 'kpi_met_today' }).catch(() => {})
               continue
             }
             // Action-specific check
@@ -509,8 +458,6 @@ async function poll() {
             const done = kpiRow[doneField] || 0
             if (tgt > 0 && done >= tgt) {
               console.log(`[POLLER] Nick ${accId.slice(0,8)} ${kpiField} KPI met (${done}/${tgt}) — skipping ${job.type}`)
-              _dbgSkip(job, `KPI ${kpiField} ${done}/${tgt} met`)
-              updateJobStatus(job.id, 'done', { skipped: true, reason: `kpi_met_${kpiField}` }).catch(() => {})
               continue
             }
           }
@@ -530,30 +477,62 @@ async function poll() {
       }
 
       // Per-nick hourly rate limit (max 50 actions/hour across all types)
-      if (accId) {
+      // force_now bypasses (admin manual override).
+      if (accId && !job.payload?.force_now) {
         const hourly = nickHourlyActions.get(accId)
         if (hourly) {
           if (Date.now() > hourly.resetAt) {
             nickHourlyActions.set(accId, { count: 0, resetAt: Date.now() + 3600000 })
           } else if (hourly.count >= MAX_HOURLY_ACTIONS) {
             console.log(`[POLLER] Nick ${accId.slice(0,8)} hit hourly limit (${MAX_HOURLY_ACTIONS}), skipping`)
-            _dbgSkip(job, `hourly ${hourly.count}/${MAX_HOURLY_ACTIONS}`)
             continue
           }
         }
       }
 
-      // 2026-05-04: REMOVED session-cap + rest-period gates.
-      // User wants smooth continuous comment activity, not "work 25-45min →
-      // rest 45-120min" cycle that creates visible quiet windows. Human-like
-      // pacing is now enforced AT THE ACTION LEVEL (15-45s between likes,
-      // 60-120s "distracted" pauses 25% of time, in nurture handler) plus
-      // daily budget cap and hourly action ceiling — those alone give a
-      // smoother + still-safe traffic pattern.
-      // Keep nickSessionStart for reporting only (no force-rest).
+      // Per-nick session duration cap (25-45min random continuous work)
+      if (accId) {
+        const sessionStart = nickSessionStart.get(accId)
+        // Each nick gets a random session max on first check
+        if (!nickSessionStart.has(`${accId}_max`)) nickSessionStart.set(`${accId}_max`, randSessionMax())
+        const sessionMax = nickSessionStart.get(`${accId}_max`)
+        if (sessionStart && (Date.now() - sessionStart) > sessionMax) {
+          const durMin = Math.round((Date.now() - sessionStart) / 60000)
+          console.log(`[POLLER] Nick ${accId.slice(0,8)} session ${durMin}min, forcing rest`)
+          nickSessionStart.delete(accId)
+          nickSessionStart.delete(`${accId}_max`)
+          const restMs = randRestMs()
+          nickRestUntil.set(accId, { until: Date.now() + restMs, durationMin: Math.round(restMs / 60000) })
+          try { const { releaseSession } = require('../browser/session-pool'); releaseSession(accId) } catch {}
+          continue
+        }
+      }
+
+      // Per-nick rest period (20-45min random gap by default).
+      // Bypass: payload.force_now=true skips this single job past the rest
+      // gate (manual admin emit / smoke tests). Other jobs for the same nick
+      // still respect the rest.
+      if (accId && !job.payload?.force_now) {
+        const rest = nickRestUntil.get(accId)
+        if (rest && Date.now() < rest.until) {
+          const remainMin = Math.round((rest.until - Date.now()) / 60000)
+          if (!nickSessionStart.has(`${accId}_restlog`) || Date.now() - nickSessionStart.get(`${accId}_restlog`) > 300000) {
+            console.log(`[POLLER] Nick ${accId.slice(0,8)} resting (${remainMin}/${rest.durationMin}min)`)
+            nickSessionStart.set(`${accId}_restlog`, Date.now())
+          }
+          continue
+        }
+        if (rest && Date.now() >= rest.until) nickRestUntil.delete(accId)
+      } else if (accId && job.payload?.force_now) {
+        console.log(`[POLLER] Nick ${accId.slice(0,8)} force_now → bypass rest gate for job ${job.id?.slice(0,8)}`)
+      }
 
       // Per-nick budget pre-check (avoid claiming if daily limit already reached)
-      if (actionType && accId) {
+      // 2026-05-02: force_now bypasses budget too (same as rest). Stuck-loop
+      // pattern observed: force_now bypass rest → budget check fails → skip
+      // → job stays pending → next 15s poll re-checks → loop. Whole point of
+      // force_now is "run this regardless of normal gates".
+      if (actionType && accId && !job.payload?.force_now) {
         const budgetOk = await checkBudgetBeforeClaim(accId, actionType)
         if (!budgetOk) {
           // Suppress spam: only log once per nick+action until reset
@@ -562,8 +541,6 @@ async function poll() {
             nickBudgetExhaustedLog.add(logKey)
             console.log(`[POLLER] Nick ${accId.slice(0,8)} budget exhausted for ${actionType}, skipping (further logs suppressed until reset)`)
           }
-          _dbgSkip(job, `budget exhausted ${actionType}`)
-          updateJobStatus(job.id, 'done', { skipped: true, reason: `budget_exhausted_${actionType}` }).catch(() => {})
           continue
         }
       }
@@ -601,6 +578,8 @@ async function poll() {
         if (accId) pool.release(accId, job.id)
         continue
       }
+
+      hasClaimedAny = true
 
       // Set pessimistic cooldown + timestamps AT CLAIM TIME (not after completion)
       // This prevents next poll from picking up another job for this nick
@@ -684,7 +663,7 @@ async function poll() {
     if (pollFails === 1 || pollFails % 6 === 0) {
       console.error(`[POLL ERROR] ${err.message} (failed ${pollFails}x, retrying every ${POLL_MS / 1000}s)`)
     }
-    return
+    return false
   } finally {
     _polling = false
   }
@@ -692,6 +671,7 @@ async function poll() {
     console.log(`[POLLER] Reconnected after ${pollFails} poll failures`)
     pollFails = 0
   }
+  return hasClaimedAny
 }
 
 async function executeJob(job) {
@@ -714,8 +694,8 @@ async function executeJob(job) {
       const { data: camp } = await supabase.from('campaigns')
         .select('status').eq('id', job.payload.campaign_id).single()
       if (camp && !['active', 'running'].includes(camp.status)) {
-        console.log(`[JOB] Campaign ${job.payload.campaign_id} is ${camp.status}, skipping job`)
-        await updateJobStatus(job.id, 'done', { skipped: true, reason: `campaign_${camp.status}` })
+        console.log(`[JOB] Campaign ${job.payload.campaign_id} is ${camp.status} — CANCELLED job ${job.id}`)
+        await updateJobStatus(job.id, 'cancelled', null, `campaign_${camp.status}`)
         return
       }
     }
@@ -814,10 +794,7 @@ async function executeJob(job) {
       job_id: job.id,
       account_id: job.payload?.account_id || null,
       campaign_id: job.payload?.campaign_id || null,
-      // VPS schema currently does not accept SKIP as a job_failures.error_type.
-      // Keep the skip reason in error_message/result, but avoid masking the
-      // real handler outcome with a failed diagnostics insert.
-      error_type: classified.type === 'SKIP' ? 'UNKNOWN' : classified.type,
+      error_type: classified.type,
       error_message: err.message,
       error_stack: err.stack?.substring(0, 2000),
       handler_name: handlerKey,
@@ -877,15 +854,15 @@ async function executeJob(job) {
         try {
           const { data: existing } = await supabase.from('jobs')
             .select('id')
-            .eq('type', 'check_health')
+            .eq('type', 'check-health')
             .eq('payload->>account_id', job.payload.account_id)
             .in('status', ['pending', 'claimed', 'running'])
             .limit(1)
           if (!existing?.length) {
             await supabase.from('jobs').insert({
-              type: 'check_health',
+              type: 'check-health',
               priority: 1, // CRITICAL
-              payload: { account_id: job.payload.account_id, action: 'check_health', auto_refresh: true },
+              payload: { account_id: job.payload.account_id, action: 'check-health', auto_refresh: true },
               status: 'pending',
               scheduled_at: new Date(Date.now() + 60000).toISOString(), // 1 phut sau
               created_by: job.created_by,
@@ -1054,12 +1031,12 @@ async function updateJobStatus(id, status, result = null, error = null) {
 let _staleRecoveryFailCount = 0
 let _lastStaleWarnAt = 0
 
-async function recoverStaleJobs() {
+async function recoverStaleJobs(isStartup = false) {
   if (useApi()) {
     try {
-      const result = await api.recoverStaleJobs()
+      const result = await api.recoverStaleJobs({ is_startup: isStartup, agent_id: AGENT_ID })
       if (result.recovered > 0) {
-        console.log(`[POLLER] Recovered ${result.recovered}/${result.total_stale} stale jobs via API`)
+        console.log(`[POLLER] Recovered ${result.recovered}/${result.total_stale} stale jobs via API (startup: ${isStartup})`)
       }
       // Reset fail counter on success
       _staleRecoveryFailCount = 0
@@ -1077,12 +1054,21 @@ async function recoverStaleJobs() {
   }
 
   // Direct DB fallback
-  const staleTime = new Date(Date.now() - 10 * 60 * 1000).toISOString()
-  const { data: stale } = await supabase
+  let query = supabase
     .from('jobs')
     .select('id, type, status, started_at')
     .in('status', ['claimed', 'running'])
-    .lt('started_at', staleTime)
+
+  if (isStartup) {
+    // Lúc khởi động: Giải phóng ngay toàn bộ các job bị kẹt của chính AGENT này
+    query = query.eq('agent_id', AGENT_ID)
+    console.log(`[POLLER] Khởi động: Đang quét giải phóng các job bị kẹt của agent ${AGENT_ID}...`)
+  } else {
+    const staleTime = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    query = query.lt('started_at', staleTime)
+  }
+
+  const { data: stale } = await query
 
   for (const job of (stale || [])) {
     const nextAttempt = (job.attempt || 0) + 1
@@ -1293,29 +1279,42 @@ async function checkSharedPostSwarm() {
   }
 }
 
+let _pollIntervalTimeout = null
+
+async function runAdaptivePoll() {
+  if (stopPoller._isStopped) return
+
+  let delayMs = POLL_MS
+  if (_consecutiveEmptyPolls >= 3) {
+    delayMs = 45000 // 45 giây nếu 3 chu kỳ liên tiếp trống rỗng (không có job)
+  }
+
+  _pollIntervalTimeout = setTimeout(async () => {
+    try {
+      const hasJob = await poll()
+      if (hasJob) {
+        _consecutiveEmptyPolls = 0
+      } else {
+        _consecutiveEmptyPolls++
+      }
+    } catch (err) {
+      _consecutiveEmptyPolls++
+    }
+    runAdaptivePoll()
+  }, delayMs)
+}
+
 function startPoller() {
   const userInfo = AGENT_USER_ID ? ` | user: ${process.env.AGENT_USER_EMAIL || AGENT_USER_ID}` : ''
   const totalGB = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1)
   const freeGB = (os.freemem() / 1024 / 1024 / 1024).toFixed(1)
   const mode = useApi() ? 'REST API' : 'Direct DB'
   console.log(`[POLLER] Starting — max ${MAX_CONCURRENT} concurrent nicks (auto-scale, ${freeGB}/${totalGB}GB RAM), mode: ${mode}${userInfo}`)
-  recoverStaleJobs().then(() => poll())
-  // Self-pacing setTimeout chain instead of setInterval — each tick picks
-  // its own random delay in [POLL_MIN_MS, POLL_MAX_MS]. Stored as `pollInterval`
-  // so the existing shutdown path that does `clearInterval(pollInterval)`
-  // still nulls it out (clearTimeout is safe on the same handle, and
-  // clearInterval on a Timeout object also works in Node).
-  let pollInterval = null
-  function scheduleNextPoll() {
-    const span = POLL_MAX_MS - POLL_MIN_MS
-    const delay = POLL_MIN_MS + Math.floor(Math.random() * (span + 1))
-    pollInterval = setTimeout(async () => {
-      try { await poll() } catch (err) { console.warn(`[POLL] tick error: ${err.message}`) }
-      scheduleNextPoll()
-    }, delay)
-  }
-  scheduleNextPoll()
-  console.log(`[POLLER] Job claim cadence: random ${Math.round(POLL_MIN_MS/1000)}-${Math.round(POLL_MAX_MS/1000)}s per tick`)
+  
+  stopPoller._isStopped = false
+  recoverStaleJobs(true).then(() => {
+    runAdaptivePoll()
+  })
   const recoverInterval = setInterval(recoverStaleJobs, 2 * 60 * 1000)
 
   // ── Group Opportunity React: check pending opportunities every 5 min ──
@@ -1327,7 +1326,6 @@ function startPoller() {
   // ── Idle nick auto-assign: every 5 min, find healthy nicks with no recent jobs
   //    but assigned to a running campaign_role → queue a task for them.
   const idleAssignInterval = setInterval(async () => {
-    return // DISABLE idle auto-assign: Conflicts with hermes-orchestrator
     try {
       const axios = require('axios')
       const API_URL = process.env.API_URL || _pollerCfg.API_URL || 'http://localhost:3000'
@@ -1393,7 +1391,8 @@ function startPoller() {
   // Export stop function for agent.js shutdown handler
   stopPoller = async () => {
     console.log('[POLLER] Stopping...')
-    clearInterval(pollInterval)
+    stopPoller._isStopped = true
+    if (_pollIntervalTimeout) clearTimeout(_pollIntervalTimeout)
     clearInterval(recoverInterval)
     clearInterval(opportunityInterval)
     clearInterval(idleAssignInterval)
