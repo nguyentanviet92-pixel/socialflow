@@ -58,6 +58,7 @@ export default function CampaignForm() {
   })
 
   // === NEW STATES ===
+  const [targetGroupsMode, setTargetGroupsMode] = useState('custom') // 'custom' (Dán nhóm) vs 'auto' (AI tự quét)
   const [targetGroupsText, setTargetGroupsText] = useState('')
   const [brandProducts, setBrandProducts] = useState([{ name: '', description: '' }])
 
@@ -117,7 +118,13 @@ export default function CampaignForm() {
         cron_expression: existing.cron_expression || '0 9 * * *',
       })
       setSelectedAccountIds(existing.account_ids || [])
-      setTargetGroupsText((existing.target_groups || []).join('\n'))
+      if (existing.target_groups && existing.target_groups.length > 0) {
+        setTargetGroupsMode('custom')
+        setTargetGroupsText(existing.target_groups.join('\n'))
+      } else {
+        setTargetGroupsMode('auto')
+        setTargetGroupsText('')
+      }
 
       if (existing.brand_config) {
         setAdsEnabled(true)
@@ -334,7 +341,7 @@ export default function CampaignForm() {
         ai_plan_confirmed: planConfirmed,
         brand_config: brandPayload,
         ad_mode: brandPayload ? 'ad_enabled' : 'normal',
-        target_groups: targetGroupsText.split('\n').map(g => g.trim()).filter(Boolean),
+        target_groups: targetGroupsMode === 'custom' ? targetGroupsText.split('\n').map(g => g.trim()).filter(Boolean) : [],
       }
       let cid
       if (isEdit) { await api.put(`/campaigns/${id}`, payload); cid = id }
@@ -420,18 +427,52 @@ export default function CampaignForm() {
             />
           </div>
           <div>
-            <label className="text-xs font-medium text-app-muted mb-1 block flex justify-between items-center">
-              <span>Danh sách nhóm chỉ định <span className="text-app-muted/50">(Tùy chọn)</span></span>
-              <span className="text-[10px] text-app-dim font-mono-ui">Mỗi dòng một nhóm</span>
-            </label>
-            <textarea
-              value={targetGroupsText}
-              onChange={e => { setTargetGroupsText(e.target.value); resetPlan() }}
-              rows={3}
-              placeholder="Dán link hoặc ID nhóm Facebook, ví dụ:&#10;https://www.facebook.com/groups/vpsvietnam&#10;1234567890"
-              className="w-full border border-app-border rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono bg-app-base/10"
-            />
-            <p className="text-[10px] text-app-dim mt-1">Nếu bỏ trống, hệ thống sẽ tự động quét nhóm theo chủ đề hoặc nhóm đã tham gia.</p>
+            <label className="text-xs font-medium text-app-muted mb-2 block">Cấu hình nhóm tương tác</label>
+            <div className="grid grid-cols-2 gap-2 mb-3 bg-app-base/40 p-1 rounded-xl border border-app-border/40">
+              <button
+                type="button"
+                onClick={() => { setTargetGroupsMode('custom'); resetPlan() }}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  targetGroupsMode === 'custom'
+                    ? 'bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 text-purple-200 shadow-sm'
+                    : 'text-app-muted hover:text-app-primary hover:bg-app-hover/30 border border-transparent'
+                }`}
+              >
+                🎯 Dán URL/ID nhóm chỉ định (Khuyên dùng)
+              </button>
+              <button
+                type="button"
+                onClick={() => { setTargetGroupsMode('auto'); resetPlan() }}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  targetGroupsMode === 'auto'
+                    ? 'bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 text-purple-200 shadow-sm'
+                    : 'text-app-muted hover:text-app-primary hover:bg-app-hover/30 border border-transparent'
+                }`}
+              >
+                🔍 Cho AI tự quét nhóm
+              </button>
+            </div>
+
+            {targetGroupsMode === 'custom' ? (
+              <div className="space-y-1">
+                <textarea
+                  value={targetGroupsText}
+                  onChange={e => { setTargetGroupsText(e.target.value); resetPlan() }}
+                  rows={3}
+                  placeholder="Dán link hoặc ID nhóm Facebook, ví dụ:&#10;https://www.facebook.com/groups/vpsvietnam&#10;1234567890"
+                  className="w-full border border-app-border rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono bg-app-base/10"
+                />
+                <p className="text-[10px] text-app-dim">Agent sẽ chỉ tham gia và tương tác trong các nhóm được liệt kê ở trên.</p>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 p-3 bg-orange-500/5 border border-orange-500/25 rounded-xl">
+                <span className="text-orange-500 text-xs mt-0.5 shrink-0">⚠️</span>
+                <p className="text-[10px] text-orange-200 leading-relaxed">
+                  <strong>Cảnh báo an toàn:</strong> Khi cho AI tự quét nhóm, Agent sẽ tự động tìm kiếm và xin tham gia nhóm mới dựa trên chủ đề chiến dịch.
+                  Việc tự động tham gia nhóm lạ liên tục có thể làm gia tăng rủi ro bị Facebook đánh dấu checkpoint tài khoản. Hãy chắc chắn rằng tài khoản của bạn đã được nuôi đủ độ tin cậy.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -739,26 +780,32 @@ export default function CampaignForm() {
                             {plan.note && (
                               <p className="text-[10px] italic text-purple-700">{plan.note}</p>
                             )}
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-2 pt-1">
                               {[
-                                { key: 'browse', label: '👀 Lướt feed' },
-                                { key: 'like', label: '👍 Like' },
-                                { key: 'comment', label: '💬 Comment' },
-                                { key: 'opportunity_comment', label: '📣 Quảng cáo' },
-                                { key: 'scout', label: '🔍 Thám dò nhóm' },
-                                { key: 'friend_request', label: '👥 Kết bạn' },
-                                { key: 'post', label: '📝 Đăng bài' },
-                              ].map(({ key, label }) => (
-                                <label key={key} className="flex items-center justify-between gap-2 text-[10px]">
-                                  <span className="text-app-muted">{label}</span>
+                                { key: 'browse',              label: '👀 Lướt feed',         max: 50,  unit: 'lần/ngày' },
+                                { key: 'like',                label: '👍 Like bài',          max: 200, unit: 'bài/ngày' },
+                                { key: 'comment',             label: '💬 Comment',           max: 100, unit: 'bài/ngày' },
+                                { key: 'opportunity_comment', label: '📣 Quảng cáo tự nhiên', max: 50,  unit: 'lần/ngày' },
+                                { key: 'scout',               label: '🔍 Thám dò nhóm',      max: 50,  unit: 'nhóm/ngày' },
+                                { key: 'friend_request',      label: '🤝 Kết bạn',           max: 100, unit: 'người/ngày' },
+                                { key: 'post',                label: '📝 Đăng bài',          max: 10,  unit: 'bài/ngày' },
+                              ].map(({ key, label, max, unit }) => (
+                                <div key={key} className="space-y-1 py-1">
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-app-muted font-medium">{label}</span>
+                                    <span className="text-purple-300 font-bold font-mono-ui bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded text-[10px]">
+                                      {db[key] ?? 0} {unit}
+                                    </span>
+                                  </div>
                                   <input
-                                    type="number"
+                                    type="range"
                                     min={0}
+                                    max={max}
                                     value={db[key] ?? 0}
                                     onChange={e => updateBudget(key, e.target.value)}
-                                    className="w-14 border border-app-border rounded px-1.5 py-0.5 text-[10px] text-right"
+                                    className="w-full h-1 bg-app-elevated rounded-lg appearance-none cursor-pointer accent-purple-600 focus:outline-none"
                                   />
-                                </label>
+                                </div>
                               ))}
                             </div>
                           </div>
