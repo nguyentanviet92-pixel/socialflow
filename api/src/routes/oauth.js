@@ -41,7 +41,7 @@ module.exports = async (fastify) => {
     } = req.query
 
     // Return beautiful self-contained HTML page
-    reply.type('text/html').send(renderAuthPage({
+    return reply.type('text/html').send(renderAuthPage({
       client_id,
       redirect_uri,
       response_type,
