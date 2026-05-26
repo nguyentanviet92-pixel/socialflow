@@ -329,6 +329,119 @@ function ModelSection() {
 }
 
 // ───────────────────────────────────────────────────────────
+// SECTION: ChatGPT / OAuth — instruction and credentials for custom GPT actions
+// ───────────────────────────────────────────────────────────
+function OauthSection() {
+  const domain = window.location.origin
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text)
+    toast.success(`Đã sao chép ${label}`)
+  }
+
+  return (
+    <div className="p-6 font-mono-ui max-w-2xl">
+      <h2 className="text-app-primary text-base mb-1">ChatGPT / Custom GPT Integration</h2>
+      <p className="text-app-muted text-xs mb-6">
+        Cấu hình để ChatGPT hoặc Custom GPTs truy cập trực tiếp vào API của SocialFlow thông qua luồng bảo mật OAuth 2.0.
+      </p>
+
+      <div className="space-y-6">
+        {/* Connection status */}
+        <div className="p-4 rounded-lg flex items-center justify-between" style={{ background: 'var(--hermes-dim)', border: '1px solid var(--hermes-fade)' }}>
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">⚡</span>
+            <div>
+              <div className="text-sm font-semibold text-hermes">OAuth 2.0 Status: ACTIVE</div>
+              <div className="text-[10px] text-app-muted">Sẵn sàng nhận kết nối từ OpenAI / Custom GPTs</div>
+            </div>
+          </div>
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-950/30 text-emerald-400 border border-emerald-500/20">
+            ● Đang chạy
+          </span>
+        </div>
+
+        {/* Credentials table */}
+        <div className="space-y-4">
+          <div className="text-app-primary text-sm font-semibold mb-2">Thông số cấu hình trên ChatGPT Action</div>
+          
+          <div className="space-y-3">
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] uppercase text-app-muted">Client ID</label>
+                <button onClick={() => copyToClipboard('socialflow', 'Client ID')} className="text-[10px] text-hermes hover:underline">Copy</button>
+              </div>
+              <input
+                type="text"
+                readOnly
+                value="socialflow"
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] uppercase text-app-muted">Client Secret</label>
+                <button onClick={() => copyToClipboard('socialflow-secret', 'Client Secret')} className="text-[10px] text-hermes hover:underline">Copy</button>
+              </div>
+              <input
+                type="text"
+                readOnly
+                value="socialflow-secret"
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] uppercase text-app-muted">Authorization URL</label>
+                <button onClick={() => copyToClipboard(`${domain}/oauth/authorize`, 'Authorization URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+              </div>
+              <input
+                type="text"
+                readOnly
+                value={`${domain}/oauth/authorize`}
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] uppercase text-app-muted">Token URL</label>
+                <button onClick={() => copyToClipboard(`${domain}/oauth/token`, 'Token URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+              </div>
+              <input
+                type="text"
+                readOnly
+                value={`${domain}/oauth/token`}
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Step-by-step instruction */}
+        <div className="p-4 bg-app-elevated rounded border border-app-border space-y-2">
+          <div className="text-xs font-semibold text-app-primary">📖 Hướng dẫn cấu hình Custom GPT:</div>
+          <ol className="list-decimal list-inside text-[11px] text-app-muted space-y-1 leading-relaxed">
+            <li>Truy cập mục <strong>My GPTs</strong> &rarr; <strong>Create a GPT</strong> &rarr; chọn tab <strong>Configure</strong> &rarr; cuộn xuống dưới chọn <strong>Create new Action</strong>.</li>
+            <li>Tại phần <strong>Authentication</strong>, chọn <strong>OAuth</strong>.</li>
+            <li>Copy và paste 4 thông số tương ứng ở bảng trên vào form của ChatGPT.</li>
+            <li>Tại mục <strong>Authentication Type</strong>, chọn <strong>Basic</strong> (hoặc <strong>Post</strong>).</li>
+            <li>Bấm <strong>Save</strong> để hoàn tất. Khi bạn hoặc khách hàng trò chuyện với Custom GPT này, ChatGPT sẽ hiển thị thông báo yêu cầu đăng nhập tài khoản SocialFlow của bạn thông qua màn hình Ủy quyền bảo mật.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ───────────────────────────────────────────────────────────
 // SECTION 2: Skills (reuse SkillsEditor + Create + Delete)
 // ───────────────────────────────────────────────────────────
 function SkillsSection() {
@@ -1381,6 +1494,7 @@ function AgentPlaywrightSection() {
 
 const SECTIONS = [
   { key: 'model',     label: 'Model' },
+  { key: 'oauth',     label: 'ChatGPT / OAuth' },
   { key: 'per_task',  label: 'Per-task model' },
   { key: 'agent_pw',  label: 'Agent Playwright' },
   { key: 'skills',    label: 'Skills' },
@@ -1430,6 +1544,7 @@ export default function HermesSettings() {
 
       <div className="flex-1 overflow-auto">
         {section === 'model'     && <ModelSection />}
+        {section === 'oauth'     && <OauthSection />}
         {section === 'per_task'  && <PerTaskModelSection />}
         {section === 'agent_pw'  && <AgentPlaywrightSection />}
         {section === 'skills'    && <SkillsSection />}
