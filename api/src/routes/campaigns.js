@@ -1092,6 +1092,62 @@ module.exports = async (fastify) => {
     return { ok: true, applied_at: new Date().toISOString() }
   })
 
+  // POST /campaigns/:id/generate-goal — Generate goal text from hermes_context
+  fastify.post('/:id/generate-goal', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { data: campaign } = await supabase.from('campaigns')
+      .select('id, name, owner_id').eq('id', req.params.id).eq('owner_id', req.user.id).single()
+    if (!campaign) return reply.code(404).send({ error: 'Campaign not found' })
+
+    const { ctx } = req.body // hermes_context fields
+    if (!ctx) return reply.code(400).send({ error: 'hermes_context required' })
+
+    const systemPrompt = `Bạn là một chuyên gia Prompt Engineer và Marketing Coordinator hàng đầu.
+Nhiệm vụ của bạn là viết một bản "Mục tiêu & Hướng dẫn cho Hermes" cực kỳ chi tiết, mạch lạc, dễ hiểu dựa trên thông tin sản phẩm có sẵn.
+Bản hướng dẫn này sẽ được lưu làm Goal (Prompt hệ thống) của AI Agent (Hermes) để nó biết cách đi seeding, comment và tương tác trong các nhóm Facebook.
+
+Hãy sử dụng cấu trúc mẫu sau (chọn lọc thông tin điền vào cho khớp, viết chi tiết rõ ràng):
+
+Quảng bá [Tên sản phẩm] với giá [Giá] cho đối tượng [Đối tượng mục tiêu].
+Tone [Tone giao tiếp].
+Điểm mạnh ưu tiên giới thiệu:
+- [Điểm mạnh 1]
+- [Điểm mạnh 2]
+...
+Cách tiếp cận & CTA gợi ý:
+- [CTA gợi ý]
+Tránh hoàn toàn (Rất quan trọng):
+- [Tránh 1]
+- [Tránh 2]
+...
+Thành công định nghĩa bằng: [Mục tiêu/Hành động mong muốn]`
+
+    const userPrompt = `Dưới đây là thông tin sản phẩm và cấu hình:
+- Tên sản phẩm: ${ctx.product_name || 'chưa có'}
+- Giá: ${ctx.price || 'chưa có'}
+- Điểm mạnh: ${(ctx.key_features || []).join(', ') || 'chưa có'}
+- Đối tượng mục tiêu: ${ctx.target_audience || 'chưa có'}
+- Tone giao tiếp: ${ctx.tone || 'thân thiện, tư vấn'}
+- Tránh: ${(ctx.avoid || []).join(', ') || 'chưa có'}
+- CTA gợi ý: ${ctx.cta || 'chưa có'}
+- Ví dụ câu mẫu giọng điệu:
+${(ctx.brand_voice_examples || []).map((ex, i) => `  ${i+1}. "${ex}"`).join('\n') || 'chưa có'}
+
+Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việt một cách tự nhiên, chuyên nghiệp và đầy đủ nhất.`
+
+    try {
+      const { getOrchestratorForUser } = require('../services/ai/orchestrator')
+      const orchestrator = await getOrchestratorForUser(req.user.id, supabase)
+      const res = await orchestrator.call('caption_gen', [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ])
+      return { text: res.text }
+    } catch (err) {
+      req.log.error({ err }, 'Generate campaign goal failed')
+      return reply.code(500).send({ error: `Không thể sinh mục tiêu: ${err.message}` })
+    }
+  })
+
   // DELETE /campaigns/:id
   fastify.delete('/:id', { preHandler: fastify.authenticate }, async (req, reply) => {
     const { error } = await supabase.from('campaigns').delete().eq('id', req.params.id).eq('owner_id', req.user.id)

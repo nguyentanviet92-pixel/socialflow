@@ -93,6 +93,29 @@ export default function CampaignHermesEditor() {
     brand_voice_examples: [],
   })
   const [exampleInput, setExampleInput] = useState('')
+  const [generatingGoal, setGeneratingGoal] = useState(false)
+
+  const handleGenerateGoal = async () => {
+    if (!ctx.product_name) {
+      toast.error('Nhập tên sản phẩm ở phần 2 trước để AI có thông tin viết!')
+      return
+    }
+    setGeneratingGoal(true)
+    const t = toast.loading('AI đang phân tích sản phẩm và viết hướng dẫn...')
+    try {
+      const res = await api.post(`/campaigns/${id}/generate-goal`, { ctx })
+      if (res.data?.text) {
+        setGoal(res.data.text)
+        toast.success('Đã tự động tạo hướng dẫn thành công!', { id: t })
+      } else {
+        toast.error('Không nhận được phản hồi từ AI', { id: t })
+      }
+    } catch (err) {
+      toast.error(`Lỗi sinh hướng dẫn: ${err.response?.data?.error || err.message}`, { id: t })
+    } finally {
+      setGeneratingGoal(false)
+    }
+  }
 
   useEffect(() => {
     if (!campaign) return
@@ -157,7 +180,27 @@ export default function CampaignHermesEditor() {
       <div className="flex-1 overflow-auto p-6 max-w-3xl">
         {/* SECTION 1 — Goal */}
         <section className="mb-8">
-          <h3 className="text-app-primary text-base mb-1">1. Mục tiêu & Hướng dẫn cho Hermes</h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-app-primary text-base">1. Mục tiêu & Hướng dẫn cho Hermes</h3>
+            <button
+              onClick={handleGenerateGoal}
+              disabled={generatingGoal}
+              className="text-xs px-3 py-1 bg-app-elevated text-hermes flex items-center gap-1.5 rounded-lg font-medium cursor-pointer transition-all duration-200 hover:scale-102 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: 'linear-gradient(135deg, var(--hermes-dim), rgba(139, 92, 246, 0.15))',
+                border: '1px solid var(--hermes-fade)',
+                boxShadow: '0 2px 8px rgba(6, 182, 212, 0.1)',
+              }}
+            >
+              {generatingGoal ? (
+                <>
+                  <Loader className="animate-spin" size={12} /> Đang viết...
+                </>
+              ) : (
+                '✨ AI Tự viết'
+              )}
+            </button>
+          </div>
           <p className="text-app-muted text-xs mb-3">
             Hermes đọc đoạn này khi review chiến dịch + khi sinh comment.
             Viết rõ mục đích, đối tượng, ràng buộc.
