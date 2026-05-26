@@ -1095,17 +1095,22 @@ module.exports = async (fastify) => {
   // POST /campaigns/:id/generate-goal — Generate goal text from hermes_context
   fastify.post('/:id/generate-goal', { preHandler: fastify.authenticate }, async (req, reply) => {
     const { data: campaign } = await supabase.from('campaigns')
-      .select('id, name, owner_id').eq('id', req.params.id).eq('owner_id', req.user.id).single()
+      .select('id, name, owner_id, topic, mission, requirement, brand_config')
+      .eq('id', req.params.id)
+      .eq('owner_id', req.user.id)
+      .single()
     if (!campaign) return reply.code(404).send({ error: 'Campaign not found' })
 
     const { ctx } = req.body // hermes_context fields
     if (!ctx) return reply.code(400).send({ error: 'hermes_context required' })
 
     const systemPrompt = `Bạn là một chuyên gia Prompt Engineer và Marketing Coordinator hàng đầu.
-Nhiệm vụ của bạn là viết một bản "Mục tiêu & Hướng dẫn cho Hermes" cực kỳ chi tiết, mạch lạc, dễ hiểu dựa trên thông tin sản phẩm có sẵn.
+Nhiệm vụ của bạn là viết một bản "Mục tiêu & Hướng dẫn cho Hermes" cực kỳ chi tiết, mạch lạc, dễ hiểu dựa trên thông tin sản phẩm và kế hoạch chiến dịch có sẵn.
 Bản hướng dẫn này sẽ được lưu làm Goal (Prompt hệ thống) của AI Agent (Hermes) để nó biết cách đi seeding, comment và tương tác trong các nhóm Facebook.
 
 Hãy sử dụng cấu trúc mẫu sau (chọn lọc thông tin điền vào cho khớp, viết chi tiết rõ ràng):
+
+Mục tiêu chiến dịch: [Mô tả mục tiêu chính dựa trên Kế hoạch/Nhiệm vụ chiến dịch]
 
 Quảng bá [Tên sản phẩm] với giá [Giá] cho đối tượng [Đối tượng mục tiêu].
 Tone [Tone giao tiếp].
@@ -1121,18 +1126,35 @@ Tránh hoàn toàn (Rất quan trọng):
 ...
 Thành công định nghĩa bằng: [Mục tiêu/Hành động mong muốn]`
 
-    const userPrompt = `Dưới đây là thông tin sản phẩm và cấu hình:
-- Tên sản phẩm: ${ctx.product_name || 'chưa có'}
+    // Build brand information from campaign.brand_config
+    const brandName = ctx.product_name || campaign.brand_config?.brand_name || 'chưa có'
+    const brandDesc = campaign.brand_config?.brand_description || 'chưa có'
+    const productsInfo = (campaign.brand_config?.products || []).map(p => `- ${p.name}: ${p.description}`).join('\n') || 'chưa có'
+    const campaignMission = campaign.mission || campaign.requirement || 'chưa có'
+
+    const userPrompt = `Dưới đây là thông tin kế hoạch chiến dịch và cấu hình sản phẩm:
+KẾ HOẠCH CHIẾN DỊCH:
+- Tên chiến dịch: ${campaign.name}
+- Chủ đề chiến dịch: ${campaign.topic || 'chưa có'}
+- Nhiệm vụ/Yêu cầu chiến dịch: ${campaignMission}
+
+THÔNG TIN THƯƠNG HIỆU & SẢN PHẨM:
+- Tên sản phẩm/thương hiệu chính: ${brandName}
+- Mô tả thương hiệu: ${brandDesc}
+- Danh sách sản phẩm:
+${productsInfo}
+
+CẤU HÌNH CHI TIẾT TỪ FRONTEND (NẾU CÓ):
 - Giá: ${ctx.price || 'chưa có'}
 - Điểm mạnh: ${(ctx.key_features || []).join(', ') || 'chưa có'}
 - Đối tượng mục tiêu: ${ctx.target_audience || 'chưa có'}
-- Tone giao tiếp: ${ctx.tone || 'thân thiện, tư vấn'}
+- Tone giao tiếp: ${ctx.tone || campaign.brand_config?.brand_voice || 'thân thiện, tư vấn'}
 - Tránh: ${(ctx.avoid || []).join(', ') || 'chưa có'}
-- CTA gợi ý: ${ctx.cta || 'chưa có'}
+- CTA gợi ý: ${ctx.cta || campaign.brand_config?.example_comment || 'chưa có'}
 - Ví dụ câu mẫu giọng điệu:
 ${(ctx.brand_voice_examples || []).map((ex, i) => `  ${i+1}. "${ex}"`).join('\n') || 'chưa có'}
 
-Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việt một cách tự nhiên, chuyên nghiệp và đầy đủ nhất.`
+Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việt một cách tự nhiên, chuyên nghiệp, đầy đủ và THỐNG NHẤT hoàn toàn với Kế hoạch Chiến dịch (Chủ đề & Nhiệm vụ).`
 
     try {
       const { getOrchestratorForUser } = require('../services/ai/orchestrator')

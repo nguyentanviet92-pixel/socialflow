@@ -120,15 +120,27 @@ export default function CampaignHermesEditor() {
   useEffect(() => {
     if (!campaign) return
     setGoal(campaign.goal || '')
+
+    const hCtx = campaign.hermes_context || {}
+    const bConf = campaign.brand_config || {}
+
+    // Key features fallback: use product names if products are listed in brand_config
+    let fallbackFeatures = []
+    if (Array.isArray(bConf.products) && bConf.products.length > 0) {
+      fallbackFeatures = bConf.products.map(p => p.name).filter(Boolean)
+    }
+
     setCtx({
-      product_name: campaign.hermes_context?.product_name || '',
-      price: campaign.hermes_context?.price || '',
-      key_features: campaign.hermes_context?.key_features || [],
-      target_audience: campaign.hermes_context?.target_audience || '',
-      tone: campaign.hermes_context?.tone || 'thân thiện, tư vấn',
-      avoid: campaign.hermes_context?.avoid || [],
-      cta: campaign.hermes_context?.cta || '',
-      brand_voice_examples: campaign.hermes_context?.brand_voice_examples || [],
+      product_name: hCtx.product_name || bConf.brand_name || '',
+      price: hCtx.price || '',
+      key_features: (Array.isArray(hCtx.key_features) && hCtx.key_features.length > 0)
+        ? hCtx.key_features
+        : fallbackFeatures,
+      target_audience: hCtx.target_audience || '',
+      tone: hCtx.tone || bConf.brand_voice || 'thân thiện, tư vấn',
+      avoid: hCtx.avoid || [],
+      cta: hCtx.cta || bConf.example_comment || '',
+      brand_voice_examples: hCtx.brand_voice_examples || [],
     })
   }, [campaign])
 
