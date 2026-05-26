@@ -308,18 +308,18 @@ function renderAuthPage({ client_id, redirect_uri, response_type, state, scope, 
       <div class="subtitle">Ủy quyền cho ChatGPT truy cập tài khoản SocialFlow</div>
     </div>
     
-    \${error ? `<div class="error-msg">\${error}</div>` : ''}
+    ${error ? '<div class="error-msg">' + error + '</div>' : ''}
     
     <form method="POST" action="/oauth/authorize">
-      <input type="hidden" name="client_id" value="\${client_id}">
-      <input type="hidden" name="redirect_uri" value="\${redirect_uri}">
-      <input type="hidden" name="response_type" value="\${response_type}">
-      <input type="hidden" name="state" value="\${state}">
-      <input type="hidden" name="scope" value="\${scope}">
+      <input type="hidden" name="client_id" value="${client_id}">
+      <input type="hidden" name="redirect_uri" value="${redirect_uri}">
+      <input type="hidden" name="response_type" value="${response_type}">
+      <input type="hidden" name="state" value="${state}">
+      <input type="hidden" name="scope" value="${scope}">
       
       <div class="form-group">
         <label>Email đăng nhập</label>
-        <input type="email" name="email" required placeholder="name@example.com" value="\${email || ''}">
+        <input type="email" name="email" required placeholder="name@example.com" value="${email || ''}">
       </div>
       
       <div class="form-group">
