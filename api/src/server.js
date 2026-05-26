@@ -55,6 +55,7 @@ app.register(require('./routes/user-settings'), { prefix: '/user-settings' })
 app.register(require('./routes/permissions'), { prefix: '/permissions' })
 app.register(require('./routes/leads'), { prefix: '/leads' })
 app.register(require('./routes/nurture'), { prefix: '/nurture' })
+app.register(require('./routes/oauth'), { prefix: '/oauth' })
 
 // Health check
 app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
