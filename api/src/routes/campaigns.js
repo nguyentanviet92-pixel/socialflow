@@ -349,6 +349,12 @@ module.exports = async (fastify) => {
 
     if (error) return reply.code(500).send({ error: error.message })
 
+    if (data) {
+      for (const c of data) {
+        c.target_groups = c.meta?.target_groups || []
+      }
+    }
+
     // Enrich with today's consolidated stats so the Mission Board doesn't
     // show hardcoded zeros. Source = nick_kpi_daily (the same table
     // /campaigns/:id/kpi-today reads) — keeps every view in sync.
@@ -399,6 +405,7 @@ module.exports = async (fastify) => {
       .single()
 
     if (error || !data) return reply.code(404).send({ error: 'Not found' })
+    data.target_groups = data.meta?.target_groups || []
     // Sort roles by sort_order
     if (data.campaign_roles) {
       data.campaign_roles.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
@@ -749,6 +756,11 @@ module.exports = async (fastify) => {
 
     if (!name) return reply.code(400).send({ error: 'name required' })
 
+    const finalMeta = {
+      ...(req.body.meta || {}),
+      target_groups: target_groups || []
+    }
+
     const { data, error } = await supabase.from('campaigns').insert({
       owner_id: req.user.id,
       name,
@@ -763,7 +775,7 @@ module.exports = async (fastify) => {
       ai_plan: ai_plan || null,
       ai_plan_confirmed: ai_plan_confirmed || false,
       target_pages: target_pages || [],
-      target_groups: target_groups || [],
+      target_groups: [], // Empty array to satisfy PostgreSQL uuid[] type
       target_profiles: target_profiles || [],
       content_ids: content_ids || [],
       rotation_mode: rotation_mode || 'sequential',
@@ -774,9 +786,14 @@ module.exports = async (fastify) => {
       nick_stagger_seconds: nick_stagger_seconds || 60,
       role_stagger_minutes: role_stagger_minutes || 30,
       campaign_active_days: campaign_active_days || [1,2,3,4,5,6,0],
+      meta: finalMeta,
     }).select().single()
 
     if (error) return reply.code(500).send({ error: error.message })
+
+    if (data) {
+      data.target_groups = data.meta?.target_groups || []
+    }
 
     // Auto-import target groups if provided
     if (Array.isArray(target_groups) && target_groups.length > 0) {
@@ -876,7 +893,26 @@ module.exports = async (fastify) => {
     ]
     const updates = {}
     for (const key of allowed) {
-      if (req.body[key] !== undefined) updates[key] = req.body[key]
+      if (req.body[key] !== undefined) {
+        if (key === 'target_groups') {
+          try {
+            const { data: currentCamp } = await supabase
+              .from('campaigns')
+              .select('meta')
+              .eq('id', req.params.id)
+              .single()
+            updates.meta = {
+              ...(currentCamp?.meta || {}),
+              target_groups: req.body.target_groups || []
+            }
+          } catch (metaErr) {
+            updates.meta = { target_groups: req.body.target_groups || [] }
+          }
+          updates.target_groups = []
+        } else {
+          updates[key] = req.body[key]
+        }
+      }
     }
 
     // Special handling: campaign_roles is a separate table — caller passes
@@ -918,9 +954,13 @@ module.exports = async (fastify) => {
 
     if (error) return reply.code(500).send({ error: error.message })
 
+    if (data) {
+      data.target_groups = data.meta?.target_groups || []
+    }
+
     // Auto-import target_groups if target_groups or account_ids is updated
     if (req.body.target_groups !== undefined || req.body.account_ids !== undefined) {
-      const targetGroups = req.body.target_groups !== undefined ? req.body.target_groups : (data.target_groups || [])
+      const targetGroups = req.body.target_groups !== undefined ? req.body.target_groups : (data.meta?.target_groups || [])
       const accountIds = req.body.account_ids !== undefined ? req.body.account_ids : (data.account_ids || [])
       if (Array.isArray(targetGroups) && targetGroups.length > 0 && accountIds.length > 0) {
         importTargetGroups(supabase, data.id, targetGroups, accountIds, req.body.topic || data.topic, req.user.id).catch(err =>
