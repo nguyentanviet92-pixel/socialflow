@@ -70,6 +70,10 @@ export default function CampaignForm() {
     example_comment: '',
     brand_voice: 'casual',
     ad_approach: 'soft_sell', // NEW
+    price: '',
+    target_audience: '',
+    avoid: '',
+    brand_voice_examples: '',
   })
 
   // Section 4: Accounts
@@ -94,6 +98,36 @@ export default function CampaignForm() {
   const [perNickPlan, setPerNickPlan] = useState({})
   const [perNickLoading, setPerNickLoading] = useState(false)
   const [expandedNick, setExpandedNick] = useState(null)  // account_id of nick whose mini-editor is open
+  const [generatingGoal, setGeneratingGoal] = useState(false)
+
+  const handleGenerateGoal = async () => {
+    if (!brand.brand_name?.trim()) {
+      toast.error('Nhập tên thương hiệu ở phần 3 trước để AI có thông tin viết mục tiêu!')
+      return
+    }
+    setGeneratingGoal(true)
+    const t = toast.loading('AI đang phân tích sản phẩm và viết mục tiêu chiến dịch...')
+    try {
+      const res = await api.post('/campaigns/generate-goal', {
+        name: form.name,
+        topic: form.topic,
+        mission: form.mission,
+        brand_config: brandPayload,
+        hermes_context: hermesContextPayload,
+      })
+      if (res.data?.text) {
+        setForm(f => ({ ...f, mission: res.data.text }))
+        resetPlan() // Reset AI plan since mission changed
+        toast.success('Đã tự động tạo mục tiêu thành công!', { id: t })
+      } else {
+        toast.error('Không nhận được phản hồi từ AI', { id: t })
+      }
+    } catch (err) {
+      toast.error(`Lỗi sinh hướng dẫn: ${err.response?.data?.error || err.message}`, { id: t })
+    } finally {
+      setGeneratingGoal(false)
+    }
+  }
 
   const { data: accounts = [] } = useQuery({
     queryKey: ['accounts'],
@@ -134,6 +168,10 @@ export default function CampaignForm() {
           example_comment: existing.brand_config.example_comment || '',
           brand_voice: existing.brand_config.brand_voice || 'casual',
           ad_approach: existing.brand_config.ad_approach || 'soft_sell',
+          price: existing.hermes_context?.price || '',
+          target_audience: existing.hermes_context?.target_audience || '',
+          avoid: Array.isArray(existing.hermes_context?.avoid) ? existing.hermes_context.avoid.join(', ') : '',
+          brand_voice_examples: Array.isArray(existing.hermes_context?.brand_voice_examples) ? existing.hermes_context.brand_voice_examples.join('\n') : '',
         })
         if (existing.brand_config.products && Array.isArray(existing.brand_config.products)) {
           setBrandProducts(existing.brand_config.products)
@@ -148,6 +186,10 @@ export default function CampaignForm() {
           example_comment: '',
           brand_voice: 'casual',
           ad_approach: 'soft_sell',
+          price: '',
+          target_audience: '',
+          avoid: '',
+          brand_voice_examples: '',
         })
         setBrandProducts([{ name: '', description: '' }])
       }
@@ -285,6 +327,18 @@ export default function CampaignForm() {
     })),
   } : null
 
+  // Build hermes_context payload (only if enabled)
+  const hermesContextPayload = adsEnabled && brand.brand_name.trim() ? {
+    product_name: brand.brand_name.trim(),
+    price: brand.price?.trim() || '',
+    key_features: brandProducts.filter(p => p.name.trim()).map(p => p.name.trim()),
+    target_audience: brand.target_audience?.trim() || brand.brand_description.trim() || '',
+    tone: brand.brand_voice,
+    avoid: brand.avoid ? brand.avoid.split(',').map(s => s.trim()).filter(Boolean) : [],
+    cta: brand.example_comment.trim(),
+    brand_voice_examples: brand.brand_voice_examples ? brand.brand_voice_examples.split('\n').map(s => s.trim()).filter(Boolean) : [],
+  } : null
+
   // === Mutations ===
   // 2026-05-05: previewMut now ALSO fetches per-nick plans in parallel — each
   // selected nick gets its own Hermes-generated daily budget reflecting age,
@@ -340,6 +394,7 @@ export default function CampaignForm() {
         ai_plan: finalPlan,
         ai_plan_confirmed: planConfirmed,
         brand_config: brandPayload,
+        hermes_context: hermesContextPayload,
         ad_mode: brandPayload ? 'ad_enabled' : 'normal',
         target_groups: targetGroupsMode === 'custom' ? targetGroupsText.split('\n').map(g => g.trim()).filter(Boolean) : [],
       }
@@ -478,9 +533,27 @@ export default function CampaignForm() {
 
         {/* === Section 2: Mission (MAIN INPUT) === */}
         <div className="bg-app-surface rounded border border-app-border p-5 space-y-3">
-          <div>
-            <h2 className="text-sm font-semibold text-app-primary">2. Mô tả mục tiêu *</h2>
-            <p className="text-xs text-app-muted mt-1">AI sẽ tự lên kế hoạch dựa trên mô tả này</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-app-primary">2. Mô tả mục tiêu *</h2>
+              <p className="text-xs text-app-muted mt-1">AI sẽ tự lên kế hoạch dựa trên mô tả này</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleGenerateGoal}
+              disabled={generatingGoal}
+              className="text-xs px-3 py-1 bg-app-elevated text-purple-400 flex items-center gap-1.5 rounded-lg font-medium cursor-pointer transition-all duration-200 hover:scale-102 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ border: '1px solid rgba(168, 85, 247, 0.3)' }}
+            >
+              {generatingGoal ? (
+                <>
+                  <Loader2 className="animate-spin text-purple-400 animate-duration-1000" size={12} />
+                  Đang viết...
+                </>
+              ) : (
+                '✨ AI Tự viết'
+              )}
+            </button>
           </div>
           <textarea
             value={form.mission}
@@ -522,15 +595,27 @@ export default function CampaignForm() {
                 </p>
               </div>
 
-              <div>
-                <label className="text-xs font-medium text-app-muted mb-1 block">Tên thương hiệu *</label>
-                <input
-                  type="text"
-                  value={brand.brand_name}
-                  onChange={e => { setBrand({ ...brand, brand_name: e.target.value }); resetPlan() }}
-                  placeholder="VD: OpenClaw"
-                  className="w-full border border-app-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-app-muted mb-1 block">Tên thương hiệu / sản phẩm *</label>
+                  <input
+                    type="text"
+                    value={brand.brand_name}
+                    onChange={e => { setBrand({ ...brand, brand_name: e.target.value }); resetPlan() }}
+                    placeholder="VD: OpenClaw"
+                    className="w-full border border-app-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-app-muted mb-1 block">Giá sản phẩm (Tùy chọn)</label>
+                  <input
+                    type="text"
+                    value={brand.price}
+                    onChange={e => { setBrand({ ...brand, price: e.target.value }); resetPlan() }}
+                    placeholder="VD: 150k/tháng, Miễn phí..."
+                    className="w-full border border-app-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                  />
+                </div>
               </div>
 
               <div>
@@ -541,6 +626,40 @@ export default function CampaignForm() {
                   rows={2}
                   placeholder="VD: AI Agent tự động hóa công việc — phù hợp cho người dùng VPS / cần host nhẹ"
                   className="w-full border border-app-border rounded-lg px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-app-muted mb-1 block">Đối tượng mục tiêu (Tùy chọn)</label>
+                  <input
+                    type="text"
+                    value={brand.target_audience}
+                    onChange={e => { setBrand({ ...brand, target_audience: e.target.value }); resetPlan() }}
+                    placeholder="VD: lập trình viên, startup..."
+                    className="w-full border border-app-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-app-muted mb-1 block">Từ ngữ cần tránh (Cách nhau bởi dấu phẩy - Tùy chọn)</label>
+                  <input
+                    type="text"
+                    value={brand.avoid}
+                    onChange={e => { setBrand({ ...brand, avoid: e.target.value }); resetPlan() }}
+                    placeholder="VD: đối thủ A, lừa đảo, đa cấp..."
+                    className="w-full border border-app-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-app-muted mb-1 block">Ví dụ câu mẫu / Giọng điệu seeding (Mỗi câu 1 dòng - Tùy chọn)</label>
+                <textarea
+                  value={brand.brand_voice_examples}
+                  onChange={e => { setBrand({ ...brand, brand_voice_examples: e.target.value }); resetPlan() }}
+                  rows={3}
+                  placeholder={'VD: "Mình dùng OpenClaw được 2 tháng rồi, cực kỳ mượt mà..."\n"Giá rẻ mà có AI tự làm hết thế này thì tiết kiệm bao nhiêu công sức!"'}
+                  className="w-full border border-app-border rounded-lg px-3 py-2 text-xs resize-none font-mono bg-app-base/10 focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
                 />
               </div>
 

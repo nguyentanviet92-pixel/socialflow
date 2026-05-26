@@ -37,6 +37,54 @@ async function applyPerNickBudgets(supabase, aiPlan) {
   }
 }
 
+function mergeBrandAndHermesContext(brand_config, hermes_context) {
+  const bConf = brand_config || {}
+  const hCtx = hermes_context || {}
+
+  // Unify basic text fields
+  const unifiedName = bConf.brand_name || hCtx.product_name || ''
+  const unifiedDesc = bConf.brand_description || hCtx.target_audience || ''
+  const unifiedVoice = bConf.brand_voice || hCtx.tone || 'casual'
+  const unifiedComment = bConf.example_comment || hCtx.cta || ''
+
+  // Sub-products & Key features
+  let products = bConf.products
+  let keyFeatures = hCtx.key_features
+
+  if (Array.isArray(products) && products.length > 0) {
+    const names = products.map(p => p && p.name).filter(Boolean)
+    if (names.length > 0 && (!Array.isArray(keyFeatures) || keyFeatures.length === 0)) {
+      keyFeatures = names
+    }
+  } else if (Array.isArray(keyFeatures) && keyFeatures.length > 0) {
+    products = keyFeatures.map(name => ({ name, description: '' }))
+  }
+
+  const nextBrandConfig = {
+    ...bConf,
+    brand_name: unifiedName,
+    brand_description: unifiedDesc,
+    brand_voice: unifiedVoice,
+    example_comment: unifiedComment,
+    ad_approach: bConf.ad_approach || 'soft_sell',
+    products: products || [{ name: '', description: '' }],
+  }
+
+  const nextHermesContext = {
+    ...hCtx,
+    product_name: unifiedName,
+    price: hCtx.price || '',
+    key_features: keyFeatures || [],
+    target_audience: unifiedDesc,
+    tone: unifiedVoice,
+    avoid: hCtx.avoid || [],
+    cta: unifiedComment,
+    brand_voice_examples: hCtx.brand_voice_examples || [],
+  }
+
+  return { brand_config: nextBrandConfig, hermes_context: nextHermesContext }
+}
+
 // Phase 15: shared onboarding helper — fires priority scout jobs for nicks
 // that have <3 active campaign_groups, respecting warmup (>=21d) + dedup.
 async function onboardNewNicks(supabase, campaignId, nickIds, userId) {
@@ -745,7 +793,7 @@ module.exports = async (fastify) => {
   // POST /campaigns
   fastify.post('/', { preHandler: fastify.authenticate }, async (req, reply) => {
     const {
-      name, topic, requirement, mission, language, min_member_count, brand_config, ad_mode,
+      name, topic, requirement, mission, goal, language, min_member_count, brand_config, hermes_context, ad_mode,
       account_ids, ai_plan, ai_plan_confirmed,
       target_pages, target_groups, target_profiles,
       content_ids, rotation_mode, spin_mode,
@@ -761,16 +809,21 @@ module.exports = async (fastify) => {
       target_groups: target_groups || []
     }
 
+    const unifiedGoal = mission || requirement || goal || null
+    const synced = mergeBrandAndHermesContext(brand_config, hermes_context)
+
     const { data, error } = await supabase.from('campaigns').insert({
       owner_id: req.user.id,
       name,
       topic: topic || null,
-      requirement: requirement || null,
-      mission: mission || null,
+      requirement: unifiedGoal,
+      mission: unifiedGoal,
+      goal: unifiedGoal,
       language: language || 'vi',
       min_member_count: Number.isFinite(min_member_count) ? min_member_count : null,
-      brand_config: brand_config || null,
-      ad_mode: ad_mode || 'normal',
+      brand_config: synced.brand_config,
+      hermes_context: synced.hermes_context,
+      ad_mode: synced.brand_config?.brand_name ? 'ad_enabled' : 'normal',
       account_ids: account_ids || [],
       ai_plan: ai_plan || null,
       ai_plan_confirmed: ai_plan_confirmed || false,
@@ -874,9 +927,17 @@ module.exports = async (fastify) => {
 
     return reply.code(201).send(data)
   })
-
   // PUT /campaigns/:id
   fastify.put('/:id', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { data: existingCamp, error: fetchError } = await supabase
+      .from('campaigns')
+      .select('brand_config, hermes_context, mission, requirement, goal, meta')
+      .eq('id', req.params.id)
+      .eq('owner_id', req.user.id)
+      .single()
+
+    if (fetchError || !existingCamp) return reply.code(404).send({ error: 'Campaign not found' })
+
     const allowed = [
       'name', 'topic', 'requirement', 'mission', 'language', 'brand_config', 'ad_mode',
       'min_member_count',                   // 2026-05-02: scout member-count gate
@@ -895,24 +956,37 @@ module.exports = async (fastify) => {
     for (const key of allowed) {
       if (req.body[key] !== undefined) {
         if (key === 'target_groups') {
-          try {
-            const { data: currentCamp } = await supabase
-              .from('campaigns')
-              .select('meta')
-              .eq('id', req.params.id)
-              .single()
-            updates.meta = {
-              ...(currentCamp?.meta || {}),
-              target_groups: req.body.target_groups || []
-            }
-          } catch (metaErr) {
-            updates.meta = { target_groups: req.body.target_groups || [] }
+          updates.meta = {
+            ...(existingCamp?.meta || {}),
+            target_groups: req.body.target_groups || []
           }
           updates.target_groups = []
-        } else {
+        } else if (key !== 'brand_config' && key !== 'hermes_context' && key !== 'mission' && key !== 'requirement' && key !== 'goal' && key !== 'ad_mode') {
           updates[key] = req.body[key]
         }
       }
+    }
+
+    // Sync mission, requirement, and goal
+    const unifiedGoal = req.body.mission !== undefined ? req.body.mission : 
+                        (req.body.requirement !== undefined ? req.body.requirement : 
+                        (req.body.goal !== undefined ? req.body.goal : undefined));
+    if (unifiedGoal !== undefined) {
+      updates.mission = unifiedGoal || null
+      updates.requirement = unifiedGoal || null
+      updates.goal = unifiedGoal || null
+    }
+
+    // Unify brand_config and hermes_context
+    if (req.body.brand_config !== undefined || req.body.hermes_context !== undefined) {
+      const brand_config = req.body.brand_config !== undefined ? req.body.brand_config : existingCamp.brand_config
+      const hermes_context = req.body.hermes_context !== undefined ? req.body.hermes_context : existingCamp.hermes_context
+      const synced = mergeBrandAndHermesContext(brand_config, hermes_context)
+      updates.brand_config = synced.brand_config
+      updates.hermes_context = synced.hermes_context
+      updates.ad_mode = synced.brand_config?.brand_name ? 'ad_enabled' : 'normal'
+    } else if (req.body.ad_mode !== undefined) {
+      updates.ad_mode = req.body.ad_mode
     }
 
     // Special handling: campaign_roles is a separate table — caller passes
@@ -1090,6 +1164,78 @@ module.exports = async (fastify) => {
     await applyPerNickBudgets(supabase, ai_plan)
 
     return { ok: true, applied_at: new Date().toISOString() }
+  })
+
+  // POST /campaigns/generate-goal — Generate goal text for new campaigns (no ID)
+  fastify.post('/generate-goal', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { name, topic, mission, requirement, brand_config, hermes_context } = req.body || {}
+    
+    // If brand_config and hermes_context are provided, merge them first for complete information:
+    const synced = mergeBrandAndHermesContext(brand_config, hermes_context)
+
+    const systemPrompt = `Bạn là một chuyên gia Prompt Engineer và Marketing Coordinator hàng đầu.
+Nhiệm vụ của bạn là viết một bản "Mục tiêu & Hướng dẫn cho Hermes" cực kỳ chi tiết, mạch lạc, dễ hiểu dựa trên thông tin sản phẩm và kế trạng chiến dịch có sẵn.
+Bản hướng dẫn này sẽ được lưu làm Goal (Prompt hệ thống) của AI Agent (Hermes) để nó biết cách đi seeding, comment và tương tác trong các nhóm Facebook.
+
+Hãy sử dụng cấu trúc mẫu sau (chọn lọc thông tin điền vào cho khớp, viết chi tiết rõ ràng):
+
+Mục tiêu chiến dịch: [Mô tả mục tiêu chính dựa trên Kế hoạch/Nhiệm vụ chiến dịch]
+
+Quảng bá [Tên sản phẩm] với giá [Giá] cho đối tượng [Đối tượng mục tiêu].
+Tone [Tone giao tiếp].
+Điểm mạnh ưu tiên giới thiệu:
+- [Điểm mạnh 1]
+- [Điểm mạnh 2]
+...
+Cách tiếp cận & CTA gợi ý:
+- [CTA gợi ý]
+Tránh hoàn toàn (Rất quan trọng):
+- [Tránh 1]
+- [Tránh 2]
+...
+Thành công định nghĩa bằng: [Mục tiêu/Hành động mong muốn]`
+
+    const brandName = synced.brand_config?.brand_name || 'chưa có'
+    const brandDesc = synced.brand_config?.brand_description || 'chưa có'
+    const productsInfo = (synced.brand_config?.products || []).map(p => `- ${p.name}: ${p.description}`).join('\n') || 'chưa có'
+    const campaignMission = mission || requirement || 'chưa có'
+
+    const userPrompt = `Dưới đây là thông tin kế hoạch chiến dịch và cấu hình sản phẩm:
+KẾ HOẠCH CHIẾN DỊCH:
+- Tên chiến dịch: ${name || 'Chiến dịch mới'}
+- Chủ đề chiến dịch: ${topic || 'chưa có'}
+- Nhiệm vụ/Yêu cầu chiến dịch: ${campaignMission}
+
+THÔNG TIN THƯƠNG HIỆU & SẢN PHẨM:
+- Tên sản phẩm/thương hiệu chính: ${brandName}
+- Mô tả thương hiệu: ${brandDesc}
+- Danh sách sản phẩm:
+${productsInfo}
+
+CẤU HÌNH CHI TIẾT TỪ FRONTEND (NẾU CÓ):
+- Giá: ${synced.hermes_context?.price || 'chưa có'}
+- Điểm mạnh: ${(synced.hermes_context?.key_features || []).join(', ') || 'chưa có'}
+- Đối tượng mục tiêu: ${synced.hermes_context?.target_audience || 'chưa có'}
+- Tone giao tiếp: ${synced.hermes_context?.tone || 'thân thiện, tư vấn'}
+- Tránh: ${(synced.hermes_context?.avoid || []).join(', ') || 'chưa có'}
+- CTA gợi ý: ${synced.hermes_context?.cta || 'chưa có'}
+- Ví dụ câu mẫu giọng điệu:
+${(synced.hermes_context?.brand_voice_examples || []).map((ex, i) => `  ${i+1}. "${ex}"`).join('\n') || 'chưa có'}
+
+Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việt một cách tự nhiên, chuyên nghiệp, đầy đủ và THỐNG NHẤT hoàn toàn với Kế hoạch Chiến dịch (Chủ đề & Nhiệm vụ).`
+
+    try {
+      const { getOrchestratorForUser } = require('../services/ai/orchestrator')
+      const orchestrator = await getOrchestratorForUser(req.user.id, supabase)
+      const res = await orchestrator.call('caption_gen', [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ])
+      return { text: res.text }
+    } catch (err) {
+      req.log.error({ err }, 'Generate goal for new campaign failed')
+      return reply.code(500).send({ error: `Không thể sinh mục tiêu: ${err.message}` })
+    }
   })
 
   // POST /campaigns/:id/generate-goal — Generate goal text from hermes_context
