@@ -9,6 +9,7 @@ import { API_BASE } from '../../lib/api'
 
 // ── Shortcut definitions ──
 const SHORTCUTS = [
+  { label: '🔐 Codex OAuth',   args: ['auth', 'add', 'openai-codex', '--type', 'oauth', '--no-browser'], color: '#10b981 font-bold' },
   { label: '📋 Trạng thái',    args: ['status'],       color: '#06b6d4' },
   { label: '⚙️ Cấu hình',      args: ['config'],       color: '#8b5cf6' },
   { label: '🩺 Chẩn đoán',     args: ['doctor'],       color: '#f59e0b' },
