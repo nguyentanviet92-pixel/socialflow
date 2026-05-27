@@ -57,6 +57,16 @@ module.exports = async (fastify) => {
     return { user: { ...req.user, ...profile } }
   })
 
+  // GET /auth/apikey — generate long-lived API key (JWT token) for ChatGPT
+  fastify.get('/apikey', { preHandler: fastify.authenticate }, async (req) => {
+    const token = jwt.sign(
+      { sub: req.user.id, email: req.user.email, role: req.user.role },
+      JWT_SECRET,
+      { expiresIn: '3650d' } // 10 years
+    )
+    return { apikey: token }
+  })
+
   // POST /auth/register — public registration (pending admin approval)
   fastify.post('/register', async (req, reply) => {
     const { email, password, username } = req.body

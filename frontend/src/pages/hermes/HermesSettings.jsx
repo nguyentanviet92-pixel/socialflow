@@ -333,107 +333,188 @@ function ModelSection() {
 // ───────────────────────────────────────────────────────────
 function OauthSection() {
   const domain = window.location.origin
+  const [apiKey, setApiKey] = useState('')
+  const [loadingKey, setLoadingKey] = useState(false)
 
   const copyToClipboard = (text, label) => {
     navigator.clipboard.writeText(text)
     toast.success(`Đã sao chép ${label}`)
   }
 
+  const handleGenerateApiKey = async () => {
+    try {
+      setLoadingKey(true)
+      const res = await api.get('/auth/apikey')
+      setApiKey(res.data.apikey)
+      toast.success('Đã tạo API Key dài hạn!')
+    } catch (err) {
+      toast.error('Không thể tạo API Key: ' + (err.response?.data?.error || err.message))
+    } finally {
+      setLoadingKey(false)
+    }
+  }
+
   return (
-    <div className="p-6 font-mono-ui max-w-2xl">
-      <h2 className="text-app-primary text-base mb-1">ChatGPT / Custom GPT Integration</h2>
-      <p className="text-app-muted text-xs mb-6">
-        Cấu hình để ChatGPT hoặc Custom GPTs truy cập trực tiếp vào API của SocialFlow thông qua luồng bảo mật OAuth 2.0.
-      </p>
+    <div className="p-6 font-mono-ui max-w-2xl space-y-8">
+      {/* METHOD 1: OAUTH */}
+      <div>
+        <h2 className="text-app-primary text-base mb-1">Phương thức 1: Kết nối bằng OAuth 2.0 (Tiêu chuẩn)</h2>
+        <p className="text-app-muted text-xs mb-6">
+          Đăng nhập ủy quyền trực tiếp thông qua luồng đăng nhập của Space Computer.
+        </p>
 
-      <div className="space-y-6">
-        {/* Connection status */}
-        <div className="p-4 rounded-lg flex items-center justify-between" style={{ background: 'var(--hermes-dim)', border: '1px solid var(--hermes-fade)' }}>
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">⚡</span>
-            <div>
-              <div className="text-sm font-semibold text-hermes">OAuth 2.0 Status: ACTIVE</div>
-              <div className="text-[10px] text-app-muted">Sẵn sàng nhận kết nối từ OpenAI / Custom GPTs</div>
+        <div className="space-y-6">
+          {/* Connection status */}
+          <div className="p-4 rounded-lg flex items-center justify-between" style={{ background: 'var(--hermes-dim)', border: '1px solid var(--hermes-fade)' }}>
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚡</span>
+              <div>
+                <div className="text-sm font-semibold text-hermes">OAuth 2.0 Status: ACTIVE</div>
+                <div className="text-[10px] text-app-muted">Sẵn sàng nhận kết nối từ OpenAI / Custom GPTs</div>
+              </div>
+            </div>
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-950/30 text-emerald-400 border border-emerald-500/20">
+              ● Đang chạy
+            </span>
+          </div>
+
+          {/* Credentials table */}
+          <div className="space-y-4">
+            <div className="text-app-primary text-sm font-semibold mb-2">Thông số cấu hình trên ChatGPT Action</div>
+            
+            <div className="space-y-3">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] uppercase text-app-muted">Client ID</label>
+                  <button onClick={() => copyToClipboard('socialflow', 'Client ID')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                </div>
+                <input
+                  type="text"
+                  readOnly
+                  value="socialflow"
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                  style={{ border: '1px solid var(--border-bright)' }}
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] uppercase text-app-muted">Client Secret</label>
+                  <button onClick={() => copyToClipboard('socialflow-secret', 'Client Secret')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                </div>
+                <input
+                  type="text"
+                  readOnly
+                  value="socialflow-secret"
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                  style={{ border: '1px solid var(--border-bright)' }}
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] uppercase text-app-muted">Authorization URL</label>
+                  <button onClick={() => copyToClipboard(`${domain}/oauth/authorize`, 'Authorization URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                </div>
+                <input
+                  type="text"
+                  readOnly
+                  value={`${domain}/oauth/authorize`}
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                  style={{ border: '1px solid var(--border-bright)' }}
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] uppercase text-app-muted">Token URL</label>
+                  <button onClick={() => copyToClipboard(`${domain}/oauth/token`, 'Token URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                </div>
+                <input
+                  type="text"
+                  readOnly
+                  value={`${domain}/oauth/token`}
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
+                  style={{ border: '1px solid var(--border-bright)' }}
+                />
+              </div>
             </div>
           </div>
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-950/30 text-emerald-400 border border-emerald-500/20">
-            ● Đang chạy
-          </span>
-        </div>
 
-        {/* Credentials table */}
-        <div className="space-y-4">
-          <div className="text-app-primary text-sm font-semibold mb-2">Thông số cấu hình trên ChatGPT Action</div>
-          
-          <div className="space-y-3">
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-[10px] uppercase text-app-muted">Client ID</label>
-                <button onClick={() => copyToClipboard('socialflow', 'Client ID')} className="text-[10px] text-hermes hover:underline">Copy</button>
-              </div>
-              <input
-                type="text"
-                readOnly
-                value="socialflow"
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-[10px] uppercase text-app-muted">Client Secret</label>
-                <button onClick={() => copyToClipboard('socialflow-secret', 'Client Secret')} className="text-[10px] text-hermes hover:underline">Copy</button>
-              </div>
-              <input
-                type="text"
-                readOnly
-                value="socialflow-secret"
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-[10px] uppercase text-app-muted">Authorization URL</label>
-                <button onClick={() => copyToClipboard(`${domain}/oauth/authorize`, 'Authorization URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
-              </div>
-              <input
-                type="text"
-                readOnly
-                value={`${domain}/oauth/authorize`}
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-[10px] uppercase text-app-muted">Token URL</label>
-                <button onClick={() => copyToClipboard(`${domain}/oauth/token`, 'Token URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
-              </div>
-              <input
-                type="text"
-                readOnly
-                value={`${domain}/oauth/token`}
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
-            </div>
+          {/* Step-by-step instruction */}
+          <div className="p-4 bg-app-elevated rounded border border-app-border space-y-2">
+            <div className="text-xs font-semibold text-app-primary">📖 Hướng dẫn cấu hình Custom GPT:</div>
+            <ol className="list-decimal list-inside text-[11px] text-app-muted space-y-1 leading-relaxed">
+              <li>Truy cập mục <strong>My GPTs</strong> &rarr; <strong>Create a GPT</strong> &rarr; chọn tab <strong>Configure</strong> &rarr; cuộn xuống dưới chọn <strong>Create new Action</strong>.</li>
+              <li>Tại phần <strong>Authentication</strong>, chọn <strong>OAuth</strong>.</li>
+              <li>Copy và paste 4 thông số tương ứng ở bảng trên vào form của ChatGPT.</li>
+              <li>Tại mục <strong>Authentication Type</strong>, chọn <strong>Basic</strong> (hoặc <strong>Post</strong>).</li>
+              <li>Bấm <strong>Save</strong> để hoàn tất. Khi bạn hoặc khách hàng trò chuyện với Custom GPT này, ChatGPT sẽ hiển thị thông báo yêu cầu đăng nhập tài khoản SocialFlow của bạn thông qua màn hình Ủy quyền bảo mật.</li>
+            </ol>
           </div>
         </div>
+      </div>
 
-        {/* Step-by-step instruction */}
-        <div className="p-4 bg-app-elevated rounded border border-app-border space-y-2">
-          <div className="text-xs font-semibold text-app-primary">📖 Hướng dẫn cấu hình Custom GPT:</div>
-          <ol className="list-decimal list-inside text-[11px] text-app-muted space-y-1 leading-relaxed">
-            <li>Truy cập mục <strong>My GPTs</strong> &rarr; <strong>Create a GPT</strong> &rarr; chọn tab <strong>Configure</strong> &rarr; cuộn xuống dưới chọn <strong>Create new Action</strong>.</li>
-            <li>Tại phần <strong>Authentication</strong>, chọn <strong>OAuth</strong>.</li>
-            <li>Copy và paste 4 thông số tương ứng ở bảng trên vào form của ChatGPT.</li>
-            <li>Tại mục <strong>Authentication Type</strong>, chọn <strong>Basic</strong> (hoặc <strong>Post</strong>).</li>
-            <li>Bấm <strong>Save</strong> để hoàn tất. Khi bạn hoặc khách hàng trò chuyện với Custom GPT này, ChatGPT sẽ hiển thị thông báo yêu cầu đăng nhập tài khoản SocialFlow của bạn thông qua màn hình Ủy quyền bảo mật.</li>
-          </ol>
+      <hr className="border-app-border" />
+
+      {/* METHOD 2: API KEY (NO-OAUTH) */}
+      <div>
+        <h2 className="text-app-primary text-base mb-1">Phương thức 2: Kết nối bằng API Key (Giải pháp không cần OAuth - KHUYÊN DÙNG)</h2>
+        <p className="text-app-muted text-xs mb-6">
+          Kết nối nhanh chóng bằng cách nhúng trực tiếp API Key dài hạn vào ChatGPT mà không cần qua màn hình đăng nhập.
+        </p>
+
+        <div className="space-y-6">
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-xs text-app-primary font-semibold">Tạo API Token Dài Hạn (Hạn 10 năm)</label>
+              {apiKey && (
+                <button
+                  onClick={() => copyToClipboard(apiKey, 'API Key')}
+                  className="text-[10px] text-hermes hover:underline font-mono-ui"
+                >
+                  Sao chép API Key
+                </button>
+              )}
+            </div>
+
+            {apiKey ? (
+              <textarea
+                readOnly
+                rows={4}
+                value={apiKey}
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-[10px] font-mono-ui break-all leading-relaxed"
+                style={{ border: '1px solid var(--hermes)', borderRadius: '6px' }}
+              />
+            ) : (
+              <button
+                onClick={handleGenerateApiKey}
+                disabled={loadingKey}
+                className="w-full py-3 px-4 rounded text-xs font-semibold bg-hermes hover:opacity-90 text-black flex items-center justify-center gap-2 transition-all"
+              >
+                {loadingKey ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Đang tạo API Key...
+                  </>
+                ) : (
+                  'TẠO API KEY DÀI HẠN MỚI'
+                )}
+              </button>
+            )}
+          </div>
+
+          {/* Step-by-step instruction */}
+          <div className="p-4 bg-app-elevated rounded border border-app-border space-y-2">
+            <div className="text-xs font-semibold text-app-primary">📖 Hướng dẫn kết nối bằng API Key:</div>
+            <ol className="list-decimal list-inside text-[11px] text-app-muted space-y-1 leading-relaxed">
+              <li>Nhấp nút <strong>TẠO API KEY DÀI HẠN MỚI</strong> ở trên và sao chép đoạn mã Token được tạo ra.</li>
+              <li>Truy cập cấu hình Custom GPT của bạn &rarr; chọn <strong>Configure</strong> &rarr; chọn <strong>Create new Action</strong>.</li>
+              <li>Tại phần <strong>Authentication</strong>, chọn <strong>API Key</strong>.</li>
+              <li>Tại mục <strong>Auth Type</strong>, hãy chọn <strong>Bearer</strong>.</li>
+              <li>Dán đoạn mã API Key đã sao chép ở trên vào ô mật khẩu/token và nhấn <strong>Save</strong>.</li>
+            </ol>
+          </div>
         </div>
       </div>
     </div>
