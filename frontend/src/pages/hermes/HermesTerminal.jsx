@@ -141,6 +141,38 @@ export default function HermesTerminal() {
 \n`, 'stdout')
       return
     }
+    if (args[0] === 'model') {
+      addLog(`\n$ hermes model\n`, 'input')
+      addLog(`⚠️ Cảnh báo: Lệnh 'hermes model' yêu cầu giao diện terminal TTY vật lý nên không thể chạy trực tiếp trên trình duyệt web.
+
+👉 Giải pháp thay thế (Copy & chạy trực tiếp các lệnh cấu hình mẫu sau để thiết lập không cần TTY):
+
+1. Đổi cấu hình sang DeepSeek:
+   hermes config set model.provider custom
+   hermes config set model.default deepseek-chat
+   hermes config set model.base_url https://api.deepseek.com
+   hermes config set model.key_env DEEPSEEK_API_KEY
+
+2. Đổi cấu hình sang Nvidia NIM (Minimax - Đang dùng):
+   hermes config set model.provider custom
+   hermes config set model.default minimaxai/minimax-m2.7
+   hermes config set model.base_url https://integrate.api.nvidia.com/v1
+   hermes config set model.key_env NVIDIA_API_KEY
+
+3. Đổi cấu hình sang Kimi:
+   hermes config set model.provider custom
+   hermes config set model.default kimi-k2.6
+   hermes config set model.base_url https://api.moonshot.cn/v1
+   hermes config set model.key_env KIMI_API_KEY
+
+4. Đảm bảo cấu hình Docker Mount Folder chính xác (Gắn thư mục code hiện tại vào Docker):
+   hermes config set terminal.docker_mount_cwd_to_workspace true
+
+----------------------------------------------------------------------
+👉 Bạn chỉ cần copy dòng lệnh tương ứng dán vào ô nhập lệnh bên dưới và nhấn Run!
+\n`, 'stdout')
+      return
+    }
     if (!wsRef.current || wsRef.current.readyState !== 1) return
     setRunningProc(true)
     addLog(`\n$ hermes ${args.join(' ')}\n`, 'input')
