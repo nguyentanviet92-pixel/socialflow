@@ -49,6 +49,7 @@ export default function HermesTerminal() {
   const [input, setInput] = useState('')
   const [connected, setConnected] = useState(false)
   const [connecting, setConnecting] = useState(false)
+  const [runningProc, setRunningProc] = useState(false)
   const wsRef = useRef(null)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
@@ -57,7 +58,6 @@ export default function HermesTerminal() {
   const addLog = useCallback((text, type = 'stdout') => {
     setLogs(prev => {
       const next = [...prev, { text, type, ts: Date.now() }]
-      // Keep max 2000 lines to prevent memory issues
       return next.length > 2000 ? next.slice(-1500) : next
     })
   }, [])
@@ -81,13 +81,14 @@ export default function HermesTerminal() {
     ws.onclose = () => {
       setConnected(false)
       setConnecting(false)
+      setRunningProc(false)
       addLog('❌ Disconnected from Hermes Bridge\n', 'system')
-      // Auto-reconnect after 3 seconds
       reconnectTimer.current = setTimeout(() => connect(), 3000)
     }
 
     ws.onerror = () => {
       setConnecting(false)
+      setRunningProc(false)
     }
 
     ws.onmessage = (e) => {
@@ -99,8 +100,10 @@ export default function HermesTerminal() {
           addLog(msg.data, 'stderr')
         } else if (msg.type === 'exit') {
           addLog(`\n[Process exited with code ${msg.code}]\n`, 'system')
+          setRunningProc(false)
         } else if (msg.type === 'error') {
           addLog(msg.data, 'error')
+          setRunningProc(false)
         }
       } catch {
         addLog(e.data, 'stdout')
@@ -139,14 +142,21 @@ export default function HermesTerminal() {
       return
     }
     if (!wsRef.current || wsRef.current.readyState !== 1) return
+    setRunningProc(true)
     addLog(`\n$ hermes ${args.join(' ')}\n`, 'input')
-    wsRef.current.send(JSON.stringify({ type: 'exec', args }))
-  }, [addLog, addLog])
+    wsRef.current.send(JSON.stringify({ type: 'spawn', args }))
+  }, [addLog])
 
   const handleSend = () => {
     if (!input.trim() || !wsRef.current || wsRef.current.readyState !== 1) return
-    const parts = input.trim().split(/\s+/)
-    execCommand(parts)
+    if (runningProc) {
+      addLog(`${input}\n`, 'input')
+      wsRef.current.send(JSON.stringify({ type: 'stdin', data: input + '\n' }))
+    } else {
+      const parts = input.trim().split(/\s+/)
+      const args = parts[0] === 'hermes' ? parts.slice(1) : parts
+      execCommand(args)
+    }
     setInput('')
   }
 
@@ -178,11 +188,25 @@ export default function HermesTerminal() {
               }}
             />
             <span className="text-xs font-mono-ui text-app-muted">
-              {connected ? 'Hermes CLI connected' : connecting ? 'Connecting...' : 'Disconnected'}
+              {connected ? (runningProc ? 'Hermes CLI active (interactive)' : 'Hermes CLI connected') : connecting ? 'Connecting...' : 'Disconnected'}
             </span>
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {runningProc && (
+            <button
+              onClick={() => {
+                if (wsRef.current && wsRef.current.readyState === 1) {
+                  wsRef.current.send(JSON.stringify({ type: 'kill' }))
+                  addLog('\n[SIGINT sent to stop running process]\n', 'system')
+                }
+              }}
+              className="text-[10px] px-2 py-1 text-danger hover:opacity-80 transition-colors"
+              style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4 }}
+            >
+              Stop Process
+            </button>
+          )}
           <button
             onClick={handleClear}
             className="text-[10px] px-2 py-1 text-app-muted hover:text-app-primary transition-colors"
@@ -208,7 +232,7 @@ export default function HermesTerminal() {
           <button
             key={s.args.join('-')}
             onClick={() => execCommand(s.args)}
-            disabled={!connected}
+            disabled={!connected || runningProc}
             className="text-xs px-3 py-1.5 font-mono-ui transition-all hover:opacity-80 disabled:opacity-30"
             style={{
               background: `${s.color}15`,
@@ -261,7 +285,7 @@ export default function HermesTerminal() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleSend()
             }}
-            placeholder={connected ? 'hermes status, hermes config, ...' : 'Đang chờ kết nối...'}
+            placeholder={connected ? (runningProc ? 'Nhập dữ liệu phản hồi (stdin)...' : 'hermes status, hermes config, ...') : 'Đang chờ kết nối...'}
             disabled={!connected}
             className="flex-1 bg-transparent text-white text-sm font-mono outline-none placeholder:text-gray-600 disabled:opacity-40"
           />
@@ -276,7 +300,7 @@ export default function HermesTerminal() {
             border: '1px solid var(--hermes-fade)',
           }}
         >
-          Run
+          {runningProc ? 'Send' : 'Run'}
         </button>
       </div>
     </div>
