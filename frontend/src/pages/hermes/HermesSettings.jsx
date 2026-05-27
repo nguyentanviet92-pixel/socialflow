@@ -420,7 +420,7 @@ function OauthSection() {
           </a>
         ) : (
           <a
-            href={`${apiDomain}/oauth/authorize?client_id=socialflow&response_type=code&redirect_uri=${encodeURIComponent('https://chatgpt.com')}&state=demo`}
+            href="https://chatgpt.com"
             target="_blank"
             rel="noopener noreferrer"
             className="w-full py-4 px-6 rounded-lg text-sm font-semibold text-black flex flex-col items-center justify-center gap-1 transition-all hover:opacity-90 text-center"
@@ -435,9 +435,9 @@ function OauthSection() {
           >
             <div className="flex items-center gap-2">
               <span className="text-xl animate-pulse">⚡</span>
-              <span>ỦY QUYỀN OAUTH TRỰC TIẾP TRÊN TRÌNH DUYỆT</span>
+              <span>⚡ MỞ CHATGPT & CẤU HÌNH CUSTOM GPT</span>
             </div>
-            <span className="text-[10px] text-white/80 font-normal">Chưa có Custom GPT nào được lưu. Bấm để đăng nhập ủy quyền trực tiếp ngay.</span>
+            <span className="text-[10px] text-white/80 font-normal">Chưa dán link Custom GPT của bạn. Bấm để truy cập ChatGPT, tạo Custom GPT và dán link vào ô bên dưới!</span>
           </a>
         )}
       </div>
