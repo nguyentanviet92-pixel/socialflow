@@ -130,35 +130,10 @@ function evaluateNickRules(nicks) {
 }
 
 function evaluateGroupRules(groups) {
-  const actions = []
-  for (const g of groups) {
-    if (g.has_check_job) continue
-
-    if (g.pending_days > PENDING_DAYS_HARD_CAP && g.check_count >= CHECK_COUNT_HARD_CAP) {
-      actions.push({
-        type: 'skip_group',
-        target_id: g.id,
-        target_name: g.name,
-        priority: 'low',
-        auto_apply: true,
-        reason: `Chờ duyệt ${g.pending_days}d, đã check ${g.check_count} lần — bỏ nhóm`,
-        action_detail: { reason: 'admin_approval_unlikely', pending_days: g.pending_days, check_count: g.check_count },
-        rule: 'pending_timeout',
-      })
-    } else if (g.pending_days <= PENDING_DAYS_HARD_CAP && g.check_count < CHECK_COUNT_HARD_CAP) {
-      actions.push({
-        type: 'recheck_group',
-        target_id: g.id,
-        target_name: g.name,
-        priority: 'medium',
-        auto_apply: true,
-        reason: `Pending ${g.pending_days}d, check ${g.check_count}/${CHECK_COUNT_HARD_CAP} — queue recheck`,
-        action_detail: { action: 'queue_check_group_membership' },
-        rule: 'pending_recheck',
-      })
-    }
-  }
-  return actions
+  // 2026-05-27: DISABLED — group skip/recheck is now user-controlled only.
+  // The system no longer auto-skips pending groups or triggers recheck jobs.
+  // Groups must be manually added by the user with is_member=true.
+  return []
 }
 
 // Pure data — query DB, run rules, return signals. Used by both cron path
