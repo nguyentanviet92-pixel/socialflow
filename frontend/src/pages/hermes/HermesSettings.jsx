@@ -13,7 +13,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { Plus, Trash2, GripVertical, AlertTriangle, Check, Loader } from 'lucide-react'
-import api from '../../lib/api'
+import api, { API_BASE } from '../../lib/api'
 import SkillsEditor from './SkillsEditor'
 
 const asArray = (d) => Array.isArray(d) ? d
@@ -333,6 +333,12 @@ function ModelSection() {
 // ───────────────────────────────────────────────────────────
 function OauthSection() {
   const domain = window.location.origin
+  // Fallback to domain if API_BASE is relative or empty
+  let apiDomain = API_BASE
+  if (!apiDomain || !apiDomain.startsWith('http')) {
+    apiDomain = domain
+  }
+
   const [apiKey, setApiKey] = useState('')
   const [loadingKey, setLoadingKey] = useState(false)
   const [gptLink, setGptLink] = useState('')
@@ -414,7 +420,7 @@ function OauthSection() {
           </a>
         ) : (
           <a
-            href={`${domain}/oauth/authorize?client_id=socialflow&response_type=code&redirect_uri=${encodeURIComponent('https://chatgpt.com')}&state=demo`}
+            href={`${apiDomain}/oauth/authorize?client_id=socialflow&response_type=code&redirect_uri=${encodeURIComponent('https://chatgpt.com')}&state=demo`}
             target="_blank"
             rel="noopener noreferrer"
             className="w-full py-4 px-6 rounded-lg text-sm font-semibold text-black flex flex-col items-center justify-center gap-1 transition-all hover:opacity-90 text-center"
@@ -521,12 +527,12 @@ function OauthSection() {
               <div>
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-[10px] uppercase text-app-muted">Authorization URL</label>
-                  <button onClick={() => copyToClipboard(`${domain}/oauth/authorize`, 'Authorization URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                  <button onClick={() => copyToClipboard(`${apiDomain}/oauth/authorize`, 'Authorization URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
                 </div>
                 <input
                   type="text"
                   readOnly
-                  value={`${domain}/oauth/authorize`}
+                  value={`${apiDomain}/oauth/authorize`}
                   className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
                   style={{ border: '1px solid var(--border-bright)' }}
                 />
@@ -535,12 +541,12 @@ function OauthSection() {
               <div>
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-[10px] uppercase text-app-muted">Token URL</label>
-                  <button onClick={() => copyToClipboard(`${domain}/oauth/token`, 'Token URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                  <button onClick={() => copyToClipboard(`${apiDomain}/oauth/token`, 'Token URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
                 </div>
                 <input
                   type="text"
                   readOnly
-                  value={`${domain}/oauth/token`}
+                  value={`${apiDomain}/oauth/token`}
                   className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui"
                   style={{ border: '1px solid var(--border-bright)' }}
                 />
@@ -549,12 +555,12 @@ function OauthSection() {
               <div>
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-[10px] uppercase text-hermes font-bold">Đường dẫn tự động Import OpenAPI Schema (CỰC NHANH)</label>
-                  <button onClick={() => copyToClipboard(`${domain}/oauth/openapi.json`, 'Schema Import URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                  <button onClick={() => copyToClipboard(`${apiDomain}/oauth/openapi.json`, 'Schema Import URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
                 </div>
                 <input
                   type="text"
                   readOnly
-                  value={`${domain}/oauth/openapi.json`}
+                  value={`${apiDomain}/oauth/openapi.json`}
                   className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui border border-cyan-500/30"
                 />
               </div>
@@ -614,8 +620,8 @@ function OauthSection() {
               >
                 {loadingKey ? (
                   <>
-                    <Loader className="w-4 h-4 animate-spin" />
-                    Đang tạo API Key...
+                     <Loader className="w-4 h-4 animate-spin" />
+                     Đang tạo API Key...
                   </>
                 ) : (
                   'TẠO API KEY DÀI HẠN MỚI'
