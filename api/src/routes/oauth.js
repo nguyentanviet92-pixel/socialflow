@@ -160,6 +160,70 @@ module.exports = async (fastify) => {
       expires_in: 30 * 24 * 3600 // 30 days
     }
   })
+
+  // 4. GET /oauth/openapi.json — Serve the OpenAPI JSON schema for easy one-click import into ChatGPT Actions
+  fastify.get('/openapi.json', async (req, reply) => {
+    const domain = `${req.protocol}://${req.hostname}`
+    const schema = {
+      openapi: "3.1.0",
+      info: {
+        title: "Space Computer SocialFlow API",
+        description: "API kết nối ChatGPT với hệ thống SocialFlow để tạo nội dung bằng AI Hermes và kiểm tra hệ thống.",
+        version: "1.0.0"
+      },
+      servers: [
+        {
+          url: domain
+        }
+      ],
+      paths: {
+        "/health": {
+          "get": {
+            "summary": "Kiểm tra trạng thái hệ thống",
+            "operationId": "checkHealth",
+            "responses": {
+              "200": {
+                "description": "Hệ thống hoạt động bình thường"
+              }
+            }
+          }
+        },
+        "/ai-hermes/generate": {
+          "post": {
+            "summary": "Tạo nội dung hoặc bình luận bằng AI Hermes",
+            "operationId": "generateContent",
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "prompt": {
+                        "type": "string",
+                        "description": "Yêu cầu viết bài hoặc nội dung"
+                      },
+                      "task_type": {
+                        "type": "string",
+                        "description": "Loại tác vụ (ví dụ: comment_gen, post_gen)"
+                      }
+                    },
+                    "required": ["prompt"]
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Nội dung được tạo thành công"
+              }
+            }
+          }
+        }
+      }
+    }
+    return reply.type('application/json').send(schema)
+  })
 }
 
 function renderAuthPage({ client_id, redirect_uri, response_type, state, scope, email, error }) {

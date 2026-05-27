@@ -335,10 +335,18 @@ function OauthSection() {
   const domain = window.location.origin
   const [apiKey, setApiKey] = useState('')
   const [loadingKey, setLoadingKey] = useState(false)
+  const [gptLink, setGptLink] = useState(localStorage.getItem('socialflow_gpt_link') || '')
+  const [editingGptLink, setEditingGptLink] = useState(false)
 
   const copyToClipboard = (text, label) => {
     navigator.clipboard.writeText(text)
     toast.success(`Đã sao chép ${label}`)
+  }
+
+  const handleSaveGptLink = () => {
+    localStorage.setItem('socialflow_gpt_link', gptLink)
+    setEditingGptLink(false)
+    toast.success('Đã lưu link Custom GPT thành công!')
   }
 
   const handleGenerateApiKey = async () => {
@@ -356,6 +364,56 @@ function OauthSection() {
 
   return (
     <div className="p-6 font-mono-ui max-w-2xl space-y-8">
+      {/* 🚀 QUICK ACCESS CONNECT BUTTON */}
+      {gptLink && (
+        <div className="p-1 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 shadow-xl">
+          <a
+            href={gptLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full py-4 px-6 rounded-lg text-sm font-semibold text-black flex items-center justify-center gap-3 transition-all hover:opacity-90 text-center"
+            style={{
+              background: 'linear-gradient(135deg, #06b6d4 0%, #10b981 100%)',
+              color: '#000',
+              textDecoration: 'none',
+              fontWeight: 'bold',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <span className="text-xl animate-bounce">🚀</span>
+            <span>MỞ TRÌNH DUYỆT - KẾT NỐI & ỦY QUYỀN CHATGPT NGAY</span>
+          </a>
+        </div>
+      )}
+
+      {/* GPT LINK SETTINGS */}
+      <div className="p-4 rounded-lg bg-app-elevated border border-app-border space-y-3">
+        <div className="text-xs font-semibold text-app-primary flex items-center justify-between">
+          <span className="flex items-center gap-2">🔗 Link Custom GPT của hệ thống:</span>
+          {editingGptLink ? (
+            <button onClick={handleSaveGptLink} className="text-[10px] text-hermes hover:underline">Lưu lại</button>
+          ) : (
+            <button onClick={() => setEditingGptLink(true)} className="text-[10px] text-hermes hover:underline">Sửa link</button>
+          )}
+        </div>
+        {editingGptLink ? (
+          <input
+            type="text"
+            placeholder="https://chatgpt.com/g/g-xxxxx-space-computer"
+            value={gptLink}
+            onChange={(e) => setGptLink(e.target.value)}
+            className="w-full px-3 py-2 bg-black text-app-primary text-xs border border-app-border rounded outline-none focus:border-hermes"
+          />
+        ) : (
+          <div className="text-xs text-app-muted truncate">
+            {gptLink || <span className="italic text-app-muted/50">Chưa cấu hình link Custom GPT (Admin hãy dán link Custom GPT của bạn sau khi tạo xong vào đây để hiển thị nút kết nối 1-click cho người dùng)</span>}
+          </div>
+        )}
+      </div>
+
+      <hr className="border-app-border" />
+
       {/* METHOD 1: OAUTH */}
       <div>
         <h2 className="text-app-primary text-base mb-1">Phương thức 1: Kết nối bằng OAuth 2.0 (Tiêu chuẩn)</h2>
@@ -438,6 +496,19 @@ function OauthSection() {
                   style={{ border: '1px solid var(--border-bright)' }}
                 />
               </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] uppercase text-hermes font-bold">Đường dẫn tự động Import OpenAPI Schema (CỰC NHANH)</label>
+                  <button onClick={() => copyToClipboard(`${domain}/oauth/openapi.json`, 'Schema Import URL')} className="text-[10px] text-hermes hover:underline">Copy</button>
+                </div>
+                <input
+                  type="text"
+                  readOnly
+                  value={`${domain}/oauth/openapi.json`}
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-xs font-mono-ui border border-cyan-500/30"
+                />
+              </div>
             </div>
           </div>
 
@@ -446,10 +517,10 @@ function OauthSection() {
             <div className="text-xs font-semibold text-app-primary">📖 Hướng dẫn cấu hình Custom GPT:</div>
             <ol className="list-decimal list-inside text-[11px] text-app-muted space-y-1 leading-relaxed">
               <li>Truy cập mục <strong>My GPTs</strong> &rarr; <strong>Create a GPT</strong> &rarr; chọn tab <strong>Configure</strong> &rarr; cuộn xuống dưới chọn <strong>Create new Action</strong>.</li>
-              <li>Tại phần <strong>Authentication</strong>, chọn <strong>OAuth</strong>.</li>
-              <li>Copy và paste 4 thông số tương ứng ở bảng trên vào form của ChatGPT.</li>
+              <li>Tại phần <strong>Authentication</strong>, chọn <strong>OAuth</strong> và điền các thông số Client ID, Client Secret, Auth URL, Token URL tương ứng ở trên.</li>
+              <li>Tại ô <strong>Schema</strong> bên dưới, bấm nút <strong>Import from URL</strong> (Import từ URL), dán đường dẫn màu xanh tự động Import OpenAPI Schema vừa copy ở trên và nhấn <strong>Import</strong>. Toàn bộ API sẽ tự động được khai báo ngay lập tức!</li>
               <li>Tại mục <strong>Authentication Type</strong>, chọn <strong>Basic</strong> (hoặc <strong>Post</strong>).</li>
-              <li>Bấm <strong>Save</strong> để hoàn tất. Khi bạn hoặc khách hàng trò chuyện với Custom GPT này, ChatGPT sẽ hiển thị thông báo yêu cầu đăng nhập tài khoản SocialFlow của bạn thông qua màn hình Ủy quyền bảo mật.</li>
+              <li>Bấm <strong>Save</strong> để hoàn tất. Dán link Custom GPT của bạn vào ô "Link Custom GPT của hệ thống" ở đầu trang này để kích hoạt nút kết nối nhanh cho người dùng của bạn trên trình duyệt!</li>
             </ol>
           </div>
         </div>
