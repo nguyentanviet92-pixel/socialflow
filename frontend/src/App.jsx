@@ -125,6 +125,7 @@ export default function App() {
                 <Route path="/hermes/skills" element={<HermesBrain />} />
                 <Route path="/hermes/learning" element={<HermesBrain />} />
                 <Route path="/hermes/settings" element={<HermesBrain />} />
+                <Route path="/hermes/terminal" element={<HermesBrain />} />
 
                 {/* ── Legacy redirects & auxiliary sub-routes ── */}
                 <Route path="/dashboard-legacy" element={<Navigate to="/dashboard" replace />} />
