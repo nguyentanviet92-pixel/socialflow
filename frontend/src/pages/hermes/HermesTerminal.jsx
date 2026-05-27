@@ -12,6 +12,7 @@ const SHORTCUTS = [
   { label: '📋 Trạng thái',    args: ['status'],       color: '#06b6d4' },
   { label: '⚙️ Cấu hình',      args: ['config'],       color: '#8b5cf6' },
   { label: '🩺 Chẩn đoán',     args: ['doctor'],       color: '#f59e0b' },
+  { label: '🔑 Lệnh OAuth',    args: ['oauth-config'], color: '#f43f5e' },
   { label: '📝 Logs',           args: ['logs'],         color: '#10b981' },
   { label: '🔄 Cập nhật',      args: ['update'],       color: '#3b82f6' },
   { label: '📦 Version',        args: ['version'],      color: '#ec4899' },
@@ -121,10 +122,26 @@ export default function HermesTerminal() {
   }, [logs])
 
   const execCommand = useCallback((args) => {
+    if (args[0] === 'oauth-config' || args[0] === 'oauth') {
+      const base = API_BASE || window.location.origin
+      const apiDomain = base.replace(/\/$/, '')
+      addLog(`\n$ show oauth-config\n`, 'input')
+      addLog(`🔑 THÔNG TIN CẤU HÌNH OAUTH 2.0 & GPT ACTIONS:
+----------------------------------------------------------------------
+- Client ID:         socialflow
+- Client Secret:     socialflow-secret
+- Authorization URL: ${apiDomain}/oauth/authorize
+- Token URL:         ${apiDomain}/oauth/token
+- OpenAPI Schema:    ${apiDomain}/oauth/openapi.json
+----------------------------------------------------------------------
+👉 Hướng dẫn: Copy các thông số trên dán vào ChatGPT Actions để kích hoạt AI Hermes!
+\n`, 'stdout')
+      return
+    }
     if (!wsRef.current || wsRef.current.readyState !== 1) return
     addLog(`\n$ hermes ${args.join(' ')}\n`, 'input')
     wsRef.current.send(JSON.stringify({ type: 'exec', args }))
-  }, [addLog])
+  }, [addLog, addLog])
 
   const handleSend = () => {
     if (!input.trim() || !wsRef.current || wsRef.current.readyState !== 1) return
