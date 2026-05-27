@@ -1589,6 +1589,7 @@ class ConfigUpdateRequest(BaseModel):
     tier_models: Optional[Dict[str, str]] = None
     # Per-skill model override: {"orchestrator": "anthropic/claude-sonnet-4-5", "comment_gen": "deepseek-chat"}
     skill_models: Optional[Dict[str, str]] = None
+    gpt_link: Optional[str] = None
 
 @app.get('/config')
 async def get_config(x_agent_key: str = Header(None)):

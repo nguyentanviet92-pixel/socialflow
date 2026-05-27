@@ -335,18 +335,43 @@ function OauthSection() {
   const domain = window.location.origin
   const [apiKey, setApiKey] = useState('')
   const [loadingKey, setLoadingKey] = useState(false)
-  const [gptLink, setGptLink] = useState(localStorage.getItem('socialflow_gpt_link') || '')
+  const [gptLink, setGptLink] = useState('')
   const [editingGptLink, setEditingGptLink] = useState(false)
+
+  const qc = useQueryClient()
+  const { data: cfgData, isLoading } = useQuery({
+    queryKey: ['hermes', 'config'],
+    queryFn: async () => (await api.get('/ai-hermes/config')).data,
+  })
+
+  const dbGptLink = cfgData?.config?.gpt_link || ''
+  useEffect(() => {
+    if (dbGptLink) {
+      setGptLink(dbGptLink)
+    }
+  }, [dbGptLink])
 
   const copyToClipboard = (text, label) => {
     navigator.clipboard.writeText(text)
     toast.success(`Đã sao chép ${label}`)
   }
 
+  const saveConfig = useMutation({
+    mutationFn: async (newLink) => {
+      await api.put('/ai-hermes/config', { gpt_link: newLink })
+    },
+    onSuccess: () => {
+      toast.success('Đã lưu cấu hình Custom GPT thành công!')
+      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+      setEditingGptLink(false)
+    },
+    onError: (err) => {
+      toast.error(`Lỗi: ${err.response?.data?.error || err.message}`)
+    }
+  })
+
   const handleSaveGptLink = () => {
-    localStorage.setItem('socialflow_gpt_link', gptLink)
-    setEditingGptLink(false)
-    toast.success('Đã lưu link Custom GPT thành công!')
+    saveConfig.mutate(gptLink)
   }
 
   const handleGenerateApiKey = async () => {
@@ -365,13 +390,13 @@ function OauthSection() {
   return (
     <div className="p-6 font-mono-ui max-w-2xl space-y-8">
       {/* 🚀 QUICK ACCESS CONNECT BUTTON */}
-      {gptLink && (
-        <div className="p-1 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 shadow-xl">
+      <div className="p-1 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 shadow-xl">
+        {gptLink ? (
           <a
             href={gptLink}
             target="_blank"
             rel="noopener noreferrer"
-            className="w-full py-4 px-6 rounded-lg text-sm font-semibold text-black flex items-center justify-center gap-3 transition-all hover:opacity-90 text-center"
+            className="w-full py-4 px-6 rounded-lg text-sm font-semibold text-black flex flex-col items-center justify-center gap-1 transition-all hover:opacity-90 text-center"
             style={{
               background: 'linear-gradient(135deg, #06b6d4 0%, #10b981 100%)',
               color: '#000',
@@ -381,11 +406,35 @@ function OauthSection() {
               cursor: 'pointer'
             }}
           >
-            <span className="text-xl animate-bounce">🚀</span>
-            <span>MỞ TRÌNH DUYỆT - KẾT NỐI & ỦY QUYỀN CHATGPT NGAY</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xl animate-bounce">🚀</span>
+              <span>KẾT NỐI & ỦY QUYỀN CHATGPT NGAY (KÊNH CHÍNH THỨC)</span>
+            </div>
+            <span className="text-[10px] text-black/70 font-normal">Đăng nhập tài khoản Space Computer để Custom GPT bắt đầu hoạt động</span>
           </a>
-        </div>
-      )}
+        ) : (
+          <a
+            href={`${domain}/oauth/authorize?client_id=socialflow&response_type=code&redirect_uri=${encodeURIComponent('https://chatgpt.com')}&state=demo`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full py-4 px-6 rounded-lg text-sm font-semibold text-black flex flex-col items-center justify-center gap-1 transition-all hover:opacity-90 text-center"
+            style={{
+              background: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)',
+              color: '#fff',
+              textDecoration: 'none',
+              fontWeight: 'bold',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xl animate-pulse">⚡</span>
+              <span>ỦY QUYỀN OAUTH TRỰC TIẾP TRÊN TRÌNH DUYỆT</span>
+            </div>
+            <span className="text-[10px] text-white/80 font-normal">Chưa có Custom GPT nào được lưu. Bấm để đăng nhập ủy quyền trực tiếp ngay.</span>
+          </a>
+        )}
+      </div>
 
       {/* GPT LINK SETTINGS */}
       <div className="p-4 rounded-lg bg-app-elevated border border-app-border space-y-3">
@@ -407,7 +456,7 @@ function OauthSection() {
           />
         ) : (
           <div className="text-xs text-app-muted truncate">
-            {gptLink || <span className="italic text-app-muted/50">Chưa cấu hình link Custom GPT (Admin hãy dán link Custom GPT của bạn sau khi tạo xong vào đây để hiển thị nút kết nối 1-click cho người dùng)</span>}
+            {gptLink || <span className="italic text-app-muted/50">Chưa cấu hình link Custom GPT (Admin dán link Custom GPT của bạn sau khi tạo xong vào đây để lưu hệ thống cho mọi người dùng)</span>}
           </div>
         )}
       </div>
