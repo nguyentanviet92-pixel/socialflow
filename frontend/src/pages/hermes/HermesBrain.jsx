@@ -14,6 +14,7 @@ import HermesScoreBadge from '../../components/hermes/HermesScoreBadge'
 import DenseStat from '../../components/hermes/DenseStat'
 import SkillsEditor from './SkillsEditor'
 import HermesSettings from './HermesSettings'
+import HermesTerminal from './HermesTerminal'
 
 function formatAgo(ts) {
   if (!ts) return '—'
@@ -104,6 +105,7 @@ export default function HermesBrain() {
     if (pathname === '/hermes/settings') return 'settings'
     if (pathname === '/hermes/learning') return 'learning'
     if (pathname === '/hermes/skills') return 'skills'
+    if (pathname === '/hermes/terminal') return 'terminal'
     return 'overview'
   }
   const tab = getActiveTab()
@@ -165,6 +167,7 @@ export default function HermesBrain() {
           { id: 'overview', label: 'Tổng quan' },
           { id: 'skills', label: 'Kỹ năng (Skills)' },
           { id: 'learning', label: 'Học tập (Learning)' },
+          { id: 'terminal', label: '⚡ Terminal (CLI)' },
           { id: 'settings', label: 'Cấu hình' }
         ].map((t) => (
           <button
@@ -189,6 +192,9 @@ export default function HermesBrain() {
 
       {/* Tab: Learning — self-improvement timeline */}
       {tab === 'learning' && <LearningTimeline />}
+
+      {/* Tab: Terminal — live Hermes CLI */}
+      {tab === 'terminal' && <div className="flex-1 overflow-y-auto p-6"><HermesTerminal /></div>}
 
       {/* Tab: Overview — Body: 2 columns */}
       {tab === 'overview' && <>
