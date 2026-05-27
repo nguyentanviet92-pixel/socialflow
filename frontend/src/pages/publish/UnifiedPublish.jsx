@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Send, Sparkles, Hash, Image, Film, X, Loader, Clock,
@@ -10,6 +10,10 @@ import {
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
 import HashtagSection from '../../components/content/HashtagSection'
+import ContentList from '../content/ContentList'
+import ContentComposer from '../content/ContentComposer'
+import MediaLibrary from '../media/MediaLibrary'
+import InboxPage from '../inbox/InboxPage'
 
 const stylePresets = [
   { value: 'casual', label: 'Than mat', emoji: '😊' },
@@ -56,7 +60,7 @@ const MODEL_ALLOWED_SIZES = {
   'fal-ai/qwen-image-max': ['square', 'landscape_16_9', 'portrait_16_9', 'landscape_4_3', 'portrait_4_3'],
 }
 
-export default function UnifiedPublish() {
+function PublishTab() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -1319,6 +1323,95 @@ function PublishHistory() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+export default function UnifiedPublish() {
+  const nav = useNavigate()
+  const { pathname } = useLocation()
+
+  // Determine top-level active hub tab
+  const getActiveHubTab = () => {
+    if (pathname.startsWith('/content')) return 'content'
+    if (pathname === '/media') return 'media'
+    if (pathname === '/inbox') return 'inbox'
+    return 'publish'
+  }
+  const activeHubTab = getActiveHubTab()
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Consolidated Top Tabs Bar */}
+      <div
+        className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider shrink-0"
+        style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
+      >
+        <button
+          onClick={() => nav('/publish')}
+          className={`px-4 py-3 ${activeHubTab === 'publish' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'publish' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          🚀 Xuất bản & Lịch
+        </button>
+        <button
+          onClick={() => nav('/content')}
+          className={`px-4 py-3 ${activeHubTab === 'content' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'content' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          📝 Soạn thảo
+        </button>
+        <button
+          onClick={() => nav('/media')}
+          className={`px-4 py-3 ${activeHubTab === 'media' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'media' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          🖼️ Tệp tin (Media)
+        </button>
+        <button
+          onClick={() => nav('/inbox')}
+          className={`px-4 py-3 ${activeHubTab === 'inbox' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'inbox' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          📨 Hộp thư
+        </button>
+      </div>
+
+      {/* Render Consolidated Views */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {activeHubTab === 'publish' && (
+          <div className="p-6">
+            <PublishTab />
+          </div>
+        )}
+        {activeHubTab === 'content' && (
+          <div className="p-6">
+            {pathname === '/content/new' ? <ContentComposer /> : <ContentList />}
+          </div>
+        )}
+        {activeHubTab === 'media' && (
+          <div className="p-6">
+            <MediaLibrary />
+          </div>
+        )}
+        {activeHubTab === 'inbox' && (
+          <div className="p-6 h-full">
+            <InboxPage />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

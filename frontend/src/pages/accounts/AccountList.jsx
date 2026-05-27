@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
@@ -25,6 +25,8 @@ import useAgentGuard from '../../hooks/useAgentGuard'
 import HealthBadge from '../../components/accounts/HealthBadge'
 import ProxyBadge from '../../components/shared/ProxyBadge'
 import CookieRepairModal from '../../components/hermes/CookieRepairModal'
+import PageList from '../pages-manager/PageList'
+import WebsiteSettings from '../settings/WebsiteSettings'
 
 export default function AccountList() {
   const [showAddModal, setShowAddModal] = useState(false)
@@ -40,6 +42,8 @@ export default function AccountList() {
 
   const queryClient = useQueryClient()
   const { requireAgent } = useAgentGuard()
+  const { pathname } = useLocation()
+  const nav = useNavigate()
 
   const { data: accounts = [], isLoading } = useQuery({
     queryKey: ['accounts'],
@@ -172,259 +176,312 @@ export default function AccountList() {
     ['session_expired', 'expired', 'checkpoint'].includes(a.status)
   )
 
+  // Tab state mapping
+  const getActiveTab = () => {
+    if (pathname === '/pages') return 'pages'
+    if (pathname === '/settings/websites') return 'websites'
+    return 'accounts'
+  }
+  const activeTab = getActiveTab()
+
   return (
-    <div className="space-y-6">
-
-      {/* ⚠️ Banner cảnh báo cookie hết hạn/checkpoint */}
-      {expiredNicks.length > 0 && (
-        <div
-          className="flex items-start gap-3 px-4 py-3 rounded"
-          style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)' }}
+    <div className="flex flex-col h-full">
+      {/* Top tab navigation for Hub 3 */}
+      <div
+        className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider shrink-0 mb-6"
+        style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
+      >
+        <button
+          onClick={() => nav('/accounts')}
+          className={`px-4 py-3 ${activeTab === 'accounts' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeTab === 'accounts' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
         >
-          <AlertTriangle size={16} className="text-danger mt-0.5 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-danger mb-1">
-              {expiredNicks.length} nick cần cập nhật cookie
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {expiredNicks.map(a => (
-                <button
-                  key={a.id}
-                  onClick={() => setCookieRepairAccount(a)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded"
-                  style={{
-                    background: 'rgba(239,68,68,0.12)',
-                    border: '1px solid rgba(239,68,68,0.4)',
-                    color: 'var(--danger)',
-                  }}
-                >
-                  <Key size={11} />
-                  {a.username || a.id.slice(0, 8)}
-                  <span className="text-[10px] opacity-70">
-                    {a.status === 'checkpoint' ? '· checkpoint' : '· hết hạn'}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-app-primary">Accounts</h1>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleFetchAll}
-            disabled={fetchingAll || accounts.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
-          >
-            {fetchingAll ? <Loader className="w-4 h-4 animate-spin" /> : <ScanSearch className="w-4 h-4" />}
-            {fetchingAll ? 'Fetching...' : 'Fetch All'}
-          </button>
-          <button
-            onClick={() => {
-              if (window.confirm('Tự gán phong cách viết cho các nick chưa có voice profile? (mỗi nick 1 preset cố định, không trùng nhau)')) {
-                autoVoiceMutation.mutate(false)
-              }
-            }}
-            disabled={autoVoiceMutation.isPending || accounts.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-purple-300 text-purple-700 hover:bg-purple-50 disabled:opacity-50 transition-colors"
-            title="Auto-assign voice profile (preset) cho mọi nick chưa cấu hình"
-          >
-            {autoVoiceMutation.isPending ? <Loader className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4" />}
-            Auto Voice
-          </button>
-          <button
-            onClick={() => setShowBulkModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-app-border text-app-primary hover:bg-app-base transition-colors"
-          >
-            <Upload className="w-4 h-4" />
-            Bulk Import
-          </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-info text-white hover:opacity-90 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Add Account
-          </button>
-        </div>
+          👤 Tài khoản (Profiles)
+        </button>
+        <button
+          onClick={() => nav('/pages')}
+          className={`px-4 py-3 ${activeTab === 'pages' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeTab === 'pages' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          📄 Trang doanh nghiệp (Fanpages)
+        </button>
+        <button
+          onClick={() => nav('/settings/websites')}
+          className={`px-4 py-3 ${activeTab === 'websites' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeTab === 'websites' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          🌐 Website & GA Settings
+        </button>
       </div>
 
-      {/* Fetch All Progress Banner */}
-      {totalFetchCount > 0 && (
-        <div className={`rounded border p-4 ${
-          activeFetchCount > 0 ? 'bg-blue-50 border-blue-200' :
-          failedFetchCount > 0 && doneFetchCount === 0 ? 'bg-red-50 border-red-200' :
-          'bg-emerald-50 border-emerald-200'
-        }`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {activeFetchCount > 0 ? (
-                <Loader className="w-5 h-5 text-info animate-spin" />
-              ) : failedFetchCount > 0 && doneFetchCount === 0 ? (
-                <XCircle className="w-5 h-5 text-red-500" />
-              ) : (
-                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-              )}
-              <div>
-                <p className="text-sm font-medium text-app-primary">
-                  {activeFetchCount > 0
-                    ? `Fetching pages & groups... (${doneFetchCount + failedFetchCount}/${totalFetchCount} done)`
-                    : `Fetch complete — ${doneFetchCount} success, ${failedFetchCount} failed`
-                  }
-                </p>
-                {activeFetchCount > 0 && (
-                  <div className="w-48 h-1.5 bg-blue-100 rounded-full mt-1.5 overflow-hidden">
-                    <div
-                      className="h-full bg-info rounded-full transition-all duration-500"
-                      style={{ width: `${Math.round(((doneFetchCount + failedFetchCount) / totalFetchCount) * 100)}%` }}
-                    />
+      {/* Render Consolidated View */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {activeTab === 'pages' && <PageList />}
+        {activeTab === 'websites' && <WebsiteSettings />}
+        {activeTab === 'accounts' && (
+          <div className="space-y-6 px-6 pb-6">
+            {/* ⚠️ Banner cảnh báo cookie hết hạn/checkpoint */}
+            {expiredNicks.length > 0 && (
+              <div
+                className="flex items-start gap-3 px-4 py-3 rounded"
+                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)' }}
+              >
+                <AlertTriangle size={16} className="text-danger mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-danger mb-1">
+                    {expiredNicks.length} nick cần cập nhật cookie
                   </div>
-                )}
+                  <div className="flex flex-wrap gap-2">
+                    {expiredNicks.map(a => (
+                      <button
+                        key={a.id}
+                        onClick={() => setCookieRepairAccount(a)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded"
+                        style={{
+                          background: 'rgba(239,68,68,0.12)',
+                          border: '1px solid rgba(239,68,68,0.4)',
+                          color: 'var(--danger)',
+                        }}
+                      >
+                        <Key size={11} />
+                        {a.username || a.id.slice(0, 8)}
+                        <span className="text-[10px] opacity-70">
+                          {a.status === 'checkpoint' ? '· checkpoint' : '· hết hạn'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <h1 className="text-2xl font-bold text-app-primary">Accounts</h1>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleFetchAll}
+                  disabled={fetchingAll || accounts.length === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                >
+                  {fetchingAll ? <Loader className="w-4 h-4 animate-spin" /> : <ScanSearch className="w-4 h-4" />}
+                  {fetchingAll ? 'Fetching...' : 'Fetch All'}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Tự gán phong cách viết cho các nick chưa có voice profile? (mỗi nick 1 preset cố định, không trùng nhau)')) {
+                      autoVoiceMutation.mutate(false)
+                    }
+                  }}
+                  disabled={autoVoiceMutation.isPending || accounts.length === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-purple-300 text-purple-700 hover:bg-purple-50 disabled:opacity-50 transition-colors"
+                  title="Auto-assign voice profile (preset) cho mọi nick chưa cấu hình"
+                >
+                  {autoVoiceMutation.isPending ? <Loader className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4" />}
+                  Auto Voice
+                </button>
+                <button
+                  onClick={() => setShowBulkModal(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-app-border text-app-primary hover:bg-app-base transition-colors"
+                >
+                  <Upload className="w-4 h-4" />
+                  Bulk Import
+                </button>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-info text-white hover:opacity-90 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Account
+                </button>
               </div>
             </div>
-            {activeFetchCount === 0 && (
-              <button onClick={dismissFetchAll} className="p-1 rounded-lg hover:bg-app-surface/50 text-app-muted">
-                <X className="w-4 h-4" />
-              </button>
+
+            {/* Fetch All Progress Banner */}
+            {totalFetchCount > 0 && (
+              <div className={`rounded border p-4 ${
+                activeFetchCount > 0 ? 'bg-blue-50 border-blue-200' :
+                failedFetchCount > 0 && doneFetchCount === 0 ? 'bg-red-50 border-red-200' :
+                'bg-emerald-50 border-emerald-200'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {activeFetchCount > 0 ? (
+                      <Loader className="w-5 h-5 text-info animate-spin" />
+                    ) : failedFetchCount > 0 && doneFetchCount === 0 ? (
+                      <XCircle className="w-5 h-5 text-red-500" />
+                    ) : (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                    )}
+                    <div>
+                      <p className="text-sm font-medium text-app-primary">
+                        {activeFetchCount > 0
+                          ? `Fetching pages & groups... (${doneFetchCount + failedFetchCount}/${totalFetchCount} done)`
+                          : `Fetch complete — ${doneFetchCount} success, ${failedFetchCount} failed`
+                        }
+                      </p>
+                      {activeFetchCount > 0 && (
+                        <div className="w-48 h-1.5 bg-blue-100 rounded-full mt-1.5 overflow-hidden">
+                          <div
+                            className="h-full bg-info rounded-full transition-all duration-500"
+                            style={{ width: `${Math.round(((doneFetchCount + failedFetchCount) / totalFetchCount) * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {activeFetchCount === 0 && (
+                    <button onClick={dismissFetchAll} className="p-1 rounded-lg hover:bg-app-surface/50 text-app-muted">
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="relative max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-app-dim" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search accounts..."
+                className="w-full pl-10 pr-4 py-2 rounded-lg border border-app-border text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {isLoading ? (
+              <div className="flex items-center justify-center h-64">
+                <Loader className="w-6 h-6 animate-spin text-info" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="text-center py-12 bg-app-surface rounded border border-app-border">
+                <p className="text-app-muted text-sm">No accounts found</p>
+              </div>
+            ) : (
+              <div className="bg-app-surface rounded border border-app-border overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-app-border bg-app-base">
+                        <th className="text-left px-4 py-3 font-medium text-app-muted">Username</th>
+                        <th className="text-left px-4 py-3 font-medium text-app-muted">FB User ID</th>
+                        <th className="text-left px-4 py-3 font-medium text-app-muted">Browser</th>
+                        <th className="text-left px-4 py-3 font-medium text-app-muted">Proxy</th>
+                        <th className="text-left px-4 py-3 font-medium text-app-muted">Status</th>
+                        <th className="text-left px-4 py-3 font-medium text-app-muted">Posts Today</th>
+                        <th className="text-right px-4 py-3 font-medium text-app-muted">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filtered.map((account) => (
+                        <tr key={account.id} className="hover:bg-app-base">
+                          <td className="px-4 py-3 font-medium text-app-primary">
+                            <div className="flex items-center gap-2">
+                              {account.avatar_url ? (
+                                <img src={account.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover" />
+                              ) : (
+                                <div className="w-7 h-7 rounded-full bg-app-hover flex items-center justify-center text-xs text-app-muted">
+                                  {(account.username || '?')[0].toUpperCase()}
+                                </div>
+                              )}
+                              {account.username}
+                              {(() => {
+                                const fs = getFetchStatus(account.id)
+                                if (!fs) return null
+                                if (['pending', 'claimed', 'running'].includes(fs.status))
+                                  return <RefreshCw className="w-3.5 h-3.5 text-info animate-spin" />
+                                if (fs.status === 'done')
+                                  return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                if (fs.status === 'failed')
+                                  return <XCircle className="w-3.5 h-3.5 text-red-500" title={fs.error || 'Failed'} />
+                                return null
+                              })()}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-app-muted">{account.fb_user_id}</td>
+                          <td className="px-4 py-3 text-app-muted">{account.browser_type || 'chromium'}</td>
+                          <td className="px-4 py-3">
+                            <ProxyBadge proxy={account.proxies} />
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <HealthBadge status={account.status} />
+                              {(['checkpoint', 'session_expired', 'expired', 'dead'].includes(account.status)) && (
+                                <button
+                                  onClick={() => setCookieRepairAccount(account)}
+                                  className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                                  style={{
+                                    background: 'rgba(239,68,68,0.1)',
+                                    border: '1px solid rgba(239,68,68,0.35)',
+                                    color: 'var(--danger)',
+                                  }}
+                                >
+                                  <Key size={9} />
+                                  Cập nhật cookie
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-app-muted">
+                            {account.posts_today ?? 0}/{account.max_daily_posts ?? 10}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => requireAgent(() => healthCheckMutation.mutate(account.id))}
+                                disabled={healthCheckMutation.isPending || account.status === 'checking'}
+                                className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-app-border text-app-muted hover:bg-app-base disabled:opacity-50 transition-colors"
+                              >
+                                {account.status === 'checking' ? (
+                                  <Loader className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Activity className="w-3.5 h-3.5" />
+                                )}
+                                {account.status === 'checking' ? 'Checking...' : 'Check'}
+                              </button>
+                              <button
+                                onClick={() => setEditAccount(account)}
+                                className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-app-border text-app-muted hover:bg-app-base transition-colors"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleDelete(account)}
+                                disabled={deleteMutation.isPending}
+                                className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Delete
+                              </button>
+                              <Link
+                                  to={`/accounts/${account.id}`}
+                                  className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-app-border text-app-muted hover:bg-app-base transition-colors"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                View
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </div>
-        </div>
-      )}
-
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-app-dim" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search accounts..."
-          className="w-full pl-10 pr-4 py-2 rounded-lg border border-app-border text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        />
+        )}
       </div>
-
-      {isLoading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader className="w-6 h-6 animate-spin text-info" />
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-12 bg-app-surface rounded border border-app-border">
-          <p className="text-app-muted text-sm">No accounts found</p>
-        </div>
-      ) : (
-        <div className="bg-app-surface rounded border border-app-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-app-border bg-app-base">
-                  <th className="text-left px-4 py-3 font-medium text-app-muted">Username</th>
-                  <th className="text-left px-4 py-3 font-medium text-app-muted">FB User ID</th>
-                  <th className="text-left px-4 py-3 font-medium text-app-muted">Browser</th>
-                  <th className="text-left px-4 py-3 font-medium text-app-muted">Proxy</th>
-                  <th className="text-left px-4 py-3 font-medium text-app-muted">Status</th>
-                  <th className="text-left px-4 py-3 font-medium text-app-muted">Posts Today</th>
-                  <th className="text-right px-4 py-3 font-medium text-app-muted">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filtered.map((account) => (
-                  <tr key={account.id} className="hover:bg-app-base">
-                    <td className="px-4 py-3 font-medium text-app-primary">
-                      <div className="flex items-center gap-2">
-                        {account.avatar_url ? (
-                          <img src={account.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover" />
-                        ) : (
-                          <div className="w-7 h-7 rounded-full bg-app-hover flex items-center justify-center text-xs text-app-muted">
-                            {(account.username || '?')[0].toUpperCase()}
-                          </div>
-                        )}
-                        {account.username}
-                        {(() => {
-                          const fs = getFetchStatus(account.id)
-                          if (!fs) return null
-                          if (['pending', 'claimed', 'running'].includes(fs.status))
-                            return <RefreshCw className="w-3.5 h-3.5 text-info animate-spin" />
-                          if (fs.status === 'done')
-                            return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                          if (fs.status === 'failed')
-                            return <XCircle className="w-3.5 h-3.5 text-red-500" title={fs.error || 'Failed'} />
-                          return null
-                        })()}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-app-muted">{account.fb_user_id}</td>
-                    <td className="px-4 py-3 text-app-muted">{account.browser_type || 'chromium'}</td>
-                    <td className="px-4 py-3">
-                      <ProxyBadge proxy={account.proxies} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        <HealthBadge status={account.status} />
-                        {(['checkpoint', 'session_expired', 'expired', 'dead'].includes(account.status)) && (
-                          <button
-                            onClick={() => setCookieRepairAccount(account)}
-                            className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded"
-                            style={{
-                              background: 'rgba(239,68,68,0.1)',
-                              border: '1px solid rgba(239,68,68,0.35)',
-                              color: 'var(--danger)',
-                            }}
-                          >
-                            <Key size={9} />
-                            Cập nhật cookie
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-app-muted">
-                      {account.posts_today ?? 0}/{account.max_daily_posts ?? 10}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => requireAgent(() => healthCheckMutation.mutate(account.id))}
-                          disabled={healthCheckMutation.isPending || account.status === 'checking'}
-                          className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-app-border text-app-muted hover:bg-app-base disabled:opacity-50 transition-colors"
-                        >
-                          {account.status === 'checking' ? (
-                            <Loader className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Activity className="w-3.5 h-3.5" />
-                          )}
-                          {account.status === 'checking' ? 'Checking...' : 'Check'}
-                        </button>
-                        <button
-                          onClick={() => setEditAccount(account)}
-                          className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-app-border text-app-muted hover:bg-app-base transition-colors"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(account)}
-                          disabled={deleteMutation.isPending}
-                          className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Delete
-                        </button>
-                        <Link
-                          to={`/accounts/${account.id}`}
-                          className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-app-border text-app-muted hover:bg-app-base transition-colors"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          View
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {editAccount && (
         <EditAccountModal

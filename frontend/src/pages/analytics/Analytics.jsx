@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { BarChart3, Users, Send, TrendingUp, Activity, Clock, CheckCircle, AlertCircle } from 'lucide-react'
 import api from '../../lib/api'
+import TrendCenter from '../trends/TrendCenter'
+import DataCenter from '../data-center/DataCenter'
 
 const tabs = [
   { key: 'overview', label: 'Overview', icon: BarChart3 },
@@ -194,14 +197,14 @@ function HistoryTab() {
     <div>
       {/* Filters */}
       <div className="flex gap-3 mb-4">
-        <select value={filter.status} onChange={e => setFilter({ ...filter, status: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
+        <select value={filter.status} onChange={e => setFilter({ ...filter, status: e.target.value })} className="border rounded-lg px-3 py-2 text-sm bg-app-surface text-app-primary border-app-border">
           <option value="">All statuses</option>
           <option value="done">Done</option>
           <option value="failed">Failed</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <input type="date" value={filter.date_from} onChange={e => setFilter({ ...filter, date_from: e.target.value })} className="border rounded-lg px-3 py-2 text-sm" />
-        <input type="date" value={filter.date_to} onChange={e => setFilter({ ...filter, date_to: e.target.value })} className="border rounded-lg px-3 py-2 text-sm" />
+        <input type="date" value={filter.date_from} onChange={e => setFilter({ ...filter, date_from: e.target.value })} className="border rounded-lg px-3 py-2 text-sm bg-app-surface text-app-primary border-app-border" />
+        <input type="date" value={filter.date_to} onChange={e => setFilter({ ...filter, date_to: e.target.value })} className="border rounded-lg px-3 py-2 text-sm bg-app-surface text-app-primary border-app-border" />
       </div>
 
       {isLoading ? (
@@ -283,34 +286,100 @@ function ActivityTab() {
 }
 
 export default function Analytics() {
-  const [activeTab, setActiveTab] = useState('overview')
+  const nav = useNavigate()
+  const { pathname } = useLocation()
+
+  // Determine top-level active hub tab
+  const getActiveHubTab = () => {
+    if (pathname === '/trends') return 'trends'
+    if (pathname === '/data-center') return 'data-center'
+    return 'analytics'
+  }
+  const activeHubTab = getActiveHubTab()
+
+  const [activeSubTab, setActiveSubTab] = useState('overview')
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-app-primary">Analytics</h1>
+    <div className="flex flex-col h-full">
+      {/* Consolidated Top Tabs Bar */}
+      <div
+        className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider shrink-0"
+        style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
+      >
+        <button
+          onClick={() => nav('/analytics')}
+          className={`px-4 py-3 ${activeHubTab === 'analytics' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'analytics' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          📊 Thống kê
+        </button>
+        <button
+          onClick={() => nav('/trends')}
+          className={`px-4 py-3 ${activeHubTab === 'trends' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'trends' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          🔥 Bắt xu hướng
+        </button>
+        <button
+          onClick={() => nav('/data-center')}
+          className={`px-4 py-3 ${activeHubTab === 'data-center' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeHubTab === 'data-center' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          🗄️ Kho dữ liệu
+        </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-app-elevated rounded-lg p-1 w-fit">
-        {tabs.map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              activeTab === tab.key ? 'bg-app-surface shadow text-app-primary' : 'text-app-muted hover:text-app-primary'
-            }`}
-          >
-            <tab.icon size={14} />
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {/* Render Consolidated Views */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {activeHubTab === 'trends' && (
+          <div className="p-6">
+            <TrendCenter />
+          </div>
+        )}
+        {activeHubTab === 'data-center' && (
+          <div className="p-6">
+            <DataCenter />
+          </div>
+        )}
+        {activeHubTab === 'analytics' && (
+          <div className="p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h1 className="text-2xl font-bold text-app-primary">Analytics</h1>
+            </div>
 
-      {activeTab === 'overview' && <OverviewTab />}
-      {activeTab === 'accounts' && <AccountsTab />}
-      {activeTab === 'history' && <HistoryTab />}
-      {activeTab === 'activity' && <ActivityTab />}
+            {/* Tabs */}
+            <div className="flex gap-1 mb-6 bg-app-elevated rounded-lg p-1 w-fit">
+              {tabs.map(tab => (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveSubTab(tab.key)}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    activeSubTab === tab.key ? 'bg-app-surface shadow text-app-primary' : 'text-app-muted hover:text-app-primary'
+                  }`}
+                >
+                  <tab.icon size={14} />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {activeSubTab === 'overview' && <OverviewTab />}
+            {activeSubTab === 'accounts' && <AccountsTab />}
+            {activeSubTab === 'history' && <HistoryTab />}
+            {activeSubTab === 'activity' && <ActivityTab />}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
+

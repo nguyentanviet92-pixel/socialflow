@@ -4,14 +4,16 @@
  * Right: selected skill detail + recent outputs.
  * Bottom: live call feed.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
 import SkillCard from '../../components/hermes/SkillCard'
 import HermesScoreBadge from '../../components/hermes/HermesScoreBadge'
 import DenseStat from '../../components/hermes/DenseStat'
 import SkillsEditor from './SkillsEditor'
+import HermesSettings from './HermesSettings'
 
 function formatAgo(ts) {
   if (!ts) return '—'
@@ -95,7 +97,21 @@ function LearningTimeline() {
 
 export default function HermesBrain() {
   const [selected, setSelected] = useState(null)
-  const [tab, setTab] = useState('overview') // 'overview' | 'skills'
+  const { pathname } = useLocation()
+  const nav = useNavigate()
+  
+  const getActiveTab = () => {
+    if (pathname === '/hermes/settings') return 'settings'
+    if (pathname === '/hermes/learning') return 'learning'
+    if (pathname === '/hermes/skills') return 'skills'
+    return 'overview'
+  }
+  const tab = getActiveTab()
+  
+  const setTab = (t) => {
+    if (t === 'overview') nav('/hermes')
+    else nav(`/hermes/${t}`)
+  }
 
   const { data: perf } = useQuery({
     queryKey: ['hermes', 'performance'],
@@ -145,23 +161,31 @@ export default function HermesBrain() {
         className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
-        {['overview', 'skills', 'learning'].map((t) => (
+        {[
+          { id: 'overview', label: 'Tổng quan' },
+          { id: 'skills', label: 'Kỹ năng (Skills)' },
+          { id: 'learning', label: 'Học tập (Learning)' },
+          { id: 'settings', label: 'Cấu hình' }
+        ].map((t) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2.5 ${tab === t ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2.5 ${tab === t.id ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
             style={{
-              borderBottom: tab === t ? '2px solid var(--hermes)' : '2px solid transparent',
+              borderBottom: tab === t.id ? '2px solid var(--hermes)' : '2px solid transparent',
               marginBottom: '-1px',
             }}
           >
-            {t}
+            {t.label}
           </button>
         ))}
       </div>
 
       {/* Tab: Skills editor */}
       {tab === 'skills' && <SkillsEditor />}
+
+      {/* Tab: Settings */}
+      {tab === 'settings' && <div className="flex-1 overflow-y-auto"><HermesSettings /></div>}
 
       {/* Tab: Learning — self-improvement timeline */}
       {tab === 'learning' && <LearningTimeline />}

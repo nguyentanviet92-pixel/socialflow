@@ -169,7 +169,7 @@ function renderAuthPage({ client_id, redirect_uri, response_type, state, scope, 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ủy quyền SocialFlow</title>
+  <title>Ủy quyền Space Computer</title>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -212,7 +212,7 @@ function renderAuthPage({ client_id, redirect_uri, response_type, state, scope, 
       text-align: center;
       margin-bottom: 24px;
     }
-    .logo {
+    .logo-container {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -221,10 +221,13 @@ function renderAuthPage({ client_id, redirect_uri, response_type, state, scope, 
       border-radius: 12px;
       background: var(--hermes-dim);
       border: 1px solid rgba(6,182,212,0.3);
-      color: var(--hermes);
-      font-size: 24px;
       margin-bottom: 12px;
       animation: pulse 2s infinite alternate;
+    }
+    .logo-img {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
     }
     @keyframes pulse {
       0% { box-shadow: 0 0 5px rgba(6,182,212,0.2); }
@@ -303,9 +306,11 @@ function renderAuthPage({ client_id, redirect_uri, response_type, state, scope, 
 <body>
   <div class="card">
     <div class="header">
-      <div class="logo">🧠</div>
+      <div class="logo-container">
+        <img class="logo-img" src="https://accounts.spacecomputer.io/_next/image?url=%2Flogo.png&amp;w=32&amp;q=75" alt="Space Computer">
+      </div>
       <div class="title">Kết nối ChatGPT</div>
-      <div class="subtitle">Ủy quyền cho ChatGPT truy cập tài khoản SocialFlow</div>
+      <div class="subtitle">Ủy quyền cho ChatGPT truy cập tài khoản Space Computer</div>
     </div>
     
     ${error ? '<div class="error-msg">' + error + '</div>' : ''}

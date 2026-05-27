@@ -22,26 +22,15 @@ import {
 } from 'lucide-react'
 import useAuthStore from '../../store/auth.store'
 
-// Dark-hermes nav — grouped by purpose. Legacy routes removed 2026-04-17.
+// Dark-hermes nav — consolidated into 7 key functional hubs.
 const mainLinks = [
   { to: '/dashboard',      label: 'Tổng quan',     icon: LayoutDashboard },
-  { to: '/campaigns',      label: 'Chiến dịch',    icon: Target },
-  { to: '/agents',         label: 'Agents',        icon: Users },
-  { to: '/monitor',        label: 'Signal Wall',   icon: Radio },
-  { to: '/nick-nurture',   label: 'Nuôi nick',     icon: Sprout },
-  { to: '/accounts',       label: 'Tài khoản',     icon: Users },
-  { to: '/pages',          label: 'Fanpage',       icon: FileText },
-  { to: '/media',          label: 'Thư viện',      icon: Film },
-  { to: '/publish',        label: 'Đăng bài',      icon: Send },
-  { to: '/inbox',          label: 'Hộp thư',       icon: Inbox },
-  { to: '/health',         label: 'Sức khỏe',      icon: Activity },
-  { to: '/trends',         label: 'Xu hướng',      icon: TrendingUp },
-  { to: '/analytics',      label: 'Thống kê',      icon: BarChart3 },
-  { to: '/data-center',    label: 'Data Center',   icon: Database },
-  { to: '/group-monitor',  label: 'Theo dõi nhóm', icon: Radar },
-  { to: '/settings/websites', label: 'Website',    icon: Globe },
-  { to: '/hermes',         label: 'Hermes Brain',  icon: Brain },
-  { to: '/hermes/settings',label: 'Hermes Config', icon: Sliders },
+  { to: '/campaigns',      label: 'Chiến dịch & Agents', icon: Target },
+  { to: '/accounts',       label: 'Tài khoản & Fanpage', icon: Users },
+  { to: '/monitor',        label: 'Giám sát & Tín hiệu', icon: Radio },
+  { to: '/analytics',      label: 'Xu hướng & Phân tích', icon: BarChart3 },
+  { to: '/publish',        label: 'Thư viện & Xuất bản', icon: Send },
+  { to: '/hermes',         label: 'Trí tuệ Hermes',  icon: Brain },
 ]
 
 const settingsLinks = []
@@ -50,9 +39,9 @@ export default function Sidebar({ onClose }) {
   const profile = useAuthStore((s) => s.profile)
   const isAdmin = profile?.role === 'admin'
 
-  // Filter out Hermes Settings for non-admin users
+  // Filter links - only admins can access Hermes Hub
   const filteredLinks = mainLinks.filter(link => {
-    if (link.to === '/hermes/settings') return isAdmin
+    if (link.to === '/hermes') return isAdmin
     return true
   })
 

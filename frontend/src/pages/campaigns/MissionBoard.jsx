@@ -1,14 +1,12 @@
-/**
- * /campaigns — Mission Board.
- * Card grid showing campaigns with Hermes plan summary.
- */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Edit, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
 import DenseStat from '../../components/hermes/DenseStat'
 import HermesCaller from '../../components/hermes/HermesCaller'
+import AgentsRoster from '../agents/AgentsRoster'
+import NickNurture from '../nick-nurture/NickNurture'
 
 const STATUS_COLOR = {
   active:  'text-hermes',
@@ -104,6 +102,7 @@ function CampaignCard({ campaign, onClick, onEdit, onDelete }) {
 
 export default function MissionBoard() {
   const nav = useNavigate()
+  const { pathname } = useLocation()
 
   const asArray = (d) => Array.isArray(d) ? d
     : Array.isArray(d?.items) ? d.items
@@ -140,47 +139,102 @@ export default function MissionBoard() {
   const paused = campaigns.filter(c => c.status === 'paused').length
   const drafts = campaigns.filter(c => c.status === 'draft').length
 
+  // Determine active tab
+  const getActiveTab = () => {
+    if (pathname === '/agents') return 'agents'
+    if (pathname === '/nick-nurture') return 'nurture'
+    return 'campaigns'
+  }
+  const activeTab = getActiveTab()
+
   return (
     <div className="flex flex-col h-full">
+      {/* Consolidated Top Tabs Bar */}
       <div
-        className="flex items-center gap-8 px-6 py-4"
-        style={{ borderBottom: '1px solid var(--border)' }}
+        className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider shrink-0"
+        style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
       >
-        <div>
-          <div className="font-mono-ui text-[10px] uppercase text-app-muted">Missions</div>
-          <div className="text-app-primary text-lg mt-1">Campaign board ({campaigns.length})</div>
-        </div>
-        <div className="flex-1" />
-        <DenseStat value={active} label="Active" color="hermes" />
-        <DenseStat value={paused} label="Paused" color="warn" />
-        <DenseStat value={drafts} label="Drafts" />
         <button
-          onClick={() => nav('/campaigns/new')}
-          className="btn-hermes"
+          onClick={() => nav('/campaigns')}
+          className={`px-4 py-3 ${activeTab === 'campaigns' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeTab === 'campaigns' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
         >
-          + New mission
+          🎯 Chiến dịch
+        </button>
+        <button
+          onClick={() => nav('/agents')}
+          className={`px-4 py-3 ${activeTab === 'agents' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeTab === 'agents' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          👥 Agents Roster
+        </button>
+        <button
+          onClick={() => nav('/nick-nurture')}
+          className={`px-4 py-3 ${activeTab === 'nurture' ? 'text-hermes' : 'text-app-muted hover:text-app-primary'}`}
+          style={{
+            borderBottom: activeTab === 'nurture' ? '2px solid var(--hermes)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          🌱 Nuôi Nick (Nurture)
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
-        {campaigns.length === 0 ? (
-          <div className="text-center text-app-muted py-12">
-            <div className="text-sm mb-2">No campaigns yet</div>
-            <button onClick={() => nav('/campaigns/new')} className="btn-hermes">
-              Create first mission
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {campaigns.map(c => (
-              <CampaignCard
-                key={c.id}
-                campaign={c}
-                onClick={() => nav(`/campaigns/${c.id}`)}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-              />
-            ))}
+      {/* Render Consolidated Views */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {activeTab === 'agents' && <AgentsRoster />}
+        {activeTab === 'nurture' && <NickNurture />}
+        {activeTab === 'campaigns' && (
+          <div className="flex flex-col h-full">
+            {/* Header info for campaigns specifically */}
+            <div
+              className="flex items-center gap-8 px-6 py-4"
+              style={{ borderBottom: '1px solid var(--border)' }}
+            >
+              <div>
+                <div className="font-mono-ui text-[10px] uppercase text-app-muted">Missions</div>
+                <div className="text-app-primary text-lg mt-1">Campaign board ({campaigns.length})</div>
+              </div>
+              <div className="flex-1" />
+              <DenseStat value={active} label="Active" color="hermes" />
+              <DenseStat value={paused} label="Paused" color="warn" />
+              <DenseStat value={drafts} label="Drafts" />
+              <button
+                onClick={() => nav('/campaigns/new')}
+                className="btn-hermes"
+              >
+                + New mission
+              </button>
+            </div>
+
+            <div className="flex-1 p-6">
+              {campaigns.length === 0 ? (
+                <div className="text-center text-app-muted py-12">
+                  <div className="text-sm mb-2">No campaigns yet</div>
+                  <button onClick={() => nav('/campaigns/new')} className="btn-hermes">
+                    Create first mission
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {campaigns.map(c => (
+                    <CampaignCard
+                      key={c.id}
+                      campaign={c}
+                      onClick={() => nav(`/campaigns/${c.id}`)}
+                      onEdit={handleEdit}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

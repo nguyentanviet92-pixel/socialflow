@@ -90,51 +90,64 @@ export default function App() {
             <AppLayout>
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" />} />
-                {/* ── Hermes UI pages (new) ── */}
+                {/* ── Hub 1: Tổng quan ── */}
                 <Route path="/dashboard" element={<CommandCenter />} />
-                <Route path="/agents" element={<AgentsRoster />} />
-                <Route path="/campaigns" element={<MissionBoard />} />
-                <Route path="/monitor" element={<SignalWall />} />
-                <Route path="/hermes" element={<HermesBrain />} />
-                <Route path="/hermes/settings" element={<HermesSettings />} />
 
-                {/* ── Legacy redirects — actual pages removed 2026-04-17 ── */}
+                {/* ── Hub 2: Chiến dịch & Agents (Consolidated) ── */}
+                <Route path="/campaigns" element={<MissionBoard />} />
+                <Route path="/agents" element={<MissionBoard />} />
+                <Route path="/nick-nurture" element={<MissionBoard />} />
+
+                {/* ── Hub 3: Tài khoản & Fanpage (Consolidated) ── */}
+                <Route path="/accounts" element={<AccountList />} />
+                <Route path="/pages" element={<AccountList />} />
+                <Route path="/settings/websites" element={<AccountList />} />
+
+                {/* ── Hub 4: Giám sát & Tín hiệu (Consolidated) ── */}
+                <Route path="/monitor" element={<SignalWall />} />
+                <Route path="/group-monitor" element={<SignalWall />} />
+                <Route path="/health" element={<SignalWall />} />
+
+                {/* ── Hub 5: Phân tích & Xu hướng (Consolidated) ── */}
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/trends" element={<Analytics />} />
+                <Route path="/data-center" element={<Analytics />} />
+
+                {/* ── Hub 6: Thư viện & Xuất bản (Consolidated) ── */}
+                <Route path="/publish" element={<UnifiedPublish />} />
+                <Route path="/content" element={<UnifiedPublish />} />
+                <Route path="/content/new" element={<UnifiedPublish />} />
+                <Route path="/media" element={<UnifiedPublish />} />
+                <Route path="/inbox" element={<UnifiedPublish />} />
+
+                {/* ── Hub 7: Trí tuệ Hermes (Consolidated) ── */}
+                <Route path="/hermes" element={<HermesBrain />} />
+                <Route path="/hermes/skills" element={<HermesBrain />} />
+                <Route path="/hermes/learning" element={<HermesBrain />} />
+                <Route path="/hermes/settings" element={<HermesBrain />} />
+
+                {/* ── Legacy redirects & auxiliary sub-routes ── */}
                 <Route path="/dashboard-legacy" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/campaigns-legacy" element={<Navigate to="/campaigns" replace />} />
                 <Route path="/monitor-legacy"   element={<Navigate to="/monitor" replace />} />
                 <Route path="/campaigns/old"    element={<Navigate to="/campaigns" replace />} />
-
-                {/* ── Unchanged existing pages ── */}
-                <Route path="/accounts" element={<AccountList />} />
-                <Route path="/accounts/:id" element={<AccountDetail />} />
-                <Route path="/pages" element={<PageList />} />
-                <Route path="/pages/:id/inbox" element={<InboxView />} />
-                <Route path="/groups" element={<GroupList />} />
-                <Route path="/media" element={<MediaLibrary />} />
-                <Route path="/media/:id/edit" element={<VideoEditor />} />
-                <Route path="/content" element={<ContentList />} />
-                <Route path="/content/new" element={<ContentComposer />} />
-                <Route path="/publish" element={<UnifiedPublish />} />
-                <Route path="/inbox" element={<InboxPage />} />
                 <Route path="/campaigns/new" element={<CampaignForm />} />
                 <Route path="/campaigns/:id" element={<CampaignHub />} />
                 <Route path="/campaigns/:id/legacy" element={<Navigate to="/campaigns/:id" replace />} />
                 <Route path="/campaigns/:id/edit" element={<CampaignForm />} />
                 <Route path="/campaigns/:id/hermes" element={<CampaignHermesEditor />} />
-                <Route path="/health" element={<AccountHealth />} />
-                <Route path="/nick-nurture" element={<NickNurture />} />
+                <Route path="/accounts/:id" element={<AccountDetail />} />
+                <Route path="/pages/:id/inbox" element={<InboxView />} />
+                <Route path="/media/:id/edit" element={<VideoEditor />} />
                 <Route path="/calendar" element={<CampaignCalendar />} />
-                <Route path="/trends" element={<TrendCenter />} />
-                <Route path="/analytics" element={<Analytics />} />
-                <Route path="/data-center" element={<DataCenter />} />
-                <Route path="/group-monitor" element={<GroupMonitor />} />
+                <Route path="/websites/:id/report" element={<WebsiteReport />} />
+                
+                {/* ── Settings and redirection fallback ── */}
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/settings/admin" element={<AdminSettings />} />
-                <Route path="/settings/websites" element={<WebsiteSettings />} />
-                <Route path="/websites/:id/report" element={<WebsiteReport />} />
-                <Route path="/settings/ai" element={<Navigate to="/hermes/settings" />} />
-                <Route path="/settings/proxies" element={<Navigate to="/settings/admin" />} />
-                <Route path="/settings/users" element={<Navigate to="/settings/admin" />} />
+                <Route path="/settings/ai" element={<Navigate to="/hermes" replace />} />
+                <Route path="/settings/proxies" element={<Navigate to="/settings/admin" replace />} />
+                <Route path="/settings/users" element={<Navigate to="/settings/admin" replace />} />
               </Routes>
             </AppLayout>
           </ProtectedRoute>
