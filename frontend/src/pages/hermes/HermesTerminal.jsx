@@ -26,11 +26,18 @@ function getWsUrl() {
   base = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
   // Remove trailing slash
   base = base.replace(/\/$/, '')
-  // Use port 8765 for the bridge
+
   try {
     const url = new URL(base)
-    url.port = '8765'
-    return url.toString()
+    if (url.hostname.includes('sslip.io')) {
+      url.pathname = '/hermes-ws'
+      url.port = '' // standard secure port
+      return url.toString()
+    } else {
+      url.port = '8765'
+      url.pathname = '/'
+      return url.toString()
+    }
   } catch {
     return `ws://localhost:8765`
   }
