@@ -55,6 +55,7 @@ export default function CampaignForm() {
     min_member_count: 100,  // tối thiểu để scout join (default 100, user can lower)
     schedule_type: 'recurring',
     cron_expression: `${randMin()} 6,10,14,18,22 * * *`,
+    only_comment_designated: false,
   })
 
   // === NEW STATES ===
@@ -150,6 +151,7 @@ export default function CampaignForm() {
         min_member_count: existing.min_member_count ?? 100,
         schedule_type: existing.schedule_type || 'recurring',
         cron_expression: existing.cron_expression || '0 9 * * *',
+        only_comment_designated: existing.meta?.only_comment_designated || false,
       })
       setSelectedAccountIds(existing.account_ids || [])
       if (existing.target_groups && existing.target_groups.length > 0) {
@@ -390,6 +392,7 @@ export default function CampaignForm() {
       }
       const payload = {
         ...form,
+        only_comment_designated: targetGroupsMode === 'custom' ? form.only_comment_designated : false,
         account_ids: selectedAccountIds,
         ai_plan: finalPlan,
         ai_plan_confirmed: planConfirmed,
@@ -509,7 +512,7 @@ export default function CampaignForm() {
             </div>
 
             {targetGroupsMode === 'custom' ? (
-              <div className="space-y-1">
+              <div className="space-y-3">
                 <textarea
                   value={targetGroupsText}
                   onChange={e => { setTargetGroupsText(e.target.value); resetPlan() }}
@@ -518,6 +521,24 @@ export default function CampaignForm() {
                   className="w-full border border-app-border rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono bg-app-base/10"
                 />
                 <p className="text-[10px] text-app-dim">Agent sẽ chỉ tham gia và tương tác trong các nhóm được liệt kê ở trên.</p>
+                
+                <div className="flex items-center justify-between p-2.5 rounded-lg border border-purple-500/20 bg-purple-500/5 mt-2">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-purple-200">🔒 Chỉ comment ở nhóm đã chỉ định</span>
+                    <span className="text-[10px] text-app-dim mt-0.5">Nếu bật, Agent sẽ chỉ tương tác và comment tại các nhóm dán ở trên.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, only_comment_designated: !form.only_comment_designated })}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 cursor-pointer ${
+                      form.only_comment_designated ? 'bg-purple-600' : 'bg-app-hover'
+                    }`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-app-surface transition-transform ${
+                      form.only_comment_designated ? 'translate-x-6' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="flex items-start gap-2 p-3 bg-orange-500/5 border border-orange-500/25 rounded-xl">

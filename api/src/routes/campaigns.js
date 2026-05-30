@@ -806,7 +806,8 @@ module.exports = async (fastify) => {
 
     const finalMeta = {
       ...(req.body.meta || {}),
-      target_groups: target_groups || []
+      target_groups: target_groups || [],
+      only_comment_designated: !!req.body.only_comment_designated
     }
 
     const unifiedGoal = mission || requirement || goal || null
@@ -951,20 +952,29 @@ module.exports = async (fastify) => {
       'wave_config', // Phase 16
       'goal', 'hermes_context', 'status', // Hermes upgrade
       'hermes_central',                    // Hermes-central coordinator toggle
+      'only_comment_designated',
     ]
     const updates = {}
+    let metaUpdated = false
+    const finalMeta = { ...(existingCamp?.meta || {}) }
+
     for (const key of allowed) {
       if (req.body[key] !== undefined) {
         if (key === 'target_groups') {
-          updates.meta = {
-            ...(existingCamp?.meta || {}),
-            target_groups: req.body.target_groups || []
-          }
+          finalMeta.target_groups = req.body.target_groups || []
+          metaUpdated = true
           updates.target_groups = []
+        } else if (key === 'only_comment_designated') {
+          finalMeta.only_comment_designated = !!req.body.only_comment_designated
+          metaUpdated = true
         } else if (key !== 'brand_config' && key !== 'hermes_context' && key !== 'mission' && key !== 'requirement' && key !== 'goal' && key !== 'ad_mode') {
           updates[key] = req.body[key]
         }
       }
+    }
+
+    if (metaUpdated) {
+      updates.meta = finalMeta
     }
 
     // Sync mission, requirement, and goal
