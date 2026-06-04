@@ -3171,15 +3171,12 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
       .from('campaigns').select('id').eq('id', req.params.id).eq('owner_id', req.user.id).single()
     if (!campaign) return reply.code(404).send({ error: 'Campaign not found' })
 
-    const status = req.query.status || 'all'
-    let query = supabase.from('fb_groups')
+    const { data, error } = await supabase.from('fb_groups')
       .select('*')
       .or(`joined_via_campaign_id.eq.${req.params.id},campaign_ids.cs.{${req.params.id}}`)
       .order('last_posted_at', { ascending: false, nullsFirst: false })
       .limit(500)
 
-    if (status !== 'all') query = query.eq('join_status', status)
-    const { data, error } = await query
     if (error) return reply.code(500).send({ error: error.message })
 
     // Load campaign_groups junction to find assigned nicks for this campaign
@@ -3222,29 +3219,73 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
       generalAccountMap = Object.fromEntries((accounts || []).map(a => [a.id, a.username]))
     }
 
-    // Compute stats
+    // Group fb_groups rows by fb_group_id to deduplicate them
+    const groupsMap = new Map()
+    for (const g of (data || [])) {
+      const fgid = g.fb_group_id
+      if (!fgid) continue
+      if (!groupsMap.has(fgid)) {
+        groupsMap.set(fgid, [])
+      }
+      groupsMap.get(fgid).push(g)
+    }
+
     const now = Date.now()
-    const items = (data || []).map(g => {
-      const pendingDays = g.pending_since
-        ? Math.floor((now - new Date(g.pending_since).getTime()) / 86400000)
-        : null
-      
-      const assigned = nicksByGroupId[g.fb_group_id] || (g.account_id ? [{
-        id: g.account_id,
-        username: generalAccountMap[g.account_id] || null,
-        is_member: g.is_member,
-        pending_approval: g.pending_approval
+    const groupedItems = []
+
+    for (const [fgid, rows] of groupsMap.entries()) {
+      // Prioritize the row with the most active status as the baseRow
+      const baseRow = rows.find(r => r.is_member === true) || 
+                       rows.find(r => r.pending_approval === true) || 
+                       rows[0]
+
+      const assigned = nicksByGroupId[fgid] || (baseRow.account_id ? [{
+        id: baseRow.account_id,
+        username: generalAccountMap[baseRow.account_id] || null,
+        is_member: baseRow.is_member,
+        pending_approval: baseRow.pending_approval
       }] : [])
 
-      return {
-        ...g,
+      const isMember = assigned.some(n => n.is_member === true)
+      const pendingApproval = !isMember && assigned.some(n => n.pending_approval === true)
+
+      // Combined join status mapping
+      let combinedJoinStatus = 'unknown'
+      if (isMember) {
+        combinedJoinStatus = 'member'
+      } else if (pendingApproval) {
+        combinedJoinStatus = 'pending'
+      } else if (rows.some(r => r.is_blocked === true || r.join_status === 'banned')) {
+        combinedJoinStatus = 'banned'
+      } else if (rows.some(r => r.join_status === 'rejected')) {
+        combinedJoinStatus = 'rejected'
+      } else {
+        combinedJoinStatus = baseRow.join_status || 'unknown'
+      }
+
+      const pendingDays = baseRow.pending_since
+        ? Math.floor((now - new Date(baseRow.pending_since).getTime()) / 86400000)
+        : null
+
+      // Merge the attributes
+      groupedItems.push({
+        ...baseRow,
+        is_member: isMember,
+        pending_approval: pendingApproval,
+        join_status: combinedJoinStatus,
         pending_days: pendingDays,
         overdue: pendingDays !== null && pendingDays > 7,
         assigned_nicks: assigned,
-      }
-    })
+      })
+    }
 
-    return items
+    // Apply the status query filter if present
+    const status = req.query.status || 'all'
+    const filteredItems = status === 'all' 
+      ? groupedItems 
+      : groupedItems.filter(item => item.join_status === status)
+
+    return filteredItems
   })
 
   // ─── GET /campaigns/:id/hermes-reviews ──────────────────
