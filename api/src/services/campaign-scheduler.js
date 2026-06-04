@@ -67,6 +67,11 @@ function initScheduler() {
       console.error('[SCHEDULER] Role campaign error:', err.message)
     }
     try {
+      await processAutomaticGroupJoins()
+    } catch (err) {
+      console.error('[SCHEDULER] Auto join error:', err.message)
+    }
+    try {
       await processEngagementChecks()
     } catch (err) {
       console.error('[SCHEDULER] Engagement error:', err.message)
@@ -694,6 +699,133 @@ async function processStaleMembershipReverify() {
     if (!error) created++
   }
   if (created > 0) console.log(`[STALE-MEMBER-REVERIFY] Queued ${created} re-verify jobs (drip over 60 min)`)
+}
+
+async function processAutomaticGroupJoins() {
+  const { data: activeCampaigns } = await supabase
+    .from('campaigns')
+    .select('id, owner_id')
+    .eq('is_active', true)
+    .eq('status', 'running')
+
+  if (!activeCampaigns?.length) return
+  const campaignIds = activeCampaigns.map(c => c.id)
+  const ownerByCampaign = Object.fromEntries(activeCampaigns.map(c => [c.id, c.owner_id]))
+
+  // Fetch groups in campaign_groups assigned to nicks that are active
+  const { data: unjoinedRowsRaw, error } = await supabase
+    .from('campaign_groups')
+    .select('group_id, campaign_id, assigned_nick_id, fb_groups!inner(id, fb_group_id, url, name, pending_approval, is_member, is_blocked, user_approved)')
+    .eq('status', 'active')
+    .in('campaign_id', campaignIds)
+    .limit(100)
+
+  if (error) {
+    console.error('[AUTO-JOIN] Query failed:', error.message)
+    return
+  }
+  if (!unjoinedRowsRaw?.length) return
+
+  // Filter in JS for membership, pending_approval, is_blocked, user_approved safety
+  const unjoinedRows = unjoinedRowsRaw.filter(r => {
+    const fg = r.fb_groups
+    if (!fg) return false
+    if (fg.is_member !== false) return false
+    if (fg.pending_approval !== false) return false
+    if (fg.is_blocked === true) return false
+    if (fg.user_approved === false) return false
+    return true
+  })
+
+  if (!unjoinedRows.length) return
+
+  // Dedup: skip if a join_group job for this nick and group is already queued/running
+  const { data: existingJobs } = await supabase
+    .from('jobs')
+    .select('payload')
+    .eq('type', 'join_group')
+    .in('status', ['pending', 'claimed', 'running'])
+    .limit(200)
+
+  const queuedKeys = new Set(
+    (existingJobs || [])
+      .map(j => `${j.payload?.account_id}:${j.payload?.fb_group_id}`)
+      .filter(Boolean)
+  )
+
+  // Fetch active and healthy accounts (nicks)
+  const assignedNickIds = [...new Set(unjoinedRows.map(r => r.assigned_nick_id).filter(Boolean))]
+  if (!assignedNickIds.length) return
+
+  const { data: accounts } = await supabase
+    .from('accounts')
+    .select('id, username, is_active, status, daily_budget')
+    .in('id', assignedNickIds)
+    .eq('is_active', true)
+    .eq('status', 'healthy')
+
+  const activeAccountsMap = new Map((accounts || []).map(a => [a.id, a]))
+
+  let created = 0
+  const { checkAndReserve } = require('./nick-quota')
+
+  for (const r of unjoinedRows) {
+    const fg = r.fb_groups
+    if (!fg || !r.assigned_nick_id) continue
+
+    const account = activeAccountsMap.get(r.assigned_nick_id)
+    if (!account) continue // nick is not active or not healthy
+
+    const jobKey = `${r.assigned_nick_id}:${fg.fb_group_id}`
+    if (queuedKeys.has(jobKey)) continue
+
+    // Check budget / daily quota for join_group
+    const b = account.daily_budget?.join_group
+    if (b) {
+      if ((b.used || 0) >= (b.max || 3)) {
+        console.log(`[AUTO-JOIN] Nick ${account.username} (${account.id.slice(0, 8)}) join_group budget full (${b.used}/${b.max}) — skip group ${fg.name}`)
+        continue
+      }
+    }
+
+    // Per-nick quota check using checkAndReserve
+    const qr = await checkAndReserve(supabase, { accountId: r.assigned_nick_id, jobType: 'join_group' })
+    if (!qr.ok) {
+      console.log(`[AUTO-JOIN] Nick ${account.username} (${r.assigned_nick_id.slice(0, 8)}) quota full (${qr.count}/${qr.quota}) — skip group ${fg.name}`)
+      continue
+    }
+
+    // Schedule the join job with standard stagger/jitter
+    const delayMs = 10 * 1000 + Math.random() * 50 * 1000 // stagger a bit
+    const ownerId = ownerByCampaign[r.campaign_id] || null
+
+    const { error: insertErr } = await supabase.from('jobs').insert({
+      type: 'join_group',
+      priority: 3,
+      payload: {
+        account_id: r.assigned_nick_id,
+        fb_group_id: fg.fb_group_id,
+        group_url: fg.url || `https://www.facebook.com/groups/${fg.fb_group_id}`,
+        campaign_id: r.campaign_id,
+        owner_id: ownerId,
+        reason: 'auto_join_unjoined_designated_group',
+      },
+      status: 'pending',
+      scheduled_at: new Date(Date.now() + delayMs).toISOString(),
+      created_by: ownerId,
+    })
+
+    if (!insertErr) {
+      created++
+      queuedKeys.add(jobKey) // prevent duplicate insertion within this loop iteration
+    } else {
+      console.error(`[AUTO-JOIN] Failed to insert job for ${account.username} on ${fg.name}:`, insertErr.message)
+    }
+  }
+
+  if (created > 0) {
+    console.log(`[AUTO-JOIN] Queued ${created} auto join jobs for unjoined designated groups`)
+  }
 }
 
 async function processPendingCampaigns() {
