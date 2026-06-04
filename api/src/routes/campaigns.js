@@ -3305,6 +3305,112 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
     if (error) return reply.code(500).send({ error: error.message })
     return reviews || []
   })
+
+  // GET /campaigns/:id/visual-analytics — Tích hợp báo cáo trực quan cho Dashboard (Audit)
+  fastify.get('/:id/visual-analytics', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const campaignId = req.params.id
+    const userId = req.user.id
+
+    // Verify ownership
+    const { data: campaign } = await supabase.from('campaigns')
+      .select('id, name, status, is_active').eq('id', campaignId).eq('owner_id', userId).single()
+    if (!campaign) return reply.code(404).send({ error: 'Campaign not found' })
+
+    // 1. Phễu Vận hành Tự động (Split Automation Funnel)
+    // - Scanned posts
+    const { count: scannedCount } = await supabase.from('group_post_scores')
+      .select('id', { count: 'exact', head: true }).eq('campaign_id', campaignId)
+
+    // - Ad Opportunities
+    const { count: oppsCount } = await supabase.from('group_post_scores')
+      .select('id', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('ad_opportunity', true)
+
+    // - Done Comments (split by job type: campaign_nurture/nurture_feed vs campaign_opportunity_react)
+    const { data: commentsData } = await supabase.from('comment_logs')
+      .select('job_id, jobs(type)')
+      .eq('campaign_id', campaignId)
+      .eq('status', 'done')
+    
+    let nurtureComments = 0
+    let promoComments = 0
+    for (const c of commentsData || []) {
+      const type = c.jobs?.type
+      if (type === 'campaign_opportunity_react') {
+        promoComments++
+      } else {
+        nurtureComments++ // campaign_nurture, nurture_feed, comment_post, etc.
+      }
+    }
+
+    // 2. Phân tích Nhu cầu Thị trường (Intent Analytics / Tiers)
+    const { data: scoresData } = await supabase.from('group_post_scores')
+      .select('ad_opportunity, lead_potential')
+      .eq('campaign_id', campaignId)
+
+    let tier1 = 0 // Explicit commercial
+    let tier2 = 0 // Pain point
+    let tier3 = 0 // Informational
+    for (const s of scoresData || []) {
+      if (s.ad_opportunity && s.lead_potential) tier1++
+      else if (s.ad_opportunity && !s.lead_potential) tier2++
+      else tier3++
+    }
+
+    // 3. Nhật ký quyết định tự trị (Autonomous decisions)
+    const { data: decisions } = await supabase.from('campaign_activity_log')
+      .select('id, created_at, result_status, details')
+      .eq('campaign_id', campaignId)
+      .eq('action_type', 'ai_control')
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    const decisionTimeline = (decisions || []).map(d => ({
+      id: d.id,
+      created_at: d.created_at,
+      status: d.result_status,
+      assessment: d.details?.assessment || 'normal',
+      recommendation: d.details?.recommendation || '',
+      applied_count: d.details?.applied_count || 0
+    }))
+
+    // 4. Biểu đồ Chuyển đổi Khách hàng (Lead Conversion)
+    const { data: leads } = await supabase.from('leads')
+      .select('status')
+      .eq('campaign_id', campaignId)
+
+    const leadsByStatus = { discovered: 0, friend_sent: 0, connected: 0, followed: 0 }
+    for (const l of leads || []) {
+      if (leadsByStatus[l.status] !== undefined) {
+        leadsByStatus[l.status]++
+      }
+    }
+
+    return {
+      campaign: {
+        id: campaign.id,
+        name: campaign.name,
+        is_active: campaign.is_active,
+        status: campaign.status
+      },
+      funnel: {
+        scanned_posts: scannedCount || 0,
+        ad_opportunities: oppsCount || 0,
+        nurture_comments: nurtureComments,
+        promo_comments: promoComments,
+        total_comments: nurtureComments + promoComments
+      },
+      intent: {
+        tier1_explicit_commercial: tier1,
+        tier2_indirect_painpoint: tier2,
+        tier3_informational: tier3
+      },
+      decisions: decisionTimeline,
+      leads: {
+        total_leads: (leads || []).length,
+        ...leadsByStatus
+      }
+    }
+  })
 }
 
 function extractJobSummary(job) {
