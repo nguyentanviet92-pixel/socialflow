@@ -967,35 +967,51 @@ function GroupsTab({ campaignId }) {
   const filteredGroups = filter === 'all' ? groups : groups.filter(g => g.join_status === filter)
 
   const STATUS_BADGE = {
-    member: { text: '● member', color: 'text-hermes' },
-    pending: { text: '⏳ pending', color: 'text-warn' },
-    rejected: { text: '❌ rejected', color: 'text-danger' },
-    banned: { text: '🚫 banned', color: 'text-danger' },
-    unknown: { text: '? unknown', color: 'text-app-muted' },
+    member: { text: '● Đã tham gia', color: 'text-hermes' },
+    pending: { text: '⏳ Chờ duyệt', color: 'text-warn' },
+    rejected: { text: '❌ Chưa tham gia', color: 'text-danger' },
+    banned: { text: '🚫 Bị chặn', color: 'text-danger' },
+    unknown: { text: '? Chưa xác định', color: 'text-app-muted' },
   }
 
   return (
     <div className="overflow-auto p-6 font-mono-ui">
+      {counts.all === 0 && (
+        <div className="mb-4 bg-red-50 border-l-4 border-red-500 p-4 rounded text-sm text-red-700 font-sans">
+          <p className="font-semibold">Cảnh báo: Chiến dịch này chưa có nhóm nào được gán!</p>
+          <p className="mt-1">Vui lòng không tự ý tìm kiếm nhóm bên ngoài Facebook để bình luận thủ công. Hãy gán nhóm hợp lệ vào chiến dịch hoặc liên hệ admin để được hỗ trợ.</p>
+        </div>
+      )}
       <div className="flex items-center gap-3 mb-4">
         <span className="text-[10px] uppercase tracking-wider text-app-muted">
           Nhóm tham gia ({counts.all})
         </span>
         <div className="flex-1" />
-        {['all', 'member', 'pending', 'rejected', 'banned', 'unknown'].map(s => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`text-[11px] uppercase px-2 py-1 ${
-              filter === s ? 'text-hermes' : 'text-app-muted hover:text-app-primary'
-            }`}
-            style={{
-              background: filter === s ? 'var(--hermes-dim)' : 'transparent',
-              border: '1px solid ' + (filter === s ? 'var(--hermes-fade)' : 'var(--border)'),
-            }}
-          >
-            {s === 'all' ? 'tất cả' : s} ({counts[s] || 0})
-          </button>
-        ))}
+        {['all', 'member', 'pending', 'rejected', 'banned', 'unknown'].map(s => {
+          const displayLabel = {
+            all: 'tất cả',
+            member: 'đã tham gia',
+            pending: 'chờ duyệt',
+            rejected: 'chưa tham gia',
+            banned: 'bị chặn',
+            unknown: 'chưa xác định'
+          }[s] || s
+          return (
+            <button
+              key={s}
+              onClick={() => setFilter(s)}
+              className={`text-[11px] uppercase px-2 py-1 ${
+                filter === s ? 'text-hermes' : 'text-app-muted hover:text-app-primary'
+              }`}
+              style={{
+                background: filter === s ? 'var(--hermes-dim)' : 'transparent',
+                border: '1px solid ' + (filter === s ? 'var(--hermes-fade)' : 'var(--border)'),
+              }}
+            >
+              {displayLabel} ({counts[s] || 0})
+            </button>
+          )
+        })}
       </div>
 
       {isLoading ? (
@@ -1040,6 +1056,42 @@ function GroupsTab({ campaignId }) {
                     </span>
                   )}
                   <span className="flex-1 text-app-primary truncate">{g.name || g.fb_group_id}</span>
+                  
+                  {/* Assigned Nick Avatars with Border Statuses */}
+                  {g.assigned_nicks && g.assigned_nicks.length > 0 && (
+                    <div className="flex items-center -space-x-1.5 mr-2">
+                      {g.assigned_nicks.slice(0, 4).map((n, i) => {
+                        const isMember = n.is_member === true
+                        const isPending = n.pending_approval === true
+                        let borderClass = 'border-white'
+                        let titleSuffix = ' (Chưa tham gia)'
+                        let opacityClass = 'opacity-40 grayscale'
+                        if (isMember) {
+                          borderClass = 'border-green-500 ring-1 ring-green-500'
+                          titleSuffix = ' (Đã tham gia)'
+                          opacityClass = ''
+                        } else if (isPending) {
+                          borderClass = 'border-amber-500 ring-1 ring-amber-500'
+                          titleSuffix = ' (Chờ duyệt)'
+                          opacityClass = 'opacity-70'
+                        }
+
+                        return (
+                          <div key={n.id || i} title={`${n.username || '?'}${titleSuffix}`}
+                            className={`w-5 h-5 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 text-white flex items-center justify-center text-[8px] font-bold border ${borderClass} ${opacityClass} shrink-0`}
+                            style={{ zIndex: 10 - i }}>
+                            {(n.username || '?').substring(0, 2).toUpperCase()}
+                          </div>
+                        )
+                      })}
+                      {g.assigned_nicks.length > 4 && (
+                        <div className="w-5 h-5 rounded-full bg-app-hover text-app-muted flex items-center justify-center text-[8px] font-bold border border-white shrink-0">
+                          +{g.assigned_nicks.length - 4}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <span className="text-app-muted">👥 {g.member_count ? (g.member_count >= 1000 ? `${Math.round(g.member_count / 1000)}k` : g.member_count) : '?'}</span>
                   <span className={badge.color}>{badge.text}</span>
                   {g.overdue && (

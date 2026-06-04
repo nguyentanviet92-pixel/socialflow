@@ -27,6 +27,9 @@ export default function SettingsSection({ campaignId, campaign }) {
   const [nickStagger, setNickStagger] = useState(campaign.nick_stagger_seconds || 60)
   const [roleStagger, setRoleStagger] = useState(campaign.role_stagger_minutes || 30)
   const [selectedAccountIds, setSelectedAccountIds] = useState(campaign.account_ids || [])
+  const [targetGroupsMode, setTargetGroupsMode] = useState('auto')
+  const [targetGroupsText, setTargetGroupsText] = useState('')
+  const [onlyCommentDesignated, setOnlyCommentDesignated] = useState(false)
 
   // Fetch all accounts for picker
   const { data: accounts = [] } = useQuery({
@@ -62,6 +65,11 @@ export default function SettingsSection({ campaignId, campaign }) {
     setRoleStagger(campaign.role_stagger_minutes || 30)
     setSelectedAccountIds(campaign.account_ids || [])
     setWaveEnabled(campaign.wave_config?.enabled || false)
+
+    const targetGroups = campaign.meta?.target_groups || []
+    setTargetGroupsText(targetGroups.join('\n'))
+    setTargetGroupsMode(campaign.meta?.group_target_mode || (targetGroups.length > 0 ? 'custom' : 'auto'))
+    setOnlyCommentDesignated(campaign.meta?.only_comment_designated || false)
     // Reload brand_config (canonical) or fall back to legacy shape
     const bc = campaign.brand_config
     const legacy = campaign.campaign_roles?.[0]?.config?.advertising || {}
@@ -143,6 +151,9 @@ export default function SettingsSection({ campaignId, campaign }) {
       ad_mode: brandPayload ? 'ad_enabled' : 'normal',
       account_ids: selectedAccountIds,
       wave_config: wavePayload,
+      only_comment_designated: targetGroupsMode === 'custom' ? onlyCommentDesignated : false,
+      target_groups: targetGroupsMode === 'custom' ? targetGroupsText.split('\n').map(g => g.trim()).filter(Boolean) : [],
+      group_target_mode: targetGroupsMode,
     })
 
     // 24/7 mode: push active_hours_start=0, end=24 to all selected nicks.
@@ -279,6 +290,77 @@ export default function SettingsSection({ campaignId, campaign }) {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Group Target Configuration */}
+      <div className="bg-app-surface rounded border border-app-border p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-app-muted flex items-center gap-2">
+          <Users size={16} /> Cấu hình nhóm tương tác
+        </h3>
+
+        <div className="flex gap-2 p-1 bg-app-base rounded-xl border border-app-border/30 w-fit">
+          <button
+            type="button"
+            onClick={() => setTargetGroupsMode('custom')}
+            className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              targetGroupsMode === 'custom'
+                ? 'bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 text-purple-200 shadow-sm'
+                : 'text-app-muted hover:text-app-primary hover:bg-app-hover/30 border border-transparent'
+            }`}
+          >
+            📋 Nhập danh sách nhóm
+          </button>
+          <button
+            type="button"
+            onClick={() => setTargetGroupsMode('auto')}
+            className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              targetGroupsMode === 'auto'
+                ? 'bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 text-purple-200 shadow-sm'
+                : 'text-app-muted hover:text-app-primary hover:bg-app-hover/30 border border-transparent'
+            }`}
+          >
+            🔍 Cho AI tự quét nhóm
+          </button>
+        </div>
+
+        {targetGroupsMode === 'custom' ? (
+          <div className="space-y-3">
+            <textarea
+              value={targetGroupsText}
+              onChange={e => setTargetGroupsText(e.target.value)}
+              rows={4}
+              placeholder="Dán link hoặc ID nhóm Facebook, ví dụ:&#10;https://www.facebook.com/groups/vpsvietnam&#10;1234567890"
+              className="w-full border border-app-border rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono bg-app-base/10"
+            />
+            <p className="text-[10px] text-app-dim">Agent sẽ chỉ tham gia và tương tác trong các nhóm được liệt kê ở trên.</p>
+            
+            <div className="flex items-center justify-between p-2.5 rounded-lg border border-purple-500/20 bg-purple-500/5 mt-2">
+              <div className="flex flex-col">
+                <span className="text-xs font-semibold text-purple-200">🔒 Chỉ comment ở nhóm đã chỉ định</span>
+                <span className="text-[10px] text-app-dim mt-0.5">Nếu bật, Agent sẽ chỉ tương tác và comment tại các nhóm dán ở trên.</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOnlyCommentDesignated(!onlyCommentDesignated)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 cursor-pointer ${
+                  onlyCommentDesignated ? 'bg-purple-600' : 'bg-app-hover'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-app-surface transition-transform ${
+                  onlyCommentDesignated ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 p-3 bg-orange-500/5 border border-orange-500/25 rounded-xl">
+            <span className="text-orange-500 text-xs mt-0.5 shrink-0">⚠️</span>
+            <p className="text-[10px] text-orange-200 leading-relaxed">
+              <strong>Cảnh báo an toàn:</strong> Khi cho AI tự quét nhóm, Agent sẽ tự động tìm kiếm và xin tham gia nhóm mới dựa trên chủ đề chiến dịch.
+              Việc tự động tham gia nhóm lạ liên tục có thể làm gia tăng rủi ro bị Facebook checkpoint tài khoản. Hãy chắc chắn rằng tài khoản của bạn đã được nuôi đủ độ tin cậy.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Accounts picker */}

@@ -171,6 +171,26 @@ async function onboardNewNicks(supabase, campaignId, nickIds, userId) {
   return { scoutJobsCreated, skippedTooYoung, skippedEnoughGroups }
 }
 
+function parseTargetGroupIds(targetGroups) {
+  if (!Array.isArray(targetGroups)) return []
+  const parsed = []
+  for (const gStr of targetGroups) {
+    if (!gStr || typeof gStr !== 'string') continue
+    const trimmed = gStr.trim()
+    let fbGroupId = null
+    const m = trimmed.match(/(?:facebook\.com|fb\.com)\/groups\/([^/?#\s]+)/i)
+    if (m) {
+      fbGroupId = m[1]
+    } else if (/^\d+$/.test(trimmed)) {
+      fbGroupId = trimmed
+    }
+    if (fbGroupId) {
+      parsed.push(fbGroupId)
+    }
+  }
+  return parsed
+}
+
 // Auto-import target_groups (URLs/IDs pasted by user) into fb_groups & campaign_groups
 async function importTargetGroups(supabase, campaignId, targetGroups, accountIds, topic, userId) {
   if (!Array.isArray(targetGroups) || targetGroups.length === 0 || !accountIds || accountIds.length === 0) {
@@ -932,7 +952,7 @@ module.exports = async (fastify) => {
   fastify.put('/:id', { preHandler: fastify.authenticate }, async (req, reply) => {
     const { data: existingCamp, error: fetchError } = await supabase
       .from('campaigns')
-      .select('brand_config, hermes_context, mission, requirement, goal, meta')
+      .select('brand_config, hermes_context, mission, requirement, goal, meta, account_ids')
       .eq('id', req.params.id)
       .eq('owner_id', req.user.id)
       .single()
@@ -953,6 +973,7 @@ module.exports = async (fastify) => {
       'goal', 'hermes_context', 'status', // Hermes upgrade
       'hermes_central',                    // Hermes-central coordinator toggle
       'only_comment_designated',
+      'group_target_mode',
     ]
     const updates = {}
     let metaUpdated = false
@@ -966,6 +987,9 @@ module.exports = async (fastify) => {
           updates.target_groups = []
         } else if (key === 'only_comment_designated') {
           finalMeta.only_comment_designated = !!req.body.only_comment_designated
+          metaUpdated = true
+        } else if (key === 'group_target_mode') {
+          finalMeta.group_target_mode = req.body.group_target_mode
           metaUpdated = true
         } else if (key !== 'brand_config' && key !== 'hermes_context' && key !== 'mission' && key !== 'requirement' && key !== 'goal' && key !== 'ad_mode') {
           updates[key] = req.body[key]
@@ -1025,6 +1049,93 @@ module.exports = async (fastify) => {
         }
       } catch (rolesErr) {
         fastify.log.error({ rolesErr }, 'Failed to update campaign_roles')
+      }
+    }
+
+    // Sync removed target groups and nicks in campaign_groups / fb_groups
+    const targetGroupsMode = req.body.group_target_mode || existingCamp?.meta?.group_target_mode || (req.body.target_groups?.length > 0 ? 'custom' : 'auto')
+
+    if (targetGroupsMode === 'custom') {
+      const newGroups = req.body.target_groups || existingCamp?.meta?.target_groups || []
+      const newIds = parseTargetGroupIds(newGroups)
+
+      // Deactivate any active campaign_groups that are not in the custom list
+      const { data: activeJunctions } = await supabase
+        .from('campaign_groups')
+        .select('id, group_id, fb_groups!inner(id, fb_group_id, campaign_ids)')
+        .eq('campaign_id', req.params.id)
+        .eq('status', 'active')
+
+      if (activeJunctions && activeJunctions.length > 0) {
+        const junctionsToDeactivate = activeJunctions.filter(j => {
+          const fbGid = j.fb_groups?.fb_group_id
+          return !newIds.includes(fbGid)
+        })
+
+        if (junctionsToDeactivate.length > 0) {
+          const junctionIds = junctionsToDeactivate.map(j => j.id)
+          await supabase
+            .from('campaign_groups')
+            .update({ status: 'removed' })
+            .in('id', junctionIds)
+
+          // Also remove campaign_id from fb_groups.campaign_ids
+          for (const j of junctionsToDeactivate) {
+            if (j.fb_groups) {
+              const updatedCampaignIds = (j.fb_groups.campaign_ids || []).filter(cid => cid !== req.params.id)
+              await supabase
+                .from('fb_groups')
+                .update({ campaign_ids: updatedCampaignIds })
+                .eq('id', j.fb_groups.id)
+            }
+          }
+        }
+      }
+    } else {
+      // In auto mode, if they explicitly deleted groups from target_groups, we still clean them up
+      const oldGroups = existingCamp?.meta?.target_groups || []
+      const newGroups = req.body.target_groups || []
+      const oldIds = parseTargetGroupIds(oldGroups)
+      const newIds = parseTargetGroupIds(newGroups)
+      const removedIds = oldIds.filter(id => !newIds.includes(id))
+
+      if (removedIds.length > 0) {
+        const { data: fbGroupsToClean } = await supabase
+          .from('fb_groups')
+          .select('id, fb_group_id, campaign_ids')
+          .in('fb_group_id', removedIds)
+
+        if (fbGroupsToClean && fbGroupsToClean.length > 0) {
+          const cleanGroupIds = fbGroupsToClean.map(g => g.id)
+          await supabase
+            .from('campaign_groups')
+            .update({ status: 'removed' })
+            .eq('campaign_id', req.params.id)
+            .in('group_id', cleanGroupIds)
+
+          for (const g of fbGroupsToClean) {
+            const updatedCampaignIds = (g.campaign_ids || []).filter(cid => cid !== req.params.id)
+            await supabase
+              .from('fb_groups')
+              .update({ campaign_ids: updatedCampaignIds })
+              .eq('id', g.id)
+          }
+        }
+      }
+    }
+
+    if (req.body.account_ids !== undefined) {
+      const oldAccountIds = existingCamp?.account_ids || []
+      const newAccountIds = req.body.account_ids || []
+      const removedAccountIds = oldAccountIds.filter(id => !newAccountIds.includes(id))
+
+      if (removedAccountIds.length > 0) {
+        // Mark campaign_groups as 'removed' for these nicks in this campaign
+        await supabase
+          .from('campaign_groups')
+          .update({ status: 'removed' })
+          .eq('campaign_id', req.params.id)
+          .in('assigned_nick_id', removedAccountIds)
       }
     }
 
@@ -1902,11 +2013,21 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
       if (!byFbGid.has(key)) {
         byFbGid.set(key, {
           ...row,
-          assigned_nicks: [{ id: row.assigned_nick_id, username: row.account_username }],
+          assigned_nicks: [{
+            id: row.assigned_nick_id,
+            username: row.account_username,
+            is_member: row.is_member,
+            pending_approval: row.pending_approval
+          }],
         })
       } else {
         const existing = byFbGid.get(key)
-        existing.assigned_nicks.push({ id: row.assigned_nick_id, username: row.account_username })
+        existing.assigned_nicks.push({
+          id: row.assigned_nick_id,
+          username: row.account_username,
+          is_member: row.is_member,
+          pending_approval: row.pending_approval
+        })
         // Keep the best junction score/tier
         if ((row.junction_score || 0) > (existing.junction_score || 0)) {
           existing.junction_score = row.junction_score
@@ -1980,7 +2101,7 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
     if (action === 'add') {
       // Get group's fb_group_id and account_id
       const { data: group } = await supabase.from('fb_groups')
-        .select('fb_group_id, account_id').eq('id', groupId).single()
+        .select('fb_group_id, account_id, score_tier, global_score').eq('id', groupId).single()
       if (!group) return reply.code(404).send({ error: 'Group not found' })
 
       await supabase.rpc('append_campaign_to_group', {
@@ -1988,6 +2109,18 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
         p_fb_group_id: group.fb_group_id,
         p_campaign_id: req.params.id,
       })
+
+      // Also upsert campaign_groups
+      await supabase.from('campaign_groups').upsert({
+        campaign_id: req.params.id,
+        group_id: groupId,
+        assigned_nick_id: group.account_id,
+        score: group.global_score || null,
+        tier: group.score_tier || 'C',
+        status: 'active',
+        added_at: new Date().toISOString()
+      }, { onConflict: 'campaign_id,group_id' })
+
       return { ok: true, action: 'added' }
     } else if (action === 'remove') {
       const { data: group } = await supabase.from('fb_groups')
@@ -1996,6 +2129,13 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
 
       const newIds = (group.campaign_ids || []).filter(id => id !== req.params.id)
       await supabase.from('fb_groups').update({ campaign_ids: newIds }).eq('id', groupId)
+
+      // Sync campaign_groups
+      await supabase.from('campaign_groups')
+        .update({ status: 'removed' })
+        .eq('campaign_id', req.params.id)
+        .eq('group_id', groupId)
+
       return { ok: true, action: 'removed' }
     }
 
@@ -3042,16 +3182,65 @@ Hãy viết bản "Mục tiêu & Hướng dẫn cho Hermes" bằng tiếng Việ
     const { data, error } = await query
     if (error) return reply.code(500).send({ error: error.message })
 
+    // Load campaign_groups junction to find assigned nicks for this campaign
+    const { data: cgData } = await supabase
+      .from('campaign_groups')
+      .select('id, assigned_nick_id, fb_groups(id, fb_group_id, account_id, is_member, pending_approval)')
+      .eq('campaign_id', req.params.id)
+      .neq('status', 'removed')
+
+    const nickIds = [...new Set((cgData || []).map(r => r.assigned_nick_id).filter(Boolean))]
+    let accountMap = {}
+    if (nickIds.length) {
+      const { data: accounts } = await supabase.from('accounts').select('id, username').in('id', nickIds)
+      accountMap = Object.fromEntries((accounts || []).map(a => [a.id, a.username]))
+    }
+
+    // Group assigned nicks by fb_group_id
+    const nicksByGroupId = {}
+    for (const cg of (cgData || [])) {
+      if (!cg.fb_groups?.fb_group_id) continue
+      const fgid = cg.fb_groups.fb_group_id
+      if (!nicksByGroupId[fgid]) {
+        nicksByGroupId[fgid] = []
+      }
+      if (!nicksByGroupId[fgid].some(n => n.id === cg.assigned_nick_id)) {
+        nicksByGroupId[fgid].push({
+          id: cg.assigned_nick_id,
+          username: accountMap[cg.assigned_nick_id] || null,
+          is_member: cg.fb_groups.is_member,
+          pending_approval: cg.fb_groups.pending_approval
+        })
+      }
+    }
+
+    // Load all general accounts for the fallback
+    const allAccountIds = [...new Set((data || []).map(r => r.account_id).filter(Boolean))]
+    let generalAccountMap = {}
+    if (allAccountIds.length) {
+      const { data: accounts } = await supabase.from('accounts').select('id, username').in('id', allAccountIds)
+      generalAccountMap = Object.fromEntries((accounts || []).map(a => [a.id, a.username]))
+    }
+
     // Compute stats
     const now = Date.now()
     const items = (data || []).map(g => {
       const pendingDays = g.pending_since
         ? Math.floor((now - new Date(g.pending_since).getTime()) / 86400000)
         : null
+      
+      const assigned = nicksByGroupId[g.fb_group_id] || (g.account_id ? [{
+        id: g.account_id,
+        username: generalAccountMap[g.account_id] || null,
+        is_member: g.is_member,
+        pending_approval: g.pending_approval
+      }] : [])
+
       return {
         ...g,
         pending_days: pendingDays,
         overdue: pendingDays !== null && pendingDays > 7,
+        assigned_nicks: assigned,
       }
     })
 

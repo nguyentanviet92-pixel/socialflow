@@ -154,13 +154,8 @@ export default function CampaignForm() {
         only_comment_designated: existing.meta?.only_comment_designated || false,
       })
       setSelectedAccountIds(existing.account_ids || [])
-      if (existing.target_groups && existing.target_groups.length > 0) {
-        setTargetGroupsMode('custom')
-        setTargetGroupsText(existing.target_groups.join('\n'))
-      } else {
-        setTargetGroupsMode('auto')
-        setTargetGroupsText('')
-      }
+      setTargetGroupsText(existing.target_groups?.join('\n') || '')
+      setTargetGroupsMode(existing.meta?.group_target_mode || (existing.target_groups?.length > 0 ? 'custom' : 'auto'))
 
       if (existing.brand_config) {
         setAdsEnabled(true)
@@ -400,6 +395,7 @@ export default function CampaignForm() {
         hermes_context: hermesContextPayload,
         ad_mode: brandPayload ? 'ad_enabled' : 'normal',
         target_groups: targetGroupsMode === 'custom' ? targetGroupsText.split('\n').map(g => g.trim()).filter(Boolean) : [],
+        group_target_mode: targetGroupsMode,
       }
       let cid
       if (isEdit) { await api.put(`/campaigns/${id}`, payload); cid = id }

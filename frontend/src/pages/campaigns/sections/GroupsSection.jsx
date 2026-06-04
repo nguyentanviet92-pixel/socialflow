@@ -51,6 +51,13 @@ export default function GroupsSection({ campaignId, campaign, accountIds }) {
   const [tierFilter, setTierFilter] = useState('all')
 
   const topicKey = (campaign?.topic || '').toLowerCase().trim().replace(/\s+/g, '_').slice(0, 50)
+  const targetGroupsList = campaign?.meta?.target_groups || []
+  const targetGroupIds = targetGroupsList.map(gStr => {
+    const trimmed = (gStr || '').trim()
+    const m = trimmed.match(/(?:facebook\.com|fb\.com)\/groups\/([^/?#\s]+)/i)
+    return m ? m[1] : trimmed
+  }).filter(Boolean)
+  const isManualGroup = (fbGroupId) => targetGroupIds.includes(fbGroupId)
 
   const { data: campaignGroups = [], isLoading } = useQuery({
     queryKey: ['campaign-groups', campaignId],
@@ -203,6 +210,12 @@ export default function GroupsSection({ campaignId, campaign, accountIds }) {
 
   return (
     <div className="space-y-4">
+      {campaignGroups.length === 0 && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded text-sm text-red-700">
+          <p className="font-semibold">Cảnh báo: Chiến dịch này chưa có nhóm nào được gán!</p>
+          <p className="mt-1">Vui lòng không tự tìm kiếm nhóm bên ngoài Facebook để bình luận thủ công. Hãy gán nhóm hợp lệ vào chiến dịch hoặc liên hệ admin để được hỗ trợ.</p>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold text-app-primary">
           Nhom Facebook ({showAll ? `${allGroups.length} tat ca` : `${campaignGroups.length} campaign`})
@@ -500,8 +513,13 @@ export default function GroupsSection({ campaignId, campaign, accountIds }) {
             <Loader size={20} className="animate-spin text-purple-600" />
           </div>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-12 text-app-muted text-sm">
-            {showAll ? 'Chua co nhom nao' : 'Chua co nhom nao trong campaign. Bam "Tat ca nhom" de gan.'}
+          <div className="text-center py-12 text-app-muted text-sm space-y-3">
+            <div>{showAll ? 'Chua co nhom nao' : 'Chua co nhom nao trong campaign. Bam "Tat ca nhom" de gan.'}</div>
+            {!showAll && (
+              <div className="text-red-500 font-semibold max-w-md mx-auto text-xs bg-red-50 p-3 rounded border border-red-200">
+                Lưu ý: Không tự ý tìm kiếm nhóm trên Facebook để bình luận thủ công!
+              </div>
+            )}
           </div>
         ) : (
           filtered.slice(0, 100).map(g => {
@@ -533,18 +551,37 @@ export default function GroupsSection({ campaignId, campaign, accountIds }) {
                       </a>
                     ) : (g.name || g.fb_group_id)}
                   </p>
-                  <div className="flex items-center gap-2 mt-0.5">
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                     <span className="text-[10px] text-app-dim">{g.member_count?.toLocaleString() || '?'} members</span>
                     {g.group_type && (
-                      <span className={`px-1.5 py-0 rounded text-[9px] font-medium ${TYPE_BADGE[g.group_type] || 'bg-app-elevated text-app-muted'}`}>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${TYPE_BADGE[g.group_type] || 'bg-app-elevated text-app-muted'}`}>
                         {g.group_type}
                       </span>
                     )}
-                    {isBlacklisted && (
-                      <span className="text-[9px] text-red-500 font-medium">Blacklist</span>
+                    {isManualGroup(g.fb_group_id) ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-blue-50 text-blue-600 border border-blue-200">
+                        Nhập tay
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 text-purple-600 border border-purple-200">
+                        Tự động
+                      </span>
                     )}
-                    {g.pending_approval && (
-                      <span className="text-[9px] text-amber-600 font-medium">Pending</span>
+                    {g.is_member ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-green-50 text-green-600 border border-green-200">
+                        Đã tham gia
+                      </span>
+                    ) : g.pending_approval ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-50 text-amber-600 border border-amber-200">
+                        Chờ duyệt
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-red-50 text-red-600 border border-red-200">
+                        Chưa tham gia
+                      </span>
+                    )}
+                    {isBlacklisted && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] text-red-500 font-medium bg-red-100/50">Blacklist</span>
                     )}
                   </div>
                 </div>
@@ -582,13 +619,30 @@ export default function GroupsSection({ campaignId, campaign, accountIds }) {
                   {(g.assigned_nicks?.length || g.account_username) ? (
                     <div className="flex items-center">
                       <div className="flex -space-x-1.5">
-                        {(g.assigned_nicks || [{ id: g.assigned_nick_id, username: g.account_username }]).slice(0, 4).map((n, i) => (
-                          <div key={n.id || i} title={n.username || '?'}
-                            className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 text-white flex items-center justify-center text-[10px] font-bold border-2 border-white shrink-0"
-                            style={{ zIndex: 10 - i }}>
-                            {(n.username || '?').substring(0, 2).toUpperCase()}
-                          </div>
-                        ))}
+                        {(g.assigned_nicks || [{ id: g.assigned_nick_id, username: g.account_username }]).slice(0, 4).map((n, i) => {
+                          const isMember = n.is_member === true
+                          const isPending = n.pending_approval === true
+                          let borderClass = 'border-white'
+                          let titleSuffix = ' (Chưa tham gia)'
+                          let opacityClass = 'opacity-40 grayscale'
+                          if (isMember) {
+                            borderClass = 'border-green-500 ring-1 ring-green-500'
+                            titleSuffix = ' (Đã tham gia)'
+                            opacityClass = ''
+                          } else if (isPending) {
+                            borderClass = 'border-amber-500 ring-1 ring-amber-500'
+                            titleSuffix = ' (Chờ duyệt)'
+                            opacityClass = 'opacity-70'
+                          }
+
+                          return (
+                            <div key={n.id || i} title={`${n.username || '?'}${titleSuffix}`}
+                              className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 text-white flex items-center justify-center text-[10px] font-bold border-2 ${borderClass} ${opacityClass} shrink-0`}
+                              style={{ zIndex: 10 - i }}>
+                              {(n.username || '?').substring(0, 2).toUpperCase()}
+                            </div>
+                          )
+                        })}
                         {(g.assigned_nicks?.length || 0) > 4 && (
                           <div className="w-6 h-6 rounded-full bg-app-hover text-app-muted flex items-center justify-center text-[9px] font-bold border-2 border-white shrink-0">
                             +{g.assigned_nicks.length - 4}
