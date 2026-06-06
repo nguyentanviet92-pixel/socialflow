@@ -1130,9 +1130,11 @@ class SkillUpdateRequest(BaseModel):
 # ── Health ────────────────────────────────────────────────
 @app.get('/health')
 async def health():
+    cfg = await load_config()
+    current_model = cfg.get('model') or MODEL
     return {
         'status': 'ok',
-        'model': MODEL,
+        'model': current_model,
         'skills': sorted(SKILLS.keys()),
         'task_types': sorted(TASK_CONFIG.keys()),
         'version': '2.0.0',
@@ -1144,6 +1146,8 @@ async def health():
 async def status(x_agent_key: str = Header(None)):
     verify_key(x_agent_key)
     pool = await get_pool()
+    cfg = await load_config()
+    current_model = cfg.get('model') or MODEL
     try:
         row = await pool.fetchrow("""
             SELECT
@@ -1164,7 +1168,7 @@ async def status(x_agent_key: str = Header(None)):
 
     return {
         'status': 'ONLINE',
-        'model': MODEL,
+        'model': current_model,
         'total_calls': row['total_calls'] or 0,
         'total_errors': row['total_errors'] or 0,
         'calls_last_hour': row['calls_last_hour'] or 0,
@@ -1370,7 +1374,7 @@ async def generate_comment(req: CommentRequest, x_agent_key: str = Header(None))
 
     return {
         'comment': text, 'task_type': 'comment_gen', 'provider': 'hermes',
-        'model': MODEL, 'fewshot_count': result['fewshot_count'],
+        'model': result.get('model', MODEL), 'fewshot_count': result['fewshot_count'],
         'memory_count': result['memory_count'],
     }
 
@@ -1402,7 +1406,7 @@ async def evaluate_posts(req: EvaluateRequest, x_agent_key: str = Header(None)):
 
     return {
         'scores': scores, 'task_type': 'post_eval', 'provider': 'hermes',
-        'model': MODEL, 'fewshot_count': result['fewshot_count'],
+        'model': result.get('model', MODEL), 'fewshot_count': result['fewshot_count'],
         'memory_count': result['memory_count'],
     }
 
@@ -1428,7 +1432,7 @@ async def quality_gate(req: QualityGateRequest, x_agent_key: str = Header(None))
 
     return {
         **parsed, 'task_type': 'quality_gate', 'provider': 'hermes',
-        'model': MODEL, 'fewshot_count': result['fewshot_count'],
+        'model': result.get('model', MODEL), 'fewshot_count': result['fewshot_count'],
         'memory_count': result['memory_count'],
     }
 
