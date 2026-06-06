@@ -134,12 +134,26 @@ function ModelSection() {
 
   // Quick-switch presets — 1 click to swap provider+model without typing
   const quickSwitch = (provider, model) => {
+    if (provider === 'chatgpt-oauth') {
+      const targetUrl = cfgData?.config?.gpt_link || 'https://chatgpt.com'
+      window.open(targetUrl, '_blank')
+      setForm(f => ({
+        ...f,
+        provider: 'openai',
+        model: 'chatgpt-action',
+        base_url: '',
+        api_key: '',
+      }))
+      toast.success('Đã chọn ChatGPT OAuth và mở tab mới để ủy quyền kết nối! 🚀')
+      return
+    }
     const baseUrl = providers[provider]?.base_url || ''
     setForm(f => ({ ...f, provider, model, base_url: baseUrl, api_key: '' }))
     toast.success(`Đã đổi sang ${provider} / ${model} — nhập API key rồi Test + Lưu`)
   }
 
   const QUICK_PRESETS = [
+    { p: 'chatgpt-oauth', m: 'custom-gpt',         label: '🤖 ChatGPT (OAuth)',  color: 'text-cyan-400 font-bold' },
     { p: 'deepseek', m: 'deepseek-chat',           label: 'DeepSeek V3',         color: 'text-info' },
     { p: 'deepseek', m: 'deepseek-v4-pro',         label: 'DeepSeek V4 Pro',     color: 'text-info' },
     { p: 'kimi',     m: 'kimi-k2.6',               label: 'Kimi K2.6',           color: 'text-cyan-500' },

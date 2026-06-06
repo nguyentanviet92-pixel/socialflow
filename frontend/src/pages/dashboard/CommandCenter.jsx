@@ -119,6 +119,12 @@ export default function CommandCenter() {
     refetchInterval: 15000,
   })
 
+  const { data: systemHealth } = useQuery({
+    queryKey: ['system-health'],
+    queryFn: async () => (await api.get('/health')).data,
+    refetchInterval: 15000,
+  })
+
   // Per-campaign KPI today — /campaigns list now includes today_done/target.
   const runningCampaigns = campaigns.filter(c => c.status === 'running' || c.status === 'active')
   const pausedCampaigns = campaigns.filter(c => c.status === 'paused')
@@ -190,6 +196,20 @@ export default function CommandCenter() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {/* Mock warning banner */}
+      {systemHealth?.mocks?.enabled && (
+        <div
+          className="px-6 py-2 font-mono-ui text-xs text-center font-bold"
+          style={{
+            background: '#ef4444',
+            color: '#ffffff',
+            borderBottom: '1px solid #dc2626',
+          }}
+        >
+          🚨 WARNING: Mocks are active on this system. Campaign interactions may be simulated! Disable ALLOW_MOCKS in production.
+        </div>
+      )}
+
       {/* Top stat row */}
       <div
         className="flex items-center gap-8 px-6 py-4"

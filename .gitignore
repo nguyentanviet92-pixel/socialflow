@@ -9,3 +9,12 @@ nul
 debug
 package-lock.json
 socialflow-agent/lib/config.js
+api/check_vps_diagnostics.js
+api/gen_pw.js
+api/scratch_check_vps.js
+api/test_orch.js
+*.sql
+scratch_db_test.js
+frontend/run-dev-logged.cmd
+socialflow-agent/*.bak
+socialflow-agent/*.cmd

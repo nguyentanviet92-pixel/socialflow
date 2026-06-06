@@ -51,11 +51,29 @@ function getJobPriority(jobType) {
 
 let supabase = null
 
+const schedulerTracker = {
+  enabled: true,
+  lastTickAt: null,
+  lastCreatedJobsCount: 0
+}
+
+function getSchedulerTracker() {
+  return schedulerTracker
+}
+
 function initScheduler() {
   supabase = _sbFromLib
 
   // Check campaigns every minute
   cron.schedule('* * * * *', async () => {
+    schedulerTracker.lastTickAt = new Date().toISOString()
+    let jobsBefore = 0
+    try {
+      const today = new Date().toISOString().split('T')[0]
+      const { count } = await supabase.from('jobs').select('id', { count: 'exact', head: true }).gte('created_at', today)
+      jobsBefore = count || 0
+    } catch {}
+
     try {
       await processPendingCampaigns()
     } catch (err) {
@@ -81,6 +99,13 @@ function initScheduler() {
     } catch (err) {
       console.error('[SCHEDULER] Monitoring error:', err.message)
     }
+
+    try {
+      const today = new Date().toISOString().split('T')[0]
+      const { count } = await supabase.from('jobs').select('id', { count: 'exact', head: true }).gte('created_at', today)
+      const jobsAfter = count || 0
+      schedulerTracker.lastCreatedJobsCount = Math.max(0, jobsAfter - jobsBefore)
+    } catch {}
   })
 
   // ── Phase 7: scout runs on its own 4-hour cadence, independent of the
@@ -1955,4 +1980,4 @@ async function processMonitoringSources() {
   }
 }
 
-module.exports = { initScheduler, executeCampaign, executeRoleCampaign }
+module.exports = { initScheduler, executeCampaign, executeRoleCampaign, getSchedulerTracker }
