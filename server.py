@@ -53,8 +53,8 @@ AGENT_SECRET = os.getenv('AGENT_SECRET', '')
 # Defaults (overridden by hermes_config DB table at runtime)
 DEEPSEEK_KEY = os.getenv('OPENAI_API_KEY', '')
 DEEPSEEK_URL = os.getenv('OPENAI_BASE_URL', 'https://api.deepseek.com/v1')
-MODEL = os.getenv('HERMES_MODEL', 'minimaxai/minimax-m2.7')
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://socialflow:sf_secure_2026@127.0.0.1:5432/socialflow')
+MODEL = os.getenv('HERMES_MODEL', 'deepseek-chat')
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://socialflow:sf_secure_2026_rot_4821a@127.0.0.1:5432/socialflow')
 
 # Provider config — maps provider name to base URL and model list
 # Models are SUGGESTIONS — user can type any custom model ID at frontend.
@@ -266,9 +266,9 @@ SKILL_TIERS: Dict[str, str] = {
 
 # Default model per tier — can be overridden in hermes_config.tier_models
 TIER_DEFAULTS: Dict[str, str] = {
-    'fast':     'minimaxai/minimax-m2.7',
-    'balanced': 'minimaxai/minimax-m2.7',
-    'smart':    'deepseek-ai/deepseek-r1',
+    'fast':     'deepseek-chat',
+    'balanced': 'deepseek-chat',
+    'smart':    'deepseek-reasoner',
 }
 
 # Runtime config cache (DB is source of truth, refreshed on PUT)
@@ -828,6 +828,12 @@ FALLBACK_CHAIN_DEFS = [
         'model': 'minimaxai/minimax-m2.7',
     },
     {
+        'name': 'kimi',
+        'api_key_envs': ('KIMI_API_KEY',),
+        'base_url': 'https://api.moonshot.ai/v1',
+        'model': 'kimi-k2.6',
+    },
+    {
         'name': 'deepseek',
         'api_key_envs': ('DEEPSEEK_API_KEY', 'OPENAI_API_KEY'),
         'base_url': 'https://api.deepseek.com/v1',
@@ -837,19 +843,25 @@ FALLBACK_CHAIN_DEFS = [
         'model': 'deepseek-chat',
     },
     {
-        'name': 'kimi',
-        'api_key_envs': ('KIMI_API_KEY', 'MOONSHOT_API_KEY'),
-        'base_url': 'https://api.moonshot.cn/v1',
-        'model': 'moonshot-v1-8k',
+        'name': 'gemini-flash',
+        'api_key_envs': ('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
+        'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai',
+        'model': 'gemini-2.5-flash',
     },
 ]
 
-def _resolve_fallback_key(fb_def: Dict[str, Any]) -> str:
-    """Try each env var name in priority order; return first non-empty."""
+def _resolve_fallback_key(fb_def: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Try each env var name in priority order, then DB config fallback_keys dict.
+    This allows storing keys in hermes_config when the .env on the host is incomplete."""
+    fb_keys_from_db = (cfg or {}).get('fallback_keys') or {}
     for name in fb_def.get('api_key_envs', ()):
         v = os.getenv(name, '').strip()
         if v:
             return v
+        # Try DB-stored key as secondary source
+        db_val = fb_keys_from_db.get(name, '').strip() if isinstance(fb_keys_from_db, dict) else ''
+        if db_val:
+            return db_val
     return ''
 
 def _is_billing_error(err_str: str, status: Optional[int] = None) -> bool:
@@ -957,7 +969,7 @@ def llm_call(system_prompt: str, user_message: str, max_tokens: int = 500, tempe
         if _is_provider_dead(fb['name']):
             logger.info('Skipping dead provider %s', fb['name'])
             continue
-        env_key = _resolve_fallback_key(fb)
+        env_key = _resolve_fallback_key(fb, cfg)
         if not env_key:
             continue
         chain.append({
@@ -1130,6 +1142,16 @@ class SkillUpdateRequest(BaseModel):
 # ── Health ────────────────────────────────────────────────
 @app.get('/health')
 async def health():
+    import json
+    auth_info = None
+    for p in ['/root/.hermes/auth.json', os.path.expanduser('~/.hermes/auth.json')]:
+        if os.path.exists(p):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    auth_info = json.load(f)
+                    break
+            except Exception as e:
+                auth_info = {'error': str(e)}
     cfg = await load_config()
     current_model = cfg.get('model') or MODEL
     return {
@@ -1139,6 +1161,7 @@ async def health():
         'task_types': sorted(TASK_CONFIG.keys()),
         'version': '2.0.0',
         'features': ['persistent_feedback', 'few_shot_injection', 'skill_crud', 'hot_reload'],
+        'auth_info': auth_info,
     }
 
 # ── Status / Performance (DB-backed) ──────────────────────
