@@ -154,6 +154,8 @@ function ModelSection() {
 
   const QUICK_PRESETS = [
     { p: 'chatgpt-oauth', m: 'custom-gpt',         label: '🤖 ChatGPT (OAuth)',  color: 'text-cyan-400 font-bold' },
+    { p: 'nvidia',   m: 'meta/llama-3.3-70b-instruct', label: 'NVIDIA Llama 3.3',    color: 'text-amber-500' },
+    { p: 'nvidia',   m: 'deepseek-ai/deepseek-r1',     label: 'NVIDIA DeepSeek R1',  color: 'text-amber-500 font-bold' },
     { p: 'deepseek', m: 'deepseek-chat',           label: 'DeepSeek V3',         color: 'text-info' },
     { p: 'deepseek', m: 'deepseek-v4-pro',         label: 'DeepSeek V4 Pro',     color: 'text-info' },
     { p: 'kimi',     m: 'kimi-k2.6',               label: 'Kimi K2.6',           color: 'text-cyan-500' },

@@ -2292,6 +2292,8 @@ function HermesModelQuickSelect() {
   const currentModel = cfgData.config.model
 
   const QUICK_PRESETS = [
+    { p: 'nvidia', m: 'meta/llama-3.3-70b-instruct', label: 'NVIDIA Llama 3.3' },
+    { p: 'nvidia', m: 'deepseek-ai/deepseek-r1', label: 'NVIDIA DeepSeek R1' },
     { p: 'deepseek', m: 'deepseek-chat', label: 'DeepSeek V3' },
     { p: 'deepseek', m: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
     { p: 'kimi', m: 'kimi-k2.6', label: 'Kimi K2.6' },
