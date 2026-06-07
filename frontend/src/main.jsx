@@ -35,7 +35,33 @@ function getStoredUserId() {
 // Storage wrapper scope theo userId — mỗi user có cache riêng, không dính nhau
 const userScopedStorage = {
   getItem: (key) => localStorage.getItem(`${key}-${getStoredUserId()}`),
-  setItem: (key, value) => localStorage.setItem(`${key}-${getStoredUserId()}`, value),
+  setItem: (key, value) => {
+    try {
+      localStorage.setItem(`${key}-${getStoredUserId()}`, value)
+    } catch (e) {
+      if (
+        e.name === 'QuotaExceededError' ||
+        e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+        e.code === 22 ||
+        e.number === -2147024882
+      ) {
+        console.warn('[STORAGE] LocalStorage quota exceeded. Clearing sf-cache items...')
+        try {
+          for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i)
+            if (k && k.startsWith('sf-cache-')) {
+              localStorage.removeItem(k)
+            }
+          }
+          localStorage.setItem(`${key}-${getStoredUserId()}`, value)
+        } catch (retryErr) {
+          console.error('[STORAGE] Failed to write after cache purge:', retryErr)
+        }
+      } else {
+        throw e
+      }
+    }
+  },
   removeItem: (key) => localStorage.removeItem(`${key}-${getStoredUserId()}`),
 }
 
@@ -50,7 +76,28 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <PersistQueryClientProvider
       client={queryClient}
-      persistOptions={{ persister, maxAge: 24 * 60 * 60 * 1000 }} // cache 24h
+      persistOptions={{
+        persister,
+        maxAge: 24 * 60 * 60 * 1000, // cache 24h
+        dehydrateOptions: {
+          shouldDehydrateQuery: (query) => {
+            const firstKey = query.queryKey[0]
+            if (typeof firstKey === 'string') {
+              if (
+                firstKey === 'jobs' ||
+                firstKey === 'hermes-decisions' ||
+                firstKey === 'system-health' ||
+                firstKey.startsWith('jobs') ||
+                firstKey.startsWith('hermes-decisions') ||
+                firstKey.startsWith('system-health')
+              ) {
+                return false
+              }
+            }
+            return true
+          }
+        }
+      }}
     >
       <App />
       <Toaster position="top-right" />

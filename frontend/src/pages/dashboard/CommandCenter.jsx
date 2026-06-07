@@ -125,6 +125,12 @@ export default function CommandCenter() {
     refetchInterval: 15000,
   })
 
+  const { data: alerts = [], refetch: refetchAlerts } = useQuery({
+    queryKey: ['account-alerts'],
+    queryFn: async () => asArray((await api.get('/accounts/alerts')).data),
+    refetchInterval: 15000,
+  })
+
   // Per-campaign KPI today — /campaigns list now includes today_done/target.
   const runningCampaigns = campaigns.filter(c => c.status === 'running' || c.status === 'active')
   const pausedCampaigns = campaigns.filter(c => c.status === 'paused')
@@ -287,6 +293,73 @@ export default function CommandCenter() {
           >
             Cấu hình provider →
           </button>
+        </div>
+      )}
+
+      {/* Account Alerts Warning Panel */}
+      {alerts.length > 0 && (
+        <div
+          className="mx-6 mt-4 p-3 flex flex-col gap-2 rounded border"
+          style={{
+            background: 'color-mix(in srgb, var(--danger) 8%, var(--bg-elevated))',
+            borderColor: 'color-mix(in srgb, var(--danger) 30%, var(--border))',
+          }}
+        >
+          <div className="flex items-center justify-between font-mono-ui text-[10px] uppercase tracking-wider text-app-muted">
+            <span className="text-danger font-bold flex items-center gap-1.5" style={{ color: 'var(--danger)' }}>
+              <span>🚨</span> CẢNH BÁO TÀI KHOẢN ({alerts.length})
+            </span>
+            <button
+              onClick={async () => {
+                for (const alert of alerts) {
+                  await api.post(`/accounts/alerts/${alert.id}/resolve`).catch(() => {})
+                }
+                refetchAlerts()
+              }}
+              className="text-[9px] text-app-primary hover:underline font-bold"
+            >
+              đã xử lý tất cả
+            </button>
+          </div>
+          <div className="max-h-[120px] overflow-y-auto flex flex-col gap-1.5 pr-2">
+            {alerts.map((alert) => (
+              <div
+                key={alert.id}
+                className="flex items-center justify-between gap-4 py-1.5 border-b border-[var(--border)] last:border-0 font-mono-ui text-xs"
+                style={{ borderBottom: '1px solid var(--border)' }}
+              >
+                <div className="flex-1 min-w-0 flex items-center gap-2">
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
+                    style={{
+                      background: alert.severity === 'critical' ? 'var(--danger)' : 'var(--warn)',
+                      color: alert.severity === 'critical' ? '#ffffff' : '#000000',
+                    }}
+                  >
+                    {alert.severity}
+                  </span>
+                  <span className="text-app-primary font-bold shrink-0">
+                    {alert.accounts?.username || alert.accounts?.name || alert.account_id.slice(0, 8)}:
+                  </span>
+                  <span className="text-app-muted truncate" title={alert.message}>
+                    {alert.message}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-app-dim text-[10px]">{fmtAgo(alert.created_at)}</span>
+                  <button
+                    onClick={async () => {
+                      await api.post(`/accounts/alerts/${alert.id}/resolve`).catch(() => {})
+                      refetchAlerts()
+                    }}
+                    className="text-[10px] text-hermes hover:underline font-bold"
+                  >
+                    xác nhận
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -177,6 +177,48 @@ module.exports = async (fastify) => {
   // NOTE: Old warmup-status and warmup endpoints removed.
   // Nurture system (GET /nurture/profiles, POST /nurture/profiles/:id/run) replaces them.
 
+  // GET /accounts/alerts — Fetch open account alerts for the user's accounts
+  fastify.get('/alerts', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const accessibleIds = await getAccessibleIds(supabase, req.user.id, 'account')
+    if (accessibleIds.length === 0) return []
+
+    const { data, error } = await supabase
+      .from('account_alerts')
+      .select('*, accounts(username, name)')
+      .in('account_id', accessibleIds)
+      .eq('status', 'open')
+      .order('created_at', { ascending: false })
+
+    if (error) return reply.code(500).send({ error: error.message })
+    return data || []
+  })
+
+  // POST /accounts/alerts/:id/resolve — Resolve a specific account alert
+  fastify.post('/alerts/:id/resolve', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { id } = req.params
+    const { data: alert, error: fetchError } = await supabase
+      .from('account_alerts')
+      .select('account_id')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !alert) {
+      return reply.code(404).send({ error: 'Alert not found' })
+    }
+
+    if (!await canAccess(supabase, req.user.id, 'account', alert.account_id)) {
+      return reply.code(403).send({ error: 'No access to this account alert' })
+    }
+
+    const { error: updateError } = await supabase
+      .from('account_alerts')
+      .update({ status: 'resolved', resolved_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (updateError) return reply.code(500).send({ error: updateError.message })
+    return { success: true }
+  })
+
   // GET /accounts - List accounts user owns + accounts granted by admin
   fastify.get('/', { preHandler: fastify.authenticate }, async (req, reply) => {
     const accessibleIds = await getAccessibleIds(supabase, req.user.id, 'account')
