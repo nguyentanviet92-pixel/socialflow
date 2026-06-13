@@ -1206,6 +1206,29 @@ Không markdown wrapper. Chỉ JSON.`
           data: { account_id: req.params.id, status, reason, detected_at },
         })
       } catch {}
+
+      // Create account_alerts warning so it appears in the dashboard
+      try {
+        const { data: existingAlert } = await supabase.from('account_alerts')
+          .select('id')
+          .eq('account_id', req.params.id)
+          .eq('status', 'open')
+          .eq('type', status)
+          .limit(1)
+
+        if (!existingAlert || existingAlert.length === 0) {
+          await supabase.from('account_alerts').insert({
+            account_id: req.params.id,
+            type: status,
+            severity: status === 'checkpoint' ? 'critical' : 'warning',
+            message: `Tài khoản ${account.username}: ${reason || `Phát hiện trạng thái ${status}`}`,
+            status: 'open',
+            created_at: new Date().toISOString()
+          })
+        }
+      } catch (alertErr) {
+        fastify.log.warn({ err: alertErr.message }, 'Failed to insert account alert')
+      }
     }
 
     // Status change crosses the alive/dead boundary in either direction —
