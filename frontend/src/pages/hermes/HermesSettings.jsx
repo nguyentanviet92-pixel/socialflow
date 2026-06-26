@@ -2086,6 +2086,589 @@ function AgentPlaywrightSection() {
         </div>
       </div>
     </div>
+      </div>
+  )
+}
+
+function WpAuditSection() {
+  const qc = useQueryClient()
+  const { data: cfgData, isLoading: isCfgLoading } = useQuery({
+    queryKey: ['hermes', 'config'],
+    queryFn: async () => (await api.get('/ai-hermes/config')).data,
+  })
+
+  const cfg = cfgData?.config || {}
+
+  // WordPress credentials form state
+  const [form, setForm] = useState({
+    wp_url: '',
+    wp_username: '',
+    wp_app_password: '',
+  })
+
+  // Sync credentials from backend
+  useEffect(() => {
+    if (cfg && !isCfgLoading) {
+      setForm({
+        wp_url: cfg.wp_url || '',
+        wp_username: cfg.wp_username || '',
+        wp_app_password: cfg.wp_app_password || '',
+      })
+    }
+  }, [cfgData, isCfgLoading])
+
+  const saveConfig = useMutation({
+    mutationFn: async () => {
+      const payload = {
+        wp_url: form.wp_url.strip ? form.wp_url.strip() : form.wp_url.trim(),
+        wp_username: form.wp_username.strip ? form.wp_username.strip() : form.wp_username.trim(),
+      }
+      // Only include password if it's new/changed and not masked
+      if (form.wp_app_password && !form.wp_app_password.includes('...') && form.wp_app_password !== '***') {
+        payload.wp_app_password = form.wp_app_password.strip ? form.wp_app_password.strip() : form.wp_app_password.trim()
+      }
+      await api.put('/ai-hermes/config', payload)
+    },
+    onSuccess: () => {
+      toast.success('Đã lưu cấu hình WordPress')
+      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+    },
+    onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
+  })
+
+  // Testing connection state
+  const [testingConnection, setTestingConnection] = useState(false)
+  const testConnection = async () => {
+    setTestingConnection(true)
+    try {
+      const res = await api.get('/ai-hermes/wp/posts?per_page=1')
+      if (res.data && res.data.posts) {
+        toast.success('Kết nối WordPress thành công! 🚀')
+      } else {
+        toast.error('Không thể tải bài viết từ WordPress')
+      }
+    } catch (err) {
+      toast.error(`Kết nối lỗi: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setTestingConnection(false)
+    }
+  }
+
+  // Post List state
+  const [posts, setPosts] = useState([])
+  const [loadingPosts, setLoadingPosts] = useState(false)
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const [hasMore, setHasMore] = useState(true)
+
+  // Categories list
+  const { data: catData } = useQuery({
+    queryKey: ['hermes', 'wp-categories'],
+    queryFn: async () => (await api.get('/ai-hermes/wp/categories')).data,
+    enabled: !!cfg.wp_url, // only fetch if URL is configured
+  })
+  const categories = catData?.categories || []
+  const [selectedCategory, setSelectedCategory] = useState('')
+
+  const loadPosts = async (resetPage = false) => {
+    setLoadingPosts(true)
+    const nextPage = resetPage ? 1 : page
+    try {
+      const catParam = selectedCategory ? `&category_id=${selectedCategory}` : ''
+      const res = await api.get(`/ai-hermes/wp/posts?page=${nextPage}&per_page=10&search=${encodeURIComponent(search)}${catParam}`)
+      const fetched = res.data.posts || []
+      
+      if (resetPage) {
+        setPosts(fetched)
+      } else {
+        setPosts(prev => [...prev, ...fetched])
+      }
+      
+      setPage(nextPage + 1)
+      setHasMore(fetched.length === 10)
+    } catch (err) {
+      toast.error(`Lỗi tải bài viết: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setLoadingPosts(false)
+    }
+  }
+
+  // Run initial load or when category changes
+  useEffect(() => {
+    if (cfg.wp_url) {
+      loadPosts(true)
+    }
+  }, [selectedCategory, cfg.wp_url])
+
+  // Audit Results state
+  const [auditResults, setAuditResults] = useState({})
+  const [auditingId, setAuditingId] = useState(null)
+  const [activeAuditId, setActiveAuditId] = useState(null)
+
+  const runAudit = async (postId) => {
+    setAuditingId(postId)
+    try {
+      const res = await api.post(`/ai-hermes/wp/audit/${postId}`)
+      if (res.data && res.data.audit) {
+        setAuditResults(prev => ({ ...prev, [postId]: res.data }))
+        setActiveAuditId(postId)
+        toast.success('Đã hoàn thành Audit bài viết! 📊')
+      } else {
+        toast.error('Audit thất bại: Không nhận được kết quả phân tích')
+      }
+    } catch (err) {
+      toast.error(`Lỗi Audit: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setAuditingId(null)
+    }
+  }
+
+  const handleCopy = (text, label) => {
+    navigator.clipboard.writeText(text)
+    toast.success(`Đã copy ${label}`)
+  }
+
+  if (isCfgLoading) {
+    return <div className="p-6 text-app-muted font-mono-ui text-xs">Đang tải cấu hình…</div>
+  }
+
+  return (
+    <div className="p-6 font-mono-ui text-xs max-w-4xl space-y-6">
+      <div>
+        <h3 className="text-app-primary text-sm mb-1">WordPress Post Audit via REST API</h3>
+        <p className="text-app-muted text-[11px]">Fetch các bài viết từ WordPress và tiến hành audit chất lượng SEO/GEO/Topic Cluster.</p>
+      </div>
+
+      {/* Connection Config Panel */}
+      <div className="p-4 bg-app-elevated space-y-4 border border-border">
+        <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🌐 WordPress Connection Cấu hình</h4>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">Site URL</label>
+            <input
+              type="text"
+              value={form.wp_url}
+              onChange={(e) => setForm(prev => ({ ...prev, wp_url: e.target.value }))}
+              placeholder="https://tino.vn"
+              className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">Username</label>
+            <input
+              type="text"
+              value={form.wp_username}
+              onChange={(e) => setForm(prev => ({ ...prev, wp_username: e.target.value }))}
+              placeholder="admin"
+              className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">Application Password</label>
+            <input
+              type="password"
+              value={form.wp_app_password}
+              onChange={(e) => setForm(prev => ({ ...prev, wp_app_password: e.target.value }))}
+              placeholder="xxxx xxxx xxxx xxxx"
+              className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => saveConfig.mutate()}
+            disabled={saveConfig.isPending}
+            className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded"
+          >
+            {saveConfig.isPending ? 'Đang lưu…' : 'Lưu cấu hình'}
+          </button>
+          <button
+            onClick={testConnection}
+            disabled={testingConnection || !form.wp_url}
+            className="btn-ghost px-4 py-1.5 text-xs font-semibold flex items-center gap-1.5 border border-border rounded"
+          >
+            {testingConnection ? <Loader className="w-3.5 h-3.5 animate-spin" /> : 'Test kết nối'}
+          </button>
+        </div>
+      </div>
+
+      {/* Post browser list */}
+      {cfg.wp_url && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 items-center justify-between">
+            <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🔍 Browse Posts từ WordPress</h4>
+            <div className="flex gap-2 items-center">
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs"
+              >
+                <option value="">📂 Tất cả danh mục</option>
+                {categories.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} ({c.count})</option>
+                ))}
+              </select>
+              <div className="flex">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && loadPosts(true)}
+                  placeholder="Tìm kiếm bài viết..."
+                  className="px-2 py-1 bg-app-base border border-border text-app-primary w-48 rounded-l border-r-0 font-mono-ui text-xs"
+                />
+                <button
+                  onClick={() => loadPosts(true)}
+                  className="btn-hermes px-3 py-1 rounded-r text-xs border border-hermes font-semibold"
+                >
+                  Tìm
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-border rounded overflow-hidden">
+            <div
+              className="flex items-center gap-3 px-3 py-2 text-[10px] uppercase text-app-muted"
+              style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}
+            >
+              <div className="w-12 text-center">ID</div>
+              <div className="flex-1">Tiêu đề</div>
+              <div className="w-48">Slug</div>
+              <div className="w-32">Ngày đăng</div>
+              <div className="w-24 text-center">Hành động</div>
+            </div>
+
+            {posts.length === 0 && !loadingPosts ? (
+              <div className="p-6 text-center text-app-muted">Không tìm thấy bài viết nào</div>
+            ) : (
+              posts.map((post) => {
+                const audited = auditResults[post.id]
+                return (
+                  <div key={post.id} className="border-b border-border last:border-0">
+                    <div className="flex items-center gap-3 px-3 py-2.5 hover:bg-app-elevated/40">
+                      <div className="w-12 text-center text-app-muted font-bold">{post.id}</div>
+                      <div className="flex-1 min-w-0">
+                        <a
+                          href={post.link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-app-primary font-semibold hover:text-hermes truncate block"
+                          dangerouslySetInnerHTML={{ __html: post.title?.rendered }}
+                        />
+                      </div>
+                      <div className="w-48 truncate text-app-dim">{post.slug}</div>
+                      <div className="w-32 text-app-muted">{new Date(post.date).toLocaleDateString('vi-VN')}</div>
+                      <div className="w-24 text-center">
+                        <button
+                          onClick={() => {
+                            if (audited) {
+                              setActiveAuditId(activeAuditId === post.id ? null : post.id)
+                            } else {
+                              runAudit(post.id)
+                            }
+                          }}
+                          disabled={auditingId === post.id}
+                          className={`px-3 py-1 text-xs font-semibold rounded w-full ${
+                            audited 
+                              ? activeAuditId === post.id ? 'bg-app-base text-app-muted border border-border' : 'border border-hermes text-hermes hover:bg-hermes/10'
+                              : 'btn-hermes text-white'
+                          }`}
+                        >
+                          {auditingId === post.id ? (
+                            <Loader className="w-3 h-3 animate-spin mx-auto text-app-primary" />
+                          ) : audited ? (
+                            activeAuditId === post.id ? 'Đóng' : 'Xem Audit'
+                          ) : (
+                            'Audit'
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Audit result panel inside table row */}
+                    {activeAuditId === post.id && audited && (
+                      <div className="p-4 bg-app-base border-t border-border space-y-4">
+                        <div className="flex justify-between items-center border-b border-border pb-2">
+                          <div>
+                            <span className="font-bold text-app-primary text-sm">📊 KẾT QUẢ AUDIT</span>
+                            <span className="ml-3 text-[10px] px-2 py-0.5 rounded uppercase font-bold bg-hermes/20 text-hermes border border-hermes/30">
+                              Type: {audited.audit.post_type}
+                            </span>
+                            {audited.audit.pillar_topic && (
+                              <span className="ml-2 text-[10px] px-2 py-0.5 rounded bg-app-elevated border border-border text-app-primary">
+                                Pillar Topic: {audited.audit.pillar_topic}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => setActiveAuditId(null)}
+                            className="text-app-muted hover:text-app-primary font-semibold"
+                          >
+                            [Đóng Panel]
+                          </button>
+                        </div>
+
+                        {/* Scores */}
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-center">
+                          <div className="text-center p-3 bg-app-elevated border border-border rounded flex flex-col justify-center">
+                            <span className="text-[10px] text-app-muted uppercase">Điểm tổng thể</span>
+                            <span className="text-2xl font-bold text-hermes mt-1">{audited.audit.audit_score}/100</span>
+                          </div>
+                          <div className="col-span-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+                            {Object.entries(audited.audit.score_breakdown || {}).map(([key, val]) => (
+                              <div key={key} className="p-2 bg-app-elevated/50 rounded border border-border">
+                                <div className="text-[9px] uppercase text-app-muted">{key.replace('_', ' ')}</div>
+                                <div className="flex items-center justify-between mt-1">
+                                  <span className="font-bold text-app-primary">{val}/25</span>
+                                  <span className="text-[9px] text-app-dim">{Math.round((val/25)*100)}%</span>
+                                </div>
+                                <div className="w-full bg-app-base h-1 mt-1 rounded-full overflow-hidden">
+                                  <div className="bg-hermes h-full" style={{ width: `${(val/25)*100}%` }}></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Critical Issues */}
+                        <div className="space-y-2">
+                          <div className="font-bold text-xs text-app-primary uppercase flex items-center gap-1.5">
+                            <AlertTriangle className="w-4 h-4 text-warn" /> Vấn đề nghiêm trọng ({audited.audit.critical_issues?.length || 0})
+                          </div>
+                          <div className="space-y-1.5">
+                            {audited.audit.critical_issues?.map((issue, i) => (
+                              <div
+                                key={i}
+                                className="p-2.5 rounded border border-l-4 space-y-1"
+                                style={{
+                                  background: 'var(--bg-elevated)',
+                                  borderLeftColor: issue.severity === 'critical' ? 'var(--error)' : issue.severity === 'high' ? 'var(--warn)' : 'var(--info)'
+                                }}
+                              >
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="font-bold uppercase text-app-primary">
+                                    [{issue.severity.toUpperCase()}] {issue.category} · <span className="text-app-muted">Location: {issue.location}</span>
+                                  </span>
+                                </div>
+                                <div className="text-app-primary font-semibold text-xs">{issue.issue}</div>
+                                <div className="text-app-muted text-[11px] leading-relaxed">👉 {issue.fix}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Suggestions */}
+                        <div className="space-y-4">
+                          <h5 className="font-bold text-xs text-app-primary uppercase border-b border-border pb-1">✏️ ĐỀ XUẤT CHỈNH SỬA & TỐI ƯU</h5>
+                          
+                          {/* Title / Meta Titles */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {audited.audit.suggestions?.title && (
+                              <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                                <div className="flex justify-between items-center text-[10px] text-app-muted uppercase">
+                                  <span>Tiêu đề đề xuất</span>
+                                  <button
+                                    onClick={() => handleCopy(audited.audit.suggestions.title, 'Tiêu đề đề xuất')}
+                                    className="text-hermes hover:underline"
+                                  >
+                                    Copy
+                                  </button>
+                                </div>
+                                <div className="text-app-primary font-bold text-xs">{audited.audit.suggestions.title}</div>
+                              </div>
+                            )}
+
+                            {audited.audit.suggestions?.meta_title && (
+                              <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                                <div className="flex justify-between items-center text-[10px] text-app-muted uppercase">
+                                  <span>Meta Title mới</span>
+                                  <button
+                                    onClick={() => handleCopy(audited.audit.suggestions.meta_title, 'Meta Title mới')}
+                                    className="text-hermes hover:underline"
+                                  >
+                                    Copy
+                                  </button>
+                                </div>
+                                <div className="text-app-primary font-bold text-xs">{audited.audit.suggestions.meta_title}</div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Meta Description */}
+                          {audited.audit.suggestions?.meta_description && (
+                            <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                              <div className="flex justify-between items-center text-[10px] text-app-muted uppercase">
+                                <span>Meta Description mới</span>
+                                <button
+                                  onClick={() => handleCopy(audited.audit.suggestions.meta_description, 'Meta Description mới')}
+                                  className="text-hermes hover:underline"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <div className="text-app-primary text-xs leading-relaxed">{audited.audit.suggestions.meta_description}</div>
+                            </div>
+                          )}
+
+                          {/* GEO Intro Paragraph */}
+                          {audited.audit.suggestions?.intro_paragraph && (
+                            <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                              <div className="flex justify-between items-center text-[10px] text-app-muted uppercase">
+                                <span>Đoạn mở bài GEO-optimized (Direct Answer)</span>
+                                <button
+                                  onClick={() => handleCopy(audited.audit.suggestions.intro_paragraph, 'Mở bài')}
+                                  className="text-hermes hover:underline"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <div className="text-app-primary text-xs leading-relaxed italic">"{audited.audit.suggestions.intro_paragraph}"</div>
+                            </div>
+                          )}
+
+                          {/* H2 Structure */}
+                          {audited.audit.suggestions?.h2_structure && audited.audit.suggestions.h2_structure.length > 0 && (
+                            <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                              <div className="flex justify-between items-center text-[10px] text-app-muted uppercase">
+                                <span>Cấu trúc H2 đề xuất</span>
+                                <button
+                                  onClick={() => handleCopy(audited.audit.suggestions.h2_structure.join('\n'), 'Cấu trúc H2')}
+                                  className="text-hermes hover:underline"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <ul className="list-disc list-inside space-y-1 text-app-primary text-xs">
+                                {audited.audit.suggestions.h2_structure.map((h, i) => (
+                                  <li key={i}>{h}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* FAQ Block */}
+                          {audited.audit.suggestions?.faq_block && audited.audit.suggestions.faq_block.length > 0 && (
+                            <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                              <div className="flex justify-between items-center text-[10px] text-app-muted uppercase">
+                                <span>FAQ Block đề xuất</span>
+                                <button
+                                  onClick={() => {
+                                    const faqText = audited.audit.suggestions.faq_block.map(f => `Q: ${f.q}\nA: ${f.a}`).join('\n\n')
+                                    handleCopy(faqText, 'FAQ Block')
+                                  }}
+                                  className="text-hermes hover:underline"
+                                >
+                                  Copy toàn bộ
+                                </button>
+                              </div>
+                              <div className="space-y-2.5 text-xs">
+                                {audited.audit.suggestions.faq_block.map((faq, i) => (
+                                  <div key={i} className="space-y-1">
+                                    <div className="font-bold text-app-primary">Q: {faq.q}</div>
+                                    <div className="text-app-muted">A: {faq.a}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Internal Links */}
+                          {audited.audit.suggestions?.internal_links_to_add && audited.audit.suggestions.internal_links_to_add.length > 0 && (
+                            <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                              <div className="text-[10px] text-app-muted uppercase">Internal Links cần thêm</div>
+                              <div className="space-y-2 text-xs">
+                                {audited.audit.suggestions.internal_links_to_add.map((l, i) => (
+                                  <div key={i} className="flex items-start gap-1 justify-between">
+                                    <div>
+                                      <span className="font-bold text-app-primary">"{l.anchor}"</span>
+                                      <span className="text-app-muted mx-1">→</span>
+                                      <span className="text-app-dim italic">{l.note}</span>
+                                    </div>
+                                    <button
+                                      onClick={() => handleCopy(l.anchor, 'Anchor text')}
+                                      className="text-hermes hover:underline text-[10px]"
+                                    >
+                                      Copy Anchor
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Semantic keywords & entities */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {audited.audit.suggestions?.missing_entities && audited.audit.suggestions.missing_entities.length > 0 && (
+                              <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                                <div className="text-[10px] text-app-muted uppercase">Entities còn thiếu</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {audited.audit.suggestions.missing_entities.map((e, i) => (
+                                    <span key={i} className="px-2 py-0.5 bg-app-base border border-border rounded text-[10px] text-app-primary">{e}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {audited.audit.suggestions?.missing_lsi_keywords && audited.audit.suggestions.missing_lsi_keywords.length > 0 && (
+                              <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                                <div className="text-[10px] text-app-muted uppercase">LSI Keywords còn thiếu</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {audited.audit.suggestions.missing_lsi_keywords.map((kw, i) => (
+                                    <span key={i} className="px-2 py-0.5 bg-app-base border border-border rounded text-[10px] text-app-primary">{kw}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* New Cluster Posts Needed */}
+                          {audited.audit.suggestions?.new_cluster_posts_needed && audited.audit.suggestions.new_cluster_posts_needed.length > 0 && (
+                            <div className="p-3 bg-app-elevated rounded border border-border space-y-1.5">
+                              <div className="text-[10px] text-app-muted uppercase">Bài viết cluster cần tạo thêm</div>
+                              <ul className="list-disc list-inside space-y-1 text-xs text-app-primary">
+                                {audited.audit.suggestions.new_cluster_posts_needed.map((p, i) => (
+                                  <li key={i}>{p}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* GEO Quick wins */}
+                          {audited.audit.geo_quick_wins && audited.audit.geo_quick_wins.length > 0 && (
+                            <div className="p-3 rounded border border-hermes/30 bg-hermes/10 space-y-1.5">
+                              <div className="text-[10px] text-hermes uppercase font-bold">🌟 GEO Quick Wins (Cải thiện nhanh)</div>
+                              <ul className="list-decimal list-inside space-y-1 text-xs text-app-primary font-semibold">
+                                {audited.audit.geo_quick_wins.map((w, i) => (
+                                  <li key={i}>{w}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+
+            {/* Pagination / Load more */}
+            {posts.length > 0 && hasMore && (
+              <div className="p-3 text-center border-t border-border">
+                <button
+                  onClick={() => loadPosts(false)}
+                  disabled={loadingPosts}
+                  className="btn-ghost px-4 py-1 text-xs font-semibold rounded border border-border"
+                >
+                  {loadingPosts ? 'Đang tải…' : 'Tải thêm bài viết'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -2102,6 +2685,7 @@ const SECTIONS = [
   { key: 'decisions', label: 'Decisions' },
   { key: 'learning',  label: 'Learning' },
   { key: 'reports',   label: 'Reports' },
+  { key: 'wp_audit',  label: 'WP Audit' },
 ]
 
 export default function HermesSettings() {
@@ -2121,7 +2705,7 @@ export default function HermesSettings() {
 
       {/* Tab bar */}
       <div
-        className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider"
+        className="flex items-center px-6 font-mono-ui text-[11px] uppercase tracking-wider overflow-x-auto whitespace-nowrap"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         {SECTIONS.map((s) => (
@@ -2152,6 +2736,7 @@ export default function HermesSettings() {
         {section === 'decisions' && <DecisionsSection />}
         {section === 'learning'  && <LearningSection />}
         {section === 'reports'   && <ReportsSection />}
+        {section === 'wp_audit'  && <WpAuditSection />}
       </div>
     </div>
   )

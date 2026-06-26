@@ -1675,6 +1675,13 @@ class FallbackProvider(BaseModel):
     model: str         # model ID tương ứng provider
     enabled: bool = True
 
+# Add WordPress Client and HTML parser
+try:
+    from wp_client import WordPressClient
+    from bs4 import BeautifulSoup
+except ImportError:
+    pass
+
 class ConfigUpdateRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -1695,6 +1702,12 @@ class ConfigUpdateRequest(BaseModel):
     # Per-skill model override: {"orchestrator": "anthropic/claude-sonnet-4-5", "comment_gen": "deepseek-chat"}
     skill_models: Optional[Dict[str, str]] = None
     gpt_link: Optional[str] = None
+    # WordPress config fields
+    wp_url: Optional[str] = None
+    wp_username: Optional[str] = None
+    wp_app_password: Optional[str] = None
+    wp_rest_base: Optional[str] = None
+    pillar_map: Optional[Dict[str, dict]] = None
 
 @app.get('/config')
 async def get_config(x_agent_key: str = Header(None)):
@@ -1708,6 +1721,8 @@ async def get_config(x_agent_key: str = Header(None)):
         safe['fallback_keys'] = {
             k: mask_api_key(v) for k, v in safe['fallback_keys'].items()
         }
+    if safe.get('wp_app_password'):
+        safe['wp_app_password'] = mask_api_key(safe['wp_app_password'])
     # Effective routing: what model each skill actually uses right now
     effective_routing = {}
     for task_type, tier in SKILL_TIERS.items():
@@ -1765,6 +1780,13 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
         if any(c in k for c in '{}[]'):
             raise HTTPException(400, 'api_key looks like JSON object, not a key')
         updates['api_key'] = k
+
+    if 'wp_app_password' in updates:
+        wp_pass = updates['wp_app_password']
+        if wp_pass and is_masked(wp_pass):
+            updates.pop('wp_app_password')
+        elif wp_pass is not None:
+            updates['wp_app_password'] = wp_pass.strip()
 
     pool = await get_pool()
     try:
@@ -2011,6 +2033,287 @@ async def delete_memory(account_id: Optional[str] = None, all: bool = False,
     except Exception as e:
         raise HTTPException(500, f'Delete failed: {e}')
     return {'ok': True, 'deleted_rows': count}
+
+def get_wp_client(config) -> WordPressClient:
+    wp_url = config.get("wp_url", "")
+    wp_username = config.get("wp_username", "")
+    wp_app_password = config.get("wp_app_password", "")
+    if not wp_url or not wp_username or not wp_app_password:
+        raise HTTPException(400, "WordPress site configuration is missing or incomplete (check URL, username, password)")
+    return WordPressClient(
+        wp_url=wp_url,
+        username=wp_username,
+        app_password=wp_app_password,
+    )
+
+# ── WORDPRESS INTEGRATION & AUDIT ───────────────────────────────────────────
+
+AUDIT_SYSTEM_PROMPT = """
+Bạn là chuyên gia SEO/GEO content auditor. Nhiệm vụ: phân tích bài viết WordPress và trả về JSON audit report chi tiết.
+
+TIÊU CHÍ AUDIT (theo thứ tự ưu tiên):
+
+## 1. GEO (Generative Engine Optimization)
+- Câu trả lời trực tiếp: 200 từ đầu có định nghĩa/trả lời rõ ràng cho main query không?
+- Definition clarity: AI có thể extract 1 câu định nghĩa ngắn gọn không?
+- FAQ coverage: Có block Q&A cho các câu hỏi liên quan không?
+- Entity mentions: Đề cập đủ các entity liên quan (brand, người, địa điểm, công cụ)?
+- Source/citation signals: Có dẫn nguồn, số liệu cụ thể không?
+- Author/expertise signals: Có thể hiện expertise của tác giả không?
+- Structured answer format: Có dùng list, bảng, step-by-step để AI dễ extract không?
+
+## 2. Pillar / Topic Cluster
+- Xác định: bài này là PILLAR hay CLUSTER?
+  - Pillar: bao quát chủ đề lớn, internal link ra nhiều cluster
+  - Cluster: đi sâu 1 subtopic, internal link về pillar
+- Internal link check: Link về pillar chưa? Link sang cluster liên quan chưa?
+- Topic coverage: Nếu là pillar → đã mention đủ subtopics chưa? Nếu là cluster → focus đúng 1 subtopic chưa?
+- Thiếu bài nào trong cluster? (đề xuất bài mới cần tạo)
+
+## 3. Semantic SEO
+- Main keyword: có xuất hiện trong H1, H2 đầu, 100 từ đầu, meta title không?
+- LSI keywords: có đủ từ đồng nghĩa/liên quan không? Liệt kê các từ đang thiếu.
+- Keyword cannibalization risk: bài này có đang cạnh tranh với bài khác không? (dựa vào pillar_map)
+- Heading structure: H2/H3 có bao phủ các search intent variations không?
+- Readability: câu văn có quá dài/phức tạp không?
+
+## 4. SEO Fundamentals
+- Title tag: có chứa keyword, có hấp dẫn, có ≤60 ký tự không?
+- Meta description: có chứa keyword, có call-to-action, có ≤160 ký tự không?
+- H1: có đúng 1 H1 không? H1 = title không?
+- H2/H3 structure: có logic, không skip cấp không?
+- Word count: ngắn/vừa/dài so với intent?
+- Internal links: có ≥3 internal links không?
+- Image alt text: không audit được qua text nhưng note nếu content có nhiều ảnh.
+
+OUTPUT FORMAT: Trả về JSON thuần, không markdown, không giải thích.
+"""
+
+AUDIT_USER_PROMPT = """
+URL: {url}
+Slug: {slug}
+Title: {title}
+Meta Title: {meta_title}
+Meta Description: {meta_desc}
+Excerpt: {excerpt}
+
+HEADING STRUCTURE:
+{headings_text}
+
+INTERNAL LINKS ({internal_link_count} links):
+{internal_links_text}
+
+CONTENT (full text):
+{content}
+
+{pillar_context}
+
+Hãy audit bài viết trên và trả về JSON với structure sau:
+{{
+  "post_type": "pillar" | "cluster" | "standalone",
+  "pillar_topic": "tên pillar chủ đề này thuộc về",
+  "main_keyword": "từ khóa chính bài đang target",
+  "audit_score": 0-100,
+  "score_breakdown": {{
+    "geo": 0-25,
+    "pillar_cluster": 0-25,
+    "semantic": 0-25,
+    "seo_fundamentals": 0-25
+  }},
+  "critical_issues": [
+    {{
+      "category": "GEO" | "Pillar/Cluster" | "Semantic" | "SEO",
+      "severity": "critical" | "high" | "medium" | "low",
+      "issue": "mô tả vấn đề ngắn gọn",
+      "location": "title" | "h1" | "h2" | "content" | "meta_title" | "meta_desc" | "internal_links",
+      "fix": "hướng dẫn sửa cụ thể"
+    }}
+  ],
+  "suggestions": {{
+    "title": "title mới đề xuất (nếu cần đổi)",
+    "meta_title": "meta title mới",
+    "meta_description": "meta description mới ≤160 ký tự",
+    "h1": "H1 mới nếu cần",
+    "h2_structure": ["H2 1", "H2 2", "H2 3"],
+    "intro_paragraph": "đoạn mở bài mới tối ưu GEO (định nghĩa rõ, direct answer)",
+    "faq_block": [
+      {{"q": "câu hỏi", "a": "câu trả lời ngắn gọn"}}
+    ],
+    "internal_links_to_add": [
+      {{"anchor": "anchor text", "note": "link đến bài/trang nào"}}
+    ],
+    "missing_entities": ["entity 1", "entity 2"],
+    "missing_lsi_keywords": ["keyword 1", "keyword 2"],
+    "new_cluster_posts_needed": ["tên bài cluster cần tạo thêm"]
+  }},
+  "geo_quick_wins": [
+    "hành động cụ thể ngắn gọn có thể làm ngay để cải thiện GEO score"
+  ]
+}}
+"""
+
+async def run_audit_llm(
+    title, slug, url, content, headings, internal_links,
+    meta_title, meta_desc, excerpt, pillar_context, config
+) -> dict:
+    headings_text = "\n".join(
+        f"  {'  ' * (int(h['level'][1])-1)}{h['level'].upper()}: {h['text']}"
+        for h in headings
+    )
+    internal_links_text = "\n".join(
+        f"  [{l['text']}]({l['href']})" for l in internal_links[:20]
+    ) or "  (không có internal link)"
+
+    # Clean excerpt
+    clean_excerpt = ""
+    if excerpt:
+        try:
+            clean_excerpt = BeautifulSoup(excerpt, "html.parser").get_text(strip=True)
+        except Exception:
+            clean_excerpt = str(excerpt)
+
+    # Edge cases: content > 8000 words. We'll truncate it to around 8000 chars or words.
+    words = content.split()
+    if len(words) > 8000:
+        logger.info("[Audit] Truncating content from %d words to 3000 words (2000 start + 1000 end)", len(words))
+        truncated_content = " ".join(words[:2000]) + "\n\n...[TRUNCATED due to length]...\n\n" + " ".join(words[-1000:])
+    else:
+        truncated_content = content
+
+    user_prompt = AUDIT_USER_PROMPT.format(
+        url=url, slug=slug, title=title,
+        meta_title=meta_title, meta_desc=meta_desc,
+        excerpt=clean_excerpt,
+        headings_text=headings_text,
+        internal_link_count=len(internal_links),
+        internal_links_text=internal_links_text,
+        content=truncated_content,
+        pillar_context=pillar_context,
+    )
+
+    fallback_keys = config.get('fallback_keys') or {}
+
+    response_text = call_with_fallback(
+        messages=[
+            {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        config=config,
+        fallback_keys=fallback_keys,
+        temperature=0.3,
+        max_tokens=3000,
+    )
+
+    # Clean and parse JSON
+    raw_text = response_text.strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+    
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
+
+    return json.loads(raw_text.strip())
+
+@app.get("/hermes/wp/posts")
+async def wp_list_posts(
+    page: int = 1,
+    per_page: int = 20,
+    search: str = "",
+    category_id: Optional[int] = None,
+    x_agent_key: str = Header(None)
+):
+    verify_key(x_agent_key)
+    config = await load_config()
+    client = get_wp_client(config)
+    posts = await client.list_posts(
+        per_page=per_page,
+        page=page,
+        search=search or None,
+        categories=[category_id] if category_id else None,
+    )
+    return {"posts": posts, "page": page, "per_page": per_page}
+
+@app.post("/hermes/wp/audit/{post_id}")
+async def wp_audit_post(post_id: int, x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    config = await load_config()
+    client = get_wp_client(config)
+
+    # 1. Fetch bài viết
+    post = await client.get_post(post_id)
+    title   = post.get("title", {}).get("rendered", "")
+    raw_html = post.get("content", {}).get("rendered", "")
+    excerpt  = post.get("excerpt", {}).get("rendered", "")
+    slug    = post.get("slug", "")
+    url     = post.get("link", "")
+
+    # 2. Strip HTML → plain text để LLM đọc
+    soup = BeautifulSoup(raw_html, "html.parser")
+    content_text = soup.get_text(separator="\n", strip=True)
+    
+    # 3. Extract heading structure
+    headings = []
+    for tag in soup.find_all(["h1", "h2", "h3", "h4"]):
+        headings.append({"level": tag.name, "text": tag.get_text(strip=True)})
+    
+    # 4. Extract internal links
+    internal_links = []
+    wp_url = config.get("wp_url", "")
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if wp_url and wp_url in href:
+            internal_links.append({"text": a.get_text(strip=True), "href": href})
+
+    # 5. Yoast meta nếu có
+    yoast = post.get("yoast_head_json", {}) or {}
+    meta_title = yoast.get("title", "")
+    meta_desc  = yoast.get("description", "")
+
+    # 6. Xây dựng context về pillar/cluster
+    pillar_context = ""
+    pillar_map = config.get("pillar_map")
+    if pillar_map:
+        pillar_context = f"Pillar map của site: {json.dumps(pillar_map, ensure_ascii=False)}"
+
+    # 7. Gọi LLM audit
+    audit_result = await run_audit_llm(
+        title=title,
+        slug=slug,
+        url=url,
+        content=content_text,
+        headings=headings,
+        internal_links=internal_links,
+        meta_title=meta_title,
+        meta_desc=meta_desc,
+        excerpt=excerpt,
+        pillar_context=pillar_context,
+        config=config,
+    )
+
+    return {
+        "post_id": post_id,
+        "title": title,
+        "url": url,
+        "audit": audit_result,
+    }
+
+@app.put("/hermes/wp/apply/{post_id}")
+async def wp_apply_suggestions(post_id: int, req_data: dict = Body(...), x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    config = await load_config()
+    client = get_wp_client(config)
+    res = await client.update_post(post_id, req_data)
+    return {"ok": True, "result": res}
+
+@app.get("/hermes/wp/categories")
+async def wp_list_categories(x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    config = await load_config()
+    client = get_wp_client(config)
+    categories = await client.get_categories()
+    return {"categories": categories}
 
 @app.delete('/feedback')
 async def delete_feedback(confirm: str = '', x_agent_key: str = Header(None)):

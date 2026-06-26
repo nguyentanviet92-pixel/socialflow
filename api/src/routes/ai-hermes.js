@@ -720,5 +720,67 @@ module.exports = async (fastify) => {
     } catch (err) {
       return reply.code(503).send({ error: err.message })
     }
+  // ─── WordPress Integration ──────────────────────────────
+  fastify.get('/wp/posts', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const { page = 1, per_page = 20, search = '', category_id } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/wp/posts`)
+      url.searchParams.append('page', page)
+      url.searchParams.append('per_page', per_page)
+      if (search) url.searchParams.append('search', search)
+      if (category_id) url.searchParams.append('category_id', category_id)
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Agent-Key': AGENT_SECRET },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.post('/wp/audit/:post_id', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const postId = req.params.post_id
+      const res = await fetch(`${HERMES_URL}/hermes/wp/audit/${postId}`, {
+        method: 'POST',
+        headers: { 'X-Agent-Key': AGENT_SECRET },
+        signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.put('/wp/apply/:post_id', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const postId = req.params.post_id
+      const res = await fetch(`${HERMES_URL}/hermes/wp/apply/${postId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Agent-Key': AGENT_SECRET,
+        },
+        body: JSON.stringify(req.body || {}),
+        signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.get('/wp/categories', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const res = await fetch(`${HERMES_URL}/hermes/wp/categories`, {
+        headers: { 'X-Agent-Key': AGENT_SECRET },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
   })
 }
