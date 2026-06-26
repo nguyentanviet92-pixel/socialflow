@@ -720,6 +720,7 @@ module.exports = async (fastify) => {
     } catch (err) {
       return reply.code(503).send({ error: err.message })
     }
+  })
   // ─── WordPress Integration ──────────────────────────────
   fastify.get('/wp/posts', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
