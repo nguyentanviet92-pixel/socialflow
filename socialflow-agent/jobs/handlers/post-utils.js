@@ -4,7 +4,6 @@
  */
 const { delay, humanClick, humanType, humanBrowse, humanMouseMove } = require('../../browser/human')
 const { downloadFromR2 } = require('../../lib/r2')
-const { closeSession } = require('../../browser/session-pool')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -36,79 +35,43 @@ async function getR2PublicUrl(supabase) {
 // CHECK ACCOUNT STATUS - detect checkpoint/ban/session expired
 // ============================================================
 async function checkAccountStatus(page, supabase, account_id) {
-  const status = await page.evaluate(() => {
-    const text = (document.body?.innerText || '').substring(0, 3000)
-    const url = window.location.href
-
-    if (url.includes('/checkpoint/') || url.includes('/checkpoint?'))
-      return { blocked: true, reason: 'checkpoint', detail: 'Facebook checkpoint detected' }
-
-    if (url.includes('/login/') || url.includes('/login?') || url.includes('/login.php'))
-      return { blocked: true, reason: 'session_expired', detail: 'Session expired, need re-login' }
-
-    // Login form present without URL change (FB renders login without redirect)
-    if (document.querySelector('form#login_form, input[name="email"][type="email"], #loginform'))
-      return { blocked: true, reason: 'session_expired', detail: 'Login form detected — session expired' }
-
-    // "Continue as X" / saved-login chooser page — FB remembers profile but
-    // session cookie expired. Marker: "Tạo tài khoản mới" / "Create new account"
-    // button only appears when logged OUT. Combined with "Tiếp tục" / "Continue"
-    // it's unambiguous (the regular logged-in feed never shows these together).
-    const hasCreateAccount = /tạo tài khoản mới|create new account/i.test(text)
-    const hasContinue = /tiếp tục|continue|dùng trang cá nhân khác|use another profile/i.test(text)
-    const hasLoggedInNav = !!document.querySelector('[aria-label="Your profile"], [aria-label="Trang cá nhân của bạn"], [aria-label="Account"], [aria-label="Tài khoản"], [data-pagelet="LeftRail"]')
-    if (hasCreateAccount && hasContinue && !hasLoggedInNav)
-      return { blocked: true, reason: 'session_expired', detail: 'Saved-login chooser shown — cookie expired' }
-
-    // "Not Found" on a sparse FB page = session expired, FB refused to serve content
-    const bodyLen = text.trim().length
-    if (bodyLen < 300 && /not found/i.test(text))
-      return { blocked: true, reason: 'session_expired', detail: 'Page shows Not Found — session expired' }
-
-    if (/your account has been disabled|tài khoản.{0,20}bị vô hiệu hóa/i.test(text))
-      return { blocked: true, reason: 'disabled', detail: 'Account disabled' }
-
-    if (/your account has been locked|tài khoản.{0,20}bị khóa/i.test(text))
-      return { blocked: true, reason: 'locked', detail: 'Account locked' }
-
-    if (/confirm your identity|xác nhận danh tính/i.test(text))
-      return { blocked: true, reason: 'identity_check', detail: 'Identity verification required' }
-
-    if (/you.{0,10}(?:temporarily|tạm thởi).{0,20}(?:restricted|hạn chế)/i.test(text))
-      return { blocked: true, reason: 'restricted', detail: 'Account temporarily restricted' }
-
-    return { blocked: false }
-  })
+  const { getBlockDetectionScript, reasonToStatus } = require('../../lib/block-detector')
+  const status = await page.evaluate(getBlockDetectionScript())
 
   if (status.blocked) {
-    console.log(`[POST] Account ${account_id} BLOCKED: ${status.reason} - ${status.detail}`)
+    const newStatus = reasonToStatus(status.reason)
+    console.log(`[POST] Account ${account_id} BLOCKED: ${status.reason} - ${status.detail} → setting ${newStatus} + is_active=false`)
 
-    const STATUS_MAP = {
-      session_expired: 'expired',
-      checkpoint: 'checkpoint',
-      disabled: 'disabled',
-      locked: 'checkpoint',
-      identity_check: 'checkpoint',
-      restricted: 'at_risk',
-    }
-    const dbStatus = STATUS_MAP[status.reason] || 'checkpoint'
     await supabase.from('accounts').update({
-      status: dbStatus,
+      status: newStatus,
       is_active: false,
-      last_error: status.detail,
     }).eq('id', account_id)
 
-    // Save debug screenshot BEFORE closing browser
+    try {
+      await supabase.from('account_alerts').insert({
+        account_id: account_id,
+        type: newStatus,
+        severity: newStatus === 'checkpoint' ? 'critical' : 'warning',
+        message: `Account blocked: ${status.reason} - ${status.detail || 'No detail provided'}`,
+        status: 'open'
+      })
+      console.log(`[ALERT] Created account alert for ${account_id} [${newStatus}]`)
+    } catch (alertErr) {
+      console.warn(`[ALERT] Failed to insert account alert: ${alertErr.message}`)
+    }
+
+    // Save debug screenshot
     try {
       const debugDir = path.join(__dirname, '..', '..', 'debug')
       if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true })
       await page.screenshot({ path: path.join(debugDir, `post-blocked-${account_id}-${Date.now()}.png`), fullPage: false })
     } catch {}
 
-    // Close the browser session — keeping a dead session alive causes the next
-    // job picked up by this nick to inherit the same expired cookie and waste
-    // a job slot. Caller's finally() will see no live session and skip releaseSession.
-    await closeSession(account_id).catch(() => {})
+    // Close browser immediately — don't leave login/checkpoint tabs open
+    try {
+      const { closeSession } = require('../../browser/session-pool')
+      await closeSession(account_id)
+    } catch {}
   }
 
   return status
@@ -871,31 +834,71 @@ async function ensureNotCancelled(jobId, supabase, context = '') {
   }
 }
 
-// Translate Playwright cascade errors into user-readable Vietnamese messages.
-// "Target page, context or browser has been closed" — common after a checkpoint
-// causes our session pool to close the browser mid-action, OR FB redirects
-// (login/checkpoint) while we're typing/clicking. Either way, the underlying
-// reason is the cookie died — that's logged separately by checkAccountStatus.
-function friendlyError(err) {
-  const msg = String(err?.message || err || 'Unknown error')
-  if (/Target page,? context or browser has been closed/i.test(msg)) {
-    return 'Phiên hết hạn giữa chừng (browser bị đóng — checkpoint/login redirect)'
+// ============================================================
+// SAVE DEBUG DOM
+// ============================================================
+async function saveDebugDOM(page, prefix) {
+  try {
+    const debugDir = path.join(__dirname, '..', '..', 'debug')
+    if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true })
+    const filepath = path.join(debugDir, `${prefix}-${Date.now()}.html`)
+    const html = await page.content()
+    fs.writeFileSync(filepath, html, 'utf8')
+    console.log(`[POST] Debug DOM saved: ${filepath}`)
+    return filepath
+  } catch (err) {
+    console.warn(`[POST] Failed to save debug DOM: ${err.message}`)
+    return null
   }
-  if (/Execution context was destroyed/i.test(msg)) {
-    return 'Trang FB chuyển hướng giữa thao tác (có thể do checkpoint)'
+}
+
+// ============================================================
+// CLEAN DEBUG DIRECTORY (Storage release)
+// ============================================================
+function cleanDebugDirectory(maxAgeDays = 3) {
+  try {
+    const debugDir = path.join(__dirname, '..', '..', 'debug')
+    if (!fs.existsSync(debugDir)) return
+
+    const now = Date.now()
+    const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000
+
+    function processDir(dirPath) {
+      const files = fs.readdirSync(dirPath)
+      for (const file of files) {
+        const fullPath = path.join(dirPath, file)
+        const stat = fs.statSync(fullPath)
+        if (stat.isDirectory()) {
+          processDir(fullPath)
+          try {
+            if (fs.readdirSync(fullPath).length === 0) {
+              fs.rmdirSync(fullPath)
+            }
+          } catch {}
+        } else if (stat.isFile()) {
+          const isDebugFile = file.endsWith('.png') || file.endsWith('.html')
+          const isOlder = (now - stat.mtimeMs) > maxAgeMs
+          if (isDebugFile && isOlder) {
+            try {
+              fs.unlinkSync(fullPath)
+              console.log(`[CLEANUP] Deleted old debug file: ${fullPath}`)
+            } catch (err) {
+              console.warn(`[CLEANUP] Failed to delete debug file ${fullPath}: ${err.message}`)
+            }
+          }
+        }
+      }
+    }
+
+    processDir(debugDir)
+    console.log(`[CLEANUP] Debug directory cleaned (older than ${maxAgeDays} days)`)
+  } catch (err) {
+    console.warn(`[CLEANUP] Error cleaning debug directory: ${err.message}`)
   }
-  if (/Timeout \d+ms exceeded/i.test(msg)) {
-    return 'Trang FB load quá chậm — quá ' + (msg.match(/Timeout (\d+)ms/)?.[1] || '?') + 'ms'
-  }
-  if (/net::ERR_PROXY_CONNECTION_FAILED|net::ERR_TUNNEL_CONNECTION_FAILED/i.test(msg)) {
-    return 'Proxy lỗi — không kết nối được'
-  }
-  return msg.length > 250 ? msg.substring(0, 250) + '…' : msg
 }
 
 module.exports = {
   checkAccountStatus,
-  friendlyError,
   openComposer,
   typeCaption,
   uploadMedia,
@@ -910,4 +913,6 @@ module.exports = {
   ensureNotCancelled,
   delay,
   saveDebugScreenshot,
+  saveDebugDOM,
+  cleanDebugDirectory,
 }

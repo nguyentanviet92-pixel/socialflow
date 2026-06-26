@@ -1,22 +1,30 @@
-// Load config: .env (dev) > lib/config.js (packaged build)
-// In packaged mode there's no .env — build script embeds credentials
-// into lib/config.js. Copy them to process.env so downstream modules
-// (api-client, supabase wrapper, poller) that read process.env see
-// them consistently.
+// Load config: config.env > .env > lib/config.js
 const path = require('path')
 const fs = require('fs')
 const { execSync } = require('child_process')
 const envFile = fs.existsSync(path.join(__dirname, 'config.env')) ? 'config.env' : '.env'
 require('dotenv').config({ path: path.join(__dirname, envFile) })
-
-try {
-  const cfg = require('./lib/config')
-  for (const [k, v] of Object.entries(cfg)) {
-    if (v && !process.env[k]) process.env[k] = String(v)
-  }
-} catch { /* dev mode, no config.js */ }
 const { startPoller, getStopPoller, getPool } = require('./jobs/poller')
 const os = require('os')
+
+// ── sslip.io DNS Fallback ──
+const dns = require('dns')
+const originalLookup = dns.lookup
+dns.lookup = function (hostname, options, callback) {
+  if (hostname === '103-142-24-60.sslip.io') {
+    if (typeof options === 'function') {
+      callback = options
+      options = {}
+    }
+    const ip = '103.142.24.60'
+    const family = 4
+    if (options && options.all) {
+      return callback(null, [{ address: ip, family }])
+    }
+    return callback(null, ip, family)
+  }
+  return originalLookup.call(dns, hostname, options, callback)
+}
 
 const MAX_CONNECT_RETRIES = 10
 const CONNECT_RETRY_DELAY = 5000 // 5s between retries
@@ -28,21 +36,15 @@ function killZombieChromium() {
   try {
     const profileDir = path.join(os.homedir(), '.socialflow', 'profiles')
     if (process.platform === 'win32') {
-      // Electron-packaged subprocesses sometimes launch with a PATH that
-      // excludes the PowerShell + System32 directories. Use absolute paths
-      // so execSync doesn't fail with "'powershell' is not recognized".
-      const sysRoot = process.env.SystemRoot || 'C:\\Windows'
-      const psExe = `${sysRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
-      const taskkillExe = `${sysRoot}\\System32\\taskkill.exe`
-
+      // Use PowerShell (wmic removed in Win11) to find Chromium with our profile dir
       const escaped = profileDir.replace(/\\/g, '\\\\')
       const result = execSync(
-        `"${psExe}" -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' } | Select-Object -ExpandProperty ProcessId"`,
+        `powershell -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escaped}*' } | Select-Object -ExpandProperty ProcessId"`,
         { encoding: 'utf8', timeout: 8000 }
       ).trim()
       const pids = result.split(/\r?\n/).map(s => s.trim()).filter(s => /^\d+$/.test(s))
       for (const pid of pids) {
-        try { execSync(`"${taskkillExe}" /F /PID ${pid}`, { timeout: 3000, stdio: 'ignore' }) } catch {}
+        try { execSync(`taskkill /F /PID ${pid}`, { timeout: 3000, stdio: 'ignore' }) } catch {}
       }
       if (pids.length) console.log(`[CLEANUP] Killed ${pids.length} zombie Chromium process(es)`)
     } else {
@@ -55,11 +57,19 @@ async function main() {
   // Kill leftover Chromium from previous crashed session
   killZombieChromium()
 
+  // Clear old debug files (storage release)
+  try {
+    const { cleanDebugDirectory } = require('./jobs/handlers/post-utils')
+    cleanDebugDirectory(3)
+  } catch (err) {
+    console.warn(`[AGENT] Debug cleanup failed: ${err.message}`)
+  }
+
   console.log('========================================')
   console.log('  SocialFlow Agent starting...')
   console.log('========================================')
 
-  // Verify API + DB reachability via the REST proxy (no more Supabase).
+  // Check DB connection with retry
   const { supabase } = require('./lib/supabase')
   let connected = false
   for (let i = 1; i <= MAX_CONNECT_RETRIES; i++) {
@@ -68,29 +78,69 @@ async function main() {
       connected = true
       break
     }
-    console.warn(`[WARN] VPS DB connect failed (attempt ${i}/${MAX_CONNECT_RETRIES}): ${error.message}`)
+    console.warn(`[WARN] DB connect failed (attempt ${i}/${MAX_CONNECT_RETRIES}): ${error.message}`)
     if (i < MAX_CONNECT_RETRIES) {
       console.log(`[AGENT] Retrying in ${CONNECT_RETRY_DELAY / 1000}s...`)
       await new Promise(r => setTimeout(r, CONNECT_RETRY_DELAY))
     }
   }
   if (!connected) {
-    console.error('[ERROR] Cannot connect to VPS API after all retries. Exiting.')
+    console.error('[ERROR] Cannot connect to DB after all retries. Exiting.')
     process.exit(1)
   }
-  console.log('[OK] VPS DB reachable (via /agent-db proxy)')
+  console.log('[OK] DB connected')
 
-  // Start heartbeat (via REST — audit 2026-04-14)
-  // 2026-05-04: fixed two bugs that left lag at 1h+:
-  //   1. require('./lib/api-client') returns { getApiClient, ApiClient }, not
-  //      an instance — so apiClient.heartbeat was undefined and the call threw
-  //      synchronously (caught silently by the try/catch).
-  //   2. The exported method is sendHeartbeat(stats), not heartbeat({...}) —
-  //      agentId/hostname/userId are populated inside the client from its own
-  //      fields, so we only pass the stats payload.
+  // Dynamic config hydration from public.system_settings table in VPS SQL
+  if (process.env.DATABASE_URL) {
+    try {
+      console.log('[CONFIG] Fetching environment settings from system_settings table in VPS SQL...')
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'api_config')
+        .maybeSingle()
+
+      if (error) throw error
+
+      if (data?.value) {
+        let val = data.value
+        if (typeof val === 'string') try { val = JSON.parse(val) } catch {}
+        
+        if (val.api_url && !process.env.API_URL) {
+          process.env.API_URL = val.api_url
+          process.env.API_BASE_URL = val.api_url
+          console.log(`[CONFIG] Loaded API_URL from VPS SQL: ${process.env.API_URL}`)
+        }
+        if (val.agent_secret_key && !process.env.AGENT_SECRET_KEY) {
+          process.env.AGENT_SECRET_KEY = val.agent_secret_key
+          process.env.AGENT_SECRET = val.agent_secret_key
+          console.log(`[CONFIG] Loaded AGENT_SECRET_KEY from VPS SQL`)
+        }
+      } else {
+        // Table row does not exist yet. Let's seed it using local .env values so the DB has it!
+        const localApiUrl = process.env.API_URL || 'https://103-142-24-60.sslip.io'
+        const localSecretKey = process.env.AGENT_SECRET_KEY || process.env.AGENT_SECRET || ''
+        console.log(`[CONFIG] api_config key not found in system_settings. Seeding with local values: ${localApiUrl}`)
+        
+        await supabase.from('system_settings').insert({
+          key: 'api_config',
+          value: {
+            api_url: localApiUrl,
+            agent_secret_key: localSecretKey
+          },
+          updated_at: new Date()
+        })
+        
+        if (!process.env.API_URL) process.env.API_URL = localApiUrl
+        if (!process.env.AGENT_SECRET_KEY) process.env.AGENT_SECRET_KEY = localSecretKey
+      }
+    } catch (dbErr) {
+      console.warn(`[CONFIG] Could not load dynamic settings from database: ${dbErr.message}`)
+    }
+  }
+
+  // Start heartbeat
   const { config } = require('./lib/supabase')
-  const { getApiClient } = require('./lib/api-client')
-  const apiClient = getApiClient()
   const AGENT_ID = process.env.AGENT_ID || config.AGENT_ID || `${os.hostname()}-${process.pid}`
   const pkg = require('./package.json')
   let heartbeatFails = 0
@@ -98,15 +148,25 @@ async function main() {
     try {
       const pool = getPool()
       const memUsage = process.memoryUsage()
-      await apiClient.sendHeartbeat({
+      await supabase.from('agent_heartbeats').upsert({
+        agent_id: AGENT_ID,
+        machine_name: os.hostname(),
+        owner_id: process.env.AGENT_USER_ID || null,
         version: pkg.version,
+        status: 'online',
+        platform: os.platform(),
         cpu_usage: os.loadavg()[0],
         mem_usage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
         running_jobs: pool.size,
         running_accounts: [...pool.interactionNicks, ...pool.utilityNicks],
         jobs_today: pool.jobsToday,
         jobs_failed: pool.jobsFailed,
-      })
+        last_seen_at: new Date().toISOString(),
+        // Keep legacy fields for backward compat
+        last_seen: new Date().toISOString(),
+        hostname: os.hostname(),
+        ...(process.env.AGENT_USER_ID && { user_id: process.env.AGENT_USER_ID }),
+      }, { onConflict: 'agent_id' })
       if (heartbeatFails > 0) {
         console.log(`[HEARTBEAT] Reconnected after ${heartbeatFails} failures`)
         heartbeatFails = 0
@@ -121,6 +181,25 @@ async function main() {
   heartbeat()
   const heartbeatInterval = setInterval(heartbeat, 30000) // 30s instead of 10s
   console.log('[OK] Heartbeat started')
+
+  // Periodic Chromium cleanup every 60 minutes
+  const chromiumCleanupInterval = setInterval(() => {
+    console.log('[AGENT] Running scheduled 60-minute Chromium zombie process cleanup...')
+    killZombieChromium()
+  }, 60 * 60 * 1000)
+  console.log('[OK] Periodic Chromium zombie cleaner started (every 60m)')
+
+  // Periodic debug folder cleanup every 12 hours
+  const debugCleanupInterval = setInterval(() => {
+    try {
+      const { cleanDebugDirectory } = require('./jobs/handlers/post-utils')
+      console.log('[AGENT] Running scheduled 12-hour debug folder cleanup...')
+      cleanDebugDirectory(3)
+    } catch (err) {
+      console.warn(`[AGENT] Periodic debug cleanup failed: ${err.message}`)
+    }
+  }, 12 * 60 * 60 * 1000)
+  console.log('[OK] Periodic debug folder cleaner started (every 12h)')
 
   // Phase 12: keep Railway API awake while agent is running.
   // Ping /health every 3 minutes — Railway free-tier sleeps after ~15min idle,
@@ -160,6 +239,8 @@ async function main() {
     console.log(`\n[AGENT] Shutting down (${signal})...`)
     clearInterval(heartbeatInterval)
     if (keepAliveInterval) clearInterval(keepAliveInterval)
+    if (chromiumCleanupInterval) clearInterval(chromiumCleanupInterval)
+    if (debugCleanupInterval) clearInterval(debugCleanupInterval)
     // Stop poller & close browser sessions
     try {
       await getStopPoller()()

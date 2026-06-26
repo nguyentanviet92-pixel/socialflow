@@ -10,14 +10,14 @@
  */
 
 const DEFAULT_QUOTAS = {
-  campaign_nurture:         8,
-  nurture_feed:             4,
-  campaign_discover_groups: 2,
-  check_group_membership:   3,
-  check_health:             2,
-  campaign_post:            3,
-  campaign_send_friend_request: 3,
-  campaign_interact_profile:    2,
+  campaign_nurture:         15,
+  nurture_feed:             8,
+  campaign_discover_groups: 4,
+  check_group_membership:   6,
+  check_health:             4,
+  campaign_post:            5,
+  campaign_send_friend_request: 6,
+  campaign_interact_profile:    4,
 }
 
 function getDefaultQuota(jobType) {

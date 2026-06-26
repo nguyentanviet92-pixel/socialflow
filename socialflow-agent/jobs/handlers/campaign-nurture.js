@@ -7,7 +7,7 @@
 
 const { getPage, releaseSession, getLocalGroups } = require('../../browser/session-pool')
 const { delay, humanScroll, humanMouseMove } = require('../../browser/human')
-const { checkAccountStatus, saveDebugScreenshot } = require('./post-utils')
+const { checkAccountStatus, saveDebugScreenshot, saveDebugDOM } = require('./post-utils')
 const { checkHardLimit, SessionTracker, applyAgeFactor, getNickAgeDays } = require('../../lib/hard-limits')
 const R = require('../../lib/randomizer')
 const { getActionParams } = require('../../lib/plan-executor')
@@ -52,19 +52,114 @@ async function recordGroupYield(supabase, accountId, fbGroupId, eligibleCount) {
 }
 const GROUP_VISIT_MAX = 2
 
-function canVisitGroup(groupFbId, accountId) {
-  const now = Date.now()
-  const visits = (groupVisitCache.get(groupFbId) || []).filter(v => now - v.timestamp < GROUP_VISIT_WINDOW)
-  groupVisitCache.set(groupFbId, visits)
-  // Own visit doesn't count against limit
-  const otherVisits = visits.filter(v => v.accountId !== accountId)
-  return otherVisits.length < GROUP_VISIT_MAX
+async function canVisitGroup(supabase, campaignId, groupFbId, accountId) {
+  if (!supabase) return true
+  try {
+    const nowIso = new Date().toISOString()
+    const { data, error } = await supabase
+      .from('group_visit_leases')
+      .select('account_id')
+      .eq('group_id', groupFbId)
+      .gt('slot_end', nowIso)
+    if (error) throw error
+    
+    const activeOtherAccounts = [...new Set((data || [])
+      .map(v => v.account_id)
+      .filter(id => id !== accountId)
+    )]
+    return activeOtherAccounts.length < GROUP_VISIT_MAX
+  } catch (err) {
+    console.error('[LEASE] canVisitGroup error:', err.message)
+    return true
+  }
 }
 
-function recordGroupVisit(groupFbId, accountId) {
-  const visits = groupVisitCache.get(groupFbId) || []
-  visits.push({ accountId, timestamp: Date.now() })
-  groupVisitCache.set(groupFbId, visits)
+async function recordGroupVisit(supabase, campaignId, groupFbId, accountId, jobId) {
+  if (!supabase) return
+  try {
+    const now = new Date()
+    const slotEnd = new Date(now.getTime() + 30 * 60 * 1000)
+    await supabase.from('group_visit_leases').insert({
+      campaign_id: campaignId,
+      group_id: groupFbId,
+      account_id: accountId,
+      job_id: jobId || null,
+      slot_start: now.toISOString(),
+      slot_end: slotEnd.toISOString(),
+      status: 'active'
+    })
+    console.log(`[LEASE] Reserved visit lease for group ${groupFbId} (until ${slotEnd.toISOString()})`)
+  } catch (err) {
+    console.error('[LEASE] recordGroupVisit error:', err.message)
+  }
+}
+
+async function reservePostForInteraction(supabase, campaignId, groupFbId, postId, accountId) {
+  if (!supabase || !postId) return true
+  try {
+    const now = new Date()
+    const reservedUntil = new Date(now.getTime() + 15 * 60 * 1000)
+    
+    await supabase.from('post_interaction_reservations')
+      .delete()
+      .eq('campaign_id', campaignId)
+      .eq('post_id', postId)
+      .lt('reserved_until', now.toISOString())
+      .eq('status', 'reserved')
+
+    const { data: existing, error: queryErr } = await supabase.from('post_interaction_reservations')
+      .select('id, account_id, status')
+      .eq('campaign_id', campaignId)
+      .eq('post_id', postId)
+    
+    if (queryErr) throw queryErr
+    
+    const activeRes = (existing || []).find(r => r.account_id !== accountId)
+    if (activeRes) {
+      console.log(`[RESERVATION] Post ${postId} is already active/reserved by other nick: ${activeRes.account_id}`)
+      return false
+    }
+
+    const { error: insertErr } = await supabase.from('post_interaction_reservations').insert({
+      campaign_id: campaignId,
+      group_id: groupFbId,
+      post_id: postId,
+      account_id: accountId,
+      action_type: 'comment',
+      status: 'reserved',
+      reserved_until: reservedUntil.toISOString()
+    })
+
+    if (insertErr) {
+      console.log(`[RESERVATION] FAILED to reserve post ${postId}: ${insertErr.message}`)
+      return false
+    }
+
+    console.log(`[RESERVATION] Post ${postId} successfully reserved for nick ${accountId.slice(0, 8)}`)
+    return true
+  } catch (err) {
+    console.error('[RESERVATION] reservePostForInteraction error:', err.message)
+    return true
+  }
+}
+
+async function confirmPostInteraction(supabase, campaignId, postId, accountId) {
+  if (!supabase || !postId) return
+  try {
+    const { error } = await supabase.from('post_interaction_reservations')
+      .update({
+        status: 'performed',
+        performed_at: new Date().toISOString()
+      })
+      .eq('campaign_id', campaignId)
+      .eq('post_id', postId)
+      .eq('account_id', accountId)
+      .eq('status', 'reserved')
+    if (error) throw error
+    console.log(`[RESERVATION] Post ${postId} reservation marked as performed`)
+  } catch (err) {
+    console.error('[RESERVATION] confirmPostInteraction error:', err.message)
+  }
 }
 
 async function campaignNurture(payload, supabase) {
@@ -102,12 +197,30 @@ async function campaignNurture(payload, supabase) {
   const likeCheck = checkHardLimit('like', likeBudget.used, 0)
   const commentCheck = checkHardLimit('comment', commentBudget.used, 0)
 
-  // Phase 1+2: load campaign.language for filtering + scoring
+  // Phase 1+2: load campaign details for filtering + scoring
   let campaignLanguage = 'vi'
+  let onlyCommentDesignated = false
+  const designatedGroupIds = []
   if (campaign_id) {
     try {
-      const { data: _cl } = await supabase.from('campaigns').select('language').eq('id', campaign_id).single()
+      const { data: _cl } = await supabase.from('campaigns').select('language, meta').eq('id', campaign_id).single()
       if (_cl?.language) campaignLanguage = _cl.language
+      if (_cl?.meta?.group_target_mode === 'custom' || _cl?.meta?.only_comment_designated) {
+        onlyCommentDesignated = true
+        const targetGroups = _cl.meta.target_groups || []
+        for (const gStr of targetGroups) {
+          if (!gStr || typeof gStr !== 'string') continue
+          const trimmed = gStr.trim()
+          let fbGroupId = null
+          const m = trimmed.match(/(?:facebook\.com|fb\.com)\/groups\/([^/?#\s]+)/i)
+          if (m) {
+            fbGroupId = m[1]
+          } else if (/^\d+$/.test(trimmed)) {
+            fbGroupId = trimmed
+          }
+          if (fbGroupId) designatedGroupIds.push(fbGroupId)
+        }
+      }
     } catch {}
   }
 
@@ -207,6 +320,13 @@ async function campaignNurture(payload, supabase) {
     }
   }
 
+  // If strictly commenting in designated groups only, filter the active groups
+  if (onlyCommentDesignated) {
+    const initialCount = groups.length
+    groups = groups.filter(g => designatedGroupIds.includes(g.fb_group_id))
+    console.log(`[NURTURE] Strictly filtered groups list to designated groups only: ${groups.length} of ${initialCount} groups matched. Designated IDs:`, designatedGroupIds)
+  }
+
   // 2026-05-27: DISABLED — legacy fallback group discovery removed.
   // The agent no longer supplements junction groups with groups from fb_groups.
   // Only groups explicitly added by the user to campaign_groups (is_member=true) are used.
@@ -286,11 +406,11 @@ async function campaignNurture(payload, supabase) {
 
     for (const group of groupsToVisit) {
       // Group visit rate limit: max 2 nicks in same group within 30 min
-      if (!canVisitGroup(group.fb_group_id, account_id)) {
+      if (!(await canVisitGroup(supabase, campaign_id, group.fb_group_id, account_id))) {
         console.log(`[NURTURE] ⏭️ Skip "${group.name}" — group visit rate limit (${GROUP_VISIT_MAX} nicks/30min)`)
         continue
       }
-      recordGroupVisit(group.fb_group_id, account_id)
+      await recordGroupVisit(supabase, campaign_id, group.fb_group_id, account_id, payload.job_id)
 
       const result = { group_name: group.name, posts_found: 0, likes_done: 0, comments_done: 0, errors: [] }
 
@@ -411,8 +531,21 @@ async function campaignNurture(payload, supabase) {
             await R.sleepRange(1000, 2000)
 
             const groupInfo = await page.evaluate(() => {
-              const nameEl = document.querySelector('h1') || document.querySelector('[role="main"] span[dir="auto"]')
-              const name = nameEl?.textContent?.trim() || ''
+              const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content')?.trim()
+              const docTitle = document.title ? document.title.split(' | ')[0].trim() : ''
+              let name = ogTitle || docTitle || ''
+              
+              const genericNames = ['Thông báo', 'Notifications', 'Facebook', 'Messenger', 'Home', 'Trang chủ']
+              if (!name || genericNames.includes(name)) {
+                const nameEl = document.querySelector('h1') || document.querySelector('[role="main"] span[dir="auto"]')
+                const textName = nameEl?.textContent?.trim() || ''
+                if (textName && !genericNames.includes(textName)) {
+                  name = textName
+                }
+              }
+              if (!name) {
+                name = ogTitle || docTitle || ''
+              }
               let description = ''
               const aboutEls = document.querySelectorAll('[role="main"] span[dir="auto"]')
               for (const el of aboutEls) {
@@ -1246,7 +1379,7 @@ async function campaignNurture(payload, supabase) {
             if (p.postUrl && commentedUrls.has(p.postUrl)) return false
             // Also check fb_post_id extracted from URL
             if (p.postUrl) {
-              const m = p.postUrl.match(/(?:posts|permalink)\/(\d+)/) || p.postUrl.match(/story_fbid=(\d+)/)
+              const m = p.postUrl.match(/(?:posts|permalink)\/([a-zA-Z0-9_]+)/) || p.postUrl.match(/story_fbid=([a-zA-Z0-9_]+)/)
               if (m && commentedPostIds.has(m[1])) return false
             }
             const lower = (p.body || '').toLowerCase()
@@ -1373,7 +1506,7 @@ async function campaignNurture(payload, supabase) {
                     // Extract fb_post_id from URL
                     let postFbId = null
                     if (post.postUrl) {
-                      const m = post.postUrl.match(/(?:posts|permalink)\/(\d+)/) || post.postUrl.match(/story_fbid=(\d+)/) || post.postUrl.match(/\/(\d{10,})/)
+                      const m = post.postUrl.match(/(?:posts|permalink)\/([a-zA-Z0-9_]+)/) || post.postUrl.match(/story_fbid=([a-zA-Z0-9_]+)/) || post.postUrl.match(/\/([a-zA-Z0-9_]{10,})/)
                       if (m) postFbId = m[1]
                     }
                     if (!postFbId) continue
@@ -1432,13 +1565,16 @@ async function campaignNurture(payload, supabase) {
           for (const post of aiSelected) {
             if (commented >= commentsToDo) break
 
+            let reserved = false
+            let commentSuccess = false
+
             try {
               const thisPostUrl = post.postUrl
               if (thisPostUrl && commentedUrls.has(thisPostUrl)) continue
 
               let thisPostFbId = null
               if (thisPostUrl) {
-                const m = thisPostUrl.match(/(?:posts|permalink)\/(\d+)/) || thisPostUrl.match(/story_fbid=(\d+)/) || thisPostUrl.match(/\/(\d{10,})/)
+                const m = thisPostUrl.match(/(?:posts|permalink)\/([a-zA-Z0-9_]+)/) || thisPostUrl.match(/story_fbid=([a-zA-Z0-9_]+)/) || thisPostUrl.match(/\/([a-zA-Z0-9_]{10,})/)
                 if (m) thisPostFbId = m[1]
               }
 
@@ -1456,6 +1592,12 @@ async function campaignNurture(payload, supabase) {
               if (thisPostFbId && recentCommentedPostIds.has(thisPostFbId)) {
                 console.log(`[NURTURE] Skip post ID ${thisPostFbId} — recently commented by another nick (60m swarm cooldown)`)
                 continue
+              }
+
+              // 3. Central Post Reservation
+              if (thisPostFbId) {
+                reserved = await reservePostForInteraction(supabase, campaign_id, group.fb_group_id, thisPostFbId, account_id)
+                if (!reserved) continue
               }
 
               commentDebug.attempted++
@@ -1605,6 +1747,38 @@ async function campaignNurture(payload, supabase) {
                 commentDebug.no_box++
                 result.errors.push('comment: no comment box')
                 
+                console.log(`[NURTURE] ⚠️ Đéo thấy comment box trong nhóm ${group.name} (${group.fb_group_id}). Cập nhật is_member = false và lập lịch check_group_membership để tự động join lại.`)
+                
+                // 1. Cập nhật DB: nick không phải thành viên nữa
+                await supabase.from('fb_groups').update({
+                  is_member: false,
+                  pending_approval: false
+                }).eq('id', group.id)
+
+                // 2. Lập lịch job check_group_membership sau 10 phút để tự join lại
+                try {
+                  await supabase.from('jobs').insert({
+                    type: 'check_group_membership',
+                    priority: 3,
+                    payload: {
+                      campaign_id: campaign_id || null,
+                      account_id,
+                      fb_group_id: group.fb_group_id,
+                      group_row_id: group.id,
+                      group_url: group.url || `https://www.facebook.com/groups/${group.fb_group_id}`,
+                      group_name: group.name,
+                      owner_id: payload.owner_id,
+                      attempt: 1
+                    },
+                    status: 'pending',
+                    scheduled_at: new Date(Date.now() + 10 * 60000).toISOString(),
+                    created_by: payload.owner_id
+                  })
+                  console.log(`[NURTURE] Scheduled check_group_membership in 10min for recovery`)
+                } catch (jobErr) {
+                  console.warn(`[NURTURE] Failed to schedule membership recovery: ${jobErr.message}`)
+                }
+
                 // Cleanup tags on failure
                 await page.evaluate(() => {
                   document.querySelectorAll('[data-active-nurture]').forEach(el => el.removeAttribute('data-active-nurture'))
@@ -1725,6 +1899,7 @@ async function campaignNurture(payload, supabase) {
                   group: { name: group.name },
                   topic, nick: { username: account.username },
                   ownerId: payload.owner_id,
+                  brandConfig: !adTriggered ? brandConfig : null, // Enforce brand-free nurture comments
                 })
                 if (!gate.approved) {
                   commentDebug.quality_rejected++
@@ -1742,25 +1917,30 @@ async function campaignNurture(payload, supabase) {
               const thisUrl = post.postUrl || null
               let fbPostId = null
               if (thisUrl) {
-                const m = thisUrl.match(/(?:posts|permalink)\/(\d+)/) || thisUrl.match(/story_fbid=(\d+)/)
+                const m = thisUrl.match(/(?:posts|permalink)\/([a-zA-Z0-9_]+)/) || thisUrl.match(/story_fbid=([a-zA-Z0-9_]+)/)
                 if (m) fbPostId = m[1]
               }
 
-              // PRE-LOG: Create comment_logs entry BEFORE posting (status='posting')
+              // PRE-LOG: Create comment_logs entry BEFORE posting (status='pending')
               // This ensures we have a record even if typing/submit crashes
               let commentLogId = null
               try {
-                const { data: logEntry } = await supabase.from('comment_logs').insert({
+                const { data: logEntry, error: logErr } = await supabase.from('comment_logs').insert({
                   owner_id: payload.owner_id || payload.created_by, account_id,
+                  job_id: payload.job_id || null,
                   fb_post_id: fbPostId,
                   comment_text: commentText, source_name: group.name,
-                  status: 'posting', campaign_id,
+                  status: 'pending', campaign_id,
                   ai_generated: isAI,
                   post_url: thisUrl,
                 }).select('id').single()
-                commentLogId = logEntry?.id
-              } catch (logErr) {
-                console.warn(`[NURTURE] Pre-log failed: ${logErr.message} — posting anyway`)
+                if (logErr) {
+                  console.warn(`[NURTURE] Pre-log failed: ${logErr.message} — posting anyway`)
+                } else {
+                  commentLogId = logEntry?.id
+                }
+              } catch (err) {
+                console.warn(`[NURTURE] Pre-log exception: ${err.message} — posting anyway`)
               }
 
               // Add to dedup BEFORE posting (prevent double-comment even if crash)
@@ -1832,8 +2012,12 @@ async function campaignNurture(payload, supabase) {
               commented++
 
               // Update comment_logs status to 'done'
+              commentSuccess = true
               if (commentLogId) {
-                try { await supabase.from('comment_logs').update({ status: 'done' }).eq('id', commentLogId) } catch {}
+                try { await supabase.from('comment_logs').update({ status: 'done', finished_at: new Date().toISOString() }).eq('id', commentLogId) } catch {}
+              }
+              if (thisPostFbId) {
+                await confirmPostInteraction(supabase, campaign_id, thisPostFbId, account_id)
               }
 
               // Increment budget (separate try/catch — don't crash if this fails)
@@ -1877,8 +2061,22 @@ async function campaignNurture(payload, supabase) {
               await R.sleepRange(90000, 180000) // 90-180 seconds gap
             } catch (err) {
               result.errors.push(`comment: ${err.message}`)
+              if (commentLogId) {
+                try { await supabase.from('comment_logs').update({ status: 'failed', error_message: err.message, finished_at: new Date().toISOString() }).eq('id', commentLogId) } catch {}
+              }
               logger.log('comment', { target_type: 'group', target_name: group.name, result_status: 'failed', details: { error: err.message } })
             } finally {
+              if (reserved && thisPostFbId && !commentSuccess) {
+                try {
+                  await supabase.from('post_interaction_reservations')
+                    .delete()
+                    .eq('campaign_id', campaign_id)
+                    .eq('post_id', thisPostFbId)
+                    .eq('account_id', account_id)
+                    .eq('status', 'reserved')
+                  console.log(`[RESERVATION] Released reservation for post ${thisPostFbId} due to failure`)
+                } catch {}
+              }
               // Cleanup tags on DOM
               await page.evaluate(() => {
                 document.querySelectorAll('[data-active-nurture]').forEach(el => el.removeAttribute('data-active-nurture'))
@@ -2196,7 +2394,10 @@ async function campaignNurture(payload, supabase) {
         .eq('status', 'active')
       const { count: groupsPending } = await supabase.from('fb_groups')
         .select('id', { count: 'exact', head: true })
-        .eq('account_id', account_id).eq('pending_approval', true).eq('is_member', false)
+        .eq('account_id', account_id)
+        .eq('joined_via_campaign_id', campaign_id)
+        .eq('pending_approval', true)
+        .eq('is_member', false)
 
       const vnHour = new Date(Date.now() + 7 * 3600000).getUTCHours()
       const skipReasons = groupResults.map(g => g.skip_reason).filter(Boolean)
@@ -2258,7 +2459,7 @@ Chỉ trả JSON.` }],
           do_feed_browse: true,
           feed_browse_minutes: 20,
           check_pending_groups: (groupsPending || 0) > 0,
-          scout_new_groups: (groupsAvailable || 0) < 3,
+          scout_new_groups: false, // 2026-05-28: DISABLED — never auto-discover groups
           rest_reason: null,
           reasoning: 'AI unavailable — defaults',
         }
@@ -2301,14 +2502,19 @@ Chỉ trả JSON.` }],
       // Check pending groups
       if (decision.check_pending_groups && (groupsPending || 0) > 0) {
         const { data: pGroups } = await supabase.from('fb_groups')
-          .select('id, fb_group_id, name').eq('account_id', account_id)
-          .eq('pending_approval', true).eq('is_member', false).limit(3)
+          .select('id, fb_group_id, name')
+          .eq('account_id', account_id)
+          .eq('joined_via_campaign_id', campaign_id)
+          .eq('pending_approval', true)
+          .eq('is_member', false)
+          .limit(3)
         for (const g of pGroups || []) {
           jobsToCreate.push({
             type: 'check_group_membership', priority: 3,
-            payload: { fb_group_id: g.fb_group_id, group_row_id: g.id, account_id, group_name: g.name, campaign_id },
+            payload: { fb_group_id: g.fb_group_id, group_row_id: g.id, account_id, group_name: g.name, campaign_id, owner_id: payload.owner_id },
             status: 'pending',
             scheduled_at: new Date(now + 5 * 60000).toISOString(),
+            created_by: payload.owner_id,
           })
         }
       }
@@ -2316,23 +2522,9 @@ Chỉ trả JSON.` }],
       // Scout new groups — dedup per-nick (not just per-campaign) so each nick
       // independently discovers groups even when another nick already has a
       // scout job pending for the same campaign.
-      if (decision.scout_new_groups) {
-        const { count: scoutDup } = await supabase.from('jobs')
-          .select('id', { count: 'exact', head: true })
-          .eq('type', 'campaign_discover_groups')
-          .in('status', ['pending', 'claimed', 'running'])
-          .filter('payload->>campaign_id', 'eq', campaign_id)
-          .filter('payload->>account_id', 'eq', account_id)
-        if ((scoutDup || 0) === 0) {
-          jobsToCreate.push({
-            type: 'campaign_discover_groups', priority: 3,
-            payload: { ...payload, reason: 'ai_continuous_ops' },
-            status: 'pending',
-            scheduled_at: new Date(now + 10 * 60000).toISOString(),
-            created_by: payload.owner_id,
-          })
-        }
-      }
+      // 2026-05-28: DISABLED — scout_new_groups completely removed.
+      // The agent NEVER auto-discovers or joins new groups.
+      // Only groups manually added by the user to campaign_groups are used.
 
       if (jobsToCreate.length) {
         await supabase.from('jobs').insert(jobsToCreate)
@@ -2360,7 +2552,10 @@ Chỉ trả JSON.` }],
       duration_seconds: duration,
     }
   } catch (err) {
-    if (page) await saveDebugScreenshot(page, `nurture-error-${account_id}`)
+    if (page) {
+      await saveDebugScreenshot(page, `nurture-error-${account_id}`)
+      await saveDebugDOM(page, `nurture-error-${account_id}`)
+    }
     throw err
   } finally {
     await logger.flush().catch(() => {})

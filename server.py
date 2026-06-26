@@ -820,65 +820,69 @@ def _mark_provider_dead(name: str):
 # order, base_url, model). Order matters: tried left-to-right after primary
 # fails. Multiple env var names supported because legacy code uses
 # OPENAI_API_KEY for DeepSeek (codebase convention pre-2026).
-FALLBACK_CHAIN_DEFS = [
-    {
-        'name': 'nvidia',
-        'api_key_envs': ('NVIDIA_API_KEY',),
-        'base_url': 'https://integrate.api.nvidia.com/v1',
-        'model': 'minimaxai/minimax-m2.7',
+PROVIDER_CONFIG = {
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "api_key_env": "NVIDIA_API_KEY",
+        "compat": "openai",
     },
-    {
-        'name': 'kimi',
-        'api_key_envs': ('KIMI_API_KEY',),
-        'base_url': 'https://api.moonshot.ai/v1',
-        'model': 'kimi-k2.6',
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "compat": "openai",
     },
-    {
-        'name': 'deepseek',
-        'api_key_envs': ('DEEPSEEK_API_KEY', 'OPENAI_API_KEY'),
-        'base_url': 'https://api.deepseek.com/v1',
-        # Use deepseek-chat (V3 stable) — V4 Flash returns reasoning tokens
-        # mixed into output that breaks structured JSON parsing for skills like
-        # kpi_coordinator/orchestrator. Chat is proven for OpenAI-compat JSON.
-        'model': 'deepseek-chat',
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "compat": "openai",
     },
-    {
-        'name': 'gemini-flash',
-        'api_key_envs': ('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
-        'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai',
-        'model': 'gemini-2.5-flash',
+    "kimi": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key_env": "KIMI_API_KEY",
+        "compat": "openai",
     },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY",
+        "compat": "openai",
+    },
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "api_key_env": "GEMINI_API_KEY",
+        "compat": "openai",
+    },
+    "anthropic": {
+        "base_url": "https://api.anthropic.com/v1",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "compat": "anthropic",
+    },
+}
+
+DEFAULT_FALLBACK_CHAIN = [
+    {"provider": "nvidia",    "model": "meta/llama-3.3-70b-instruct",  "enabled": True},
+    {"provider": "groq",      "model": "llama-3.3-70b-versatile",      "enabled": True},
+    {"provider": "deepseek",  "model": "deepseek-chat",                "enabled": True},
+    {"provider": "openai",    "model": "gpt-4o-mini",                  "enabled": False},
+    {"provider": "gemini",    "model": "gemini-2.5-flash",             "enabled": False},
+    {"provider": "kimi",      "model": "moonshot-v1-128k",             "enabled": False},
+    {"provider": "anthropic", "model": "claude-sonnet-4-6",            "enabled": False},
 ]
 
-def _resolve_fallback_key(fb_def: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> str:
-    """Try each env var name in priority order, then DB config fallback_keys dict.
-    This allows storing keys in hermes_config when the .env on the host is incomplete."""
-    fb_keys_from_db = (cfg or {}).get('fallback_keys') or {}
-    for name in fb_def.get('api_key_envs', ()):
-        v = os.getenv(name, '').strip()
-        if v:
-            return v
-        # Try DB-stored key as secondary source
-        db_val = fb_keys_from_db.get(name, '').strip() if isinstance(fb_keys_from_db, dict) else ''
-        if db_val:
-            return db_val
-    return ''
+def mask_api_key(key: str) -> str:
+    if not key:
+        return ""
+    key = key.strip()
+    if len(key) < 12:
+        return "***"
+    return key[:6] + "..." + key[-4:]
 
-def _is_billing_error(err_str: str, status: Optional[int] = None) -> bool:
-    s = err_str.lower()
-    return (status in (401, 402) or
-            'insufficient' in s or 'payment' in s or 'billing' in s or
-            'insufficient_quota' in s or 'invalid_api_key' in s)
-
-def _is_retryable_error(err_str: str, status: Optional[int] = None) -> bool:
-    s = err_str.lower()
-    return (status == 429 or (status is not None and 500 <= status < 600) or
-            'rate limit' in s or 'rate_limit' in s or
-            'timeout' in s or 'timed out' in s or
-            _is_billing_error(err_str, status))
+def is_masked(value: str) -> bool:
+    if not value:
+        return False
+    return "..." in value and len(value) < 20
 
 def _extract_status(err: Exception) -> Optional[int]:
-    """Extract HTTP status code from openai SDK exception."""
+    """Extract HTTP status code from exception."""
     code = getattr(err, 'status_code', None) or getattr(err, 'code', None)
     if isinstance(code, int):
         return code
@@ -888,129 +892,197 @@ def _extract_status(err: Exception) -> Optional[int]:
             return s
     return None
 
-def _attempt_call(api_key: str, base_url: str, model: str,
-                  system_prompt: str, user_message: str,
-                  max_tokens: int, temperature: float) -> str:
-    """One attempt against (api_key, base_url, model). Handles temperature=1
-    and max_completion_tokens retries inline. Raises on any other error."""
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, base_url=base_url)
+def _call_provider(
+    compat: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+    **kwargs
+) -> str:
+    if compat == "anthropic":
+        from anthropic import Anthropic
+        system_content = ""
+        user_messages = []
+        for msg in messages:
+            if msg.get('role') == 'system':
+                system_content = msg.get('content', '')
+            else:
+                user_messages.append({'role': msg.get('role'), 'content': msg.get('content', '')})
+        
+        client_kwargs = {}
+        if base_url:
+            client_kwargs['base_url'] = base_url
+        client = Anthropic(api_key=api_key, **client_kwargs)
+        
+        resp = client.messages.create(
+            model=model,
+            system=system_content,
+            messages=user_messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return resp.content[0].text.strip()
+    else:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        
+        model_lower = (model or '').lower()
+        fixed_temp_patterns = ('o1-', 'o3-', 'o4-', 'gpt-5', '-thinking', 'reasoner')
+        eff_temp = 1.0 if any(p in model_lower for p in fixed_temp_patterns) else temperature
+        
+        def _do(temp_override=None, max_tokens_param='max_tokens'):
+            do_kwargs = {
+                'model': model,
+                'messages': messages,
+                'temperature': temp_override if temp_override is not None else eff_temp,
+            }
+            do_kwargs[max_tokens_param] = max_tokens
+            return client.chat.completions.create(**do_kwargs)
+        
+        try:
+            resp = _do()
+        except Exception as inner:
+            msg = str(inner).lower()
+            if 'temperature' in msg and ('only 1' in msg or 'must be 1' in msg or 'invalid temperature' in msg):
+                logger.warning('Model %s requires temperature=1, retrying', model)
+                resp = _do(temp_override=1.0)
+            elif 'max_tokens' in msg and 'max_completion_tokens' in msg:
+                logger.warning('Model %s requires max_completion_tokens, retrying', model)
+                resp = _do(max_tokens_param='max_completion_tokens')
+            else:
+                raise
+        return (resp.choices[0].message.content or '').strip()
 
-    # Reasoning models force temperature=1
-    model_lower = (model or '').lower()
-    fixed_temp_patterns = ('o1-', 'o3-', 'o4-', 'gpt-5', '-thinking', 'reasoner')
-    eff_temp = 1.0 if any(p in model_lower for p in fixed_temp_patterns) else temperature
+FALLBACK_TRIGGER_STATUS = {429, 500, 502, 503, 504}
 
-    def _do(temp_override=None, max_tokens_param='max_tokens'):
-        kwargs = {
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_message},
-            ],
-            'temperature': temp_override if temp_override is not None else eff_temp,
-        }
-        kwargs[max_tokens_param] = max_tokens
-        return client.chat.completions.create(**kwargs)
+def call_with_fallback(
+    messages: list,
+    config: dict,
+    fallback_keys: dict,
+    max_tokens: int = 500,
+    temperature: float = 0.7,
+    task_type: str = 'generic',
+    **kwargs
+) -> str:
+    """
+    Thử lần lượt các provider trong fallback_chain.
+    Chỉ chuyển provider khi gặp 429/5xx/timeout.
+    Raise exception nếu TẤT CẢ provider đều fail.
+    """
+    chain = config.get("fallback_chain") or DEFAULT_FALLBACK_CHAIN
+    active_chain = [p for p in chain if p.get("enabled")]
 
-    try:
-        resp = _do()
-    except Exception as inner:
-        msg = str(inner).lower()
-        if 'temperature' in msg and ('only 1' in msg or 'must be 1' in msg or 'invalid temperature' in msg):
-            logger.warning('Model %s requires temperature=1, retrying', model)
-            resp = _do(temp_override=1.0)
-        elif 'max_tokens' in msg and 'max_completion_tokens' in msg:
-            logger.warning('Model %s requires max_completion_tokens, retrying', model)
-            resp = _do(max_tokens_param='max_completion_tokens')
-        else:
-            raise
-    msg = resp.choices[0].message
-    return (msg.content or '').strip()
+    last_error = None
 
+    for i, provider_cfg in enumerate(active_chain):
+        provider = provider_cfg["provider"]
+        model    = provider_cfg["model"]
+        pconfig  = PROVIDER_CONFIG.get(provider)
+        if not pconfig:
+            logger.warning(f"[Fallback] Skip {provider}: unknown provider config")
+            continue
+
+        api_key_env = pconfig["api_key_env"]
+        api_key = (fallback_keys or {}).get(api_key_env)
+        if not api_key:
+            if config.get("provider") == provider:
+                api_key = config.get("api_key")
+        if not api_key:
+            api_key = os.getenv(api_key_env)
+
+        api_key = (api_key or "").strip()
+        if not api_key:
+            logger.warning(f"[Fallback] Skip {provider}: no API key configured")
+            continue
+
+        base_url = pconfig["base_url"]
+        compat = pconfig["compat"]
+
+        try:
+            logger.info(f"[Fallback] Attempt {i+1}/{len(active_chain)}: {provider} / {model}")
+            result = _call_provider(
+                compat=compat,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                **kwargs
+            )
+            if i > 0:
+                logger.info(f"[Fallback] Succeeded on provider #{i+1}: {provider}")
+            return result
+
+        except Exception as e:
+            status_code = _extract_status(e)
+            
+            is_fallback_trigger = False
+            if status_code in FALLBACK_TRIGGER_STATUS:
+                is_fallback_trigger = True
+            
+            err_name = e.__class__.__name__
+            err_str = str(e).lower()
+            
+            try:
+                import httpx
+                if isinstance(e, (httpx.TimeoutException, httpx.ConnectError)):
+                    is_fallback_trigger = True
+            except ImportError:
+                pass
+            
+            try:
+                from openai import APITimeoutError, APIConnectionError
+                if isinstance(e, (APITimeoutError, APIConnectionError)):
+                    is_fallback_trigger = True
+            except ImportError:
+                pass
+            
+            if "timeout" in err_str or "timed out" in err_str or "connection" in err_str or "connect error" in err_str:
+                is_fallback_trigger = True
+            
+            if status_code in {400, 401, 403}:
+                is_fallback_trigger = False
+                
+            if is_fallback_trigger:
+                logger.warning(
+                    f"[Fallback] {provider} failed (status={status_code}, error={e}), "
+                    f"trying next provider..."
+                )
+                last_error = e
+                continue
+            else:
+                raise
+
+    raise RuntimeError(
+        f"All providers in fallback_chain failed. Last error: {last_error}"
+    )
 
 def llm_call(system_prompt: str, user_message: str, max_tokens: int = 500, temperature: float = 0.7,
              cfg: Optional[Dict[str, Any]] = None, task_type: str = 'generic') -> str:
-    """Call LLM with automatic fallback chain.
-    Primary cfg from DB → if 429/5xx/billing → DeepSeek → Gemini Flash.
-    cfg overrides: skill_models[task_type], tier_models[tier], model (global fallback)."""
-    from openai import OpenAI
-    # Priority: cfg → env
-    api_key = (cfg or {}).get('api_key') or DEEPSEEK_KEY
-    base_url = _cfg_get(cfg or {}, 'base_url', DEEPSEEK_URL)
-    model = _resolve_model(task_type, cfg or {})
-    # Anthropic needs different client — handle here
-    provider = (cfg or {}).get('provider', 'deepseek')
-    if provider == 'anthropic':
-        try:
-            from anthropic import Anthropic
-            client = Anthropic(api_key=api_key)
-            resp = client.messages.create(
-                model=model,
-                system=system_prompt,
-                messages=[{'role': 'user', 'content': user_message}],
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            return resp.content[0].text.strip()
-        except Exception as e:
-            err_str = str(e).encode('utf-8', errors='replace').decode('utf-8')
-            logger.error('Anthropic call failed: %s', err_str)
-            raise HTTPException(502, 'LLM call failed: ' + err_str)
-
-    # OpenAI-compatible (deepseek, openai, groq, kimi)
-    # Build the provider chain: primary first, then fallbacks (skip dead +
-    # missing keys). Each entry: dict(name, api_key, base_url, model).
-    chain = [{'name': provider or 'primary', 'api_key': api_key,
-              'base_url': base_url, 'model': model}]
-    for fb in FALLBACK_CHAIN_DEFS:
-        if fb['name'] == (provider or 'primary'):
-            continue
-        if _is_provider_dead(fb['name']):
-            logger.info('Skipping dead provider %s', fb['name'])
-            continue
-        env_key = _resolve_fallback_key(fb, cfg)
-        if not env_key:
-            continue
-        chain.append({
-            'name': fb['name'],
-            'api_key': env_key,
-            'base_url': fb['base_url'],
-            'model': fb['model'],
-        })
-
-    last_err = None
-    for cur in chain:
-        is_primary = (cur is chain[0])
-        try:
-            text = _attempt_call(cur['api_key'], cur['base_url'], cur['model'],
-                                  system_prompt, user_message, max_tokens, temperature)
-            if not is_primary:
-                logger.info('[FALLBACK] %s recovered call after primary failed', cur['name'])
-            return text
-        except Exception as e:
-            err_str = str(e).encode('utf-8', errors='replace').decode('utf-8')
-            status = _extract_status(e)
-            last_err = e
-
-            # Mark provider dead on billing/auth errors (5min skip on next calls)
-            if _is_billing_error(err_str, status):
-                _mark_provider_dead(cur['name'])
-                logger.warning('[FALLBACK] %s marked dead 5min (status=%s)', cur['name'], status)
-
-            # Decide: continue chain or abort
-            if _is_retryable_error(err_str, status):
-                logger.warning('[FALLBACK] %s failed (status=%s) → trying next', cur['name'], status)
-                continue
-            # Non-retryable error from primary → no point trying fallbacks
-            # with same input (likely bad prompt). Re-raise immediately.
-            logger.error('LLM call failed (non-retryable, status=%s): %s', status, err_str[:300])
-            raise HTTPException(502, 'LLM call failed: ' + err_str)
-
-    # All providers exhausted
-    err_str = str(last_err).encode('utf-8', errors='replace').decode('utf-8') if last_err else 'no providers'
-    logger.error('All LLM providers failed. Last error: %s', err_str[:300])
-    raise HTTPException(502, 'All LLM providers failed: ' + err_str)
+    """Call LLM with automatic fallback chain."""
+    config = cfg or {}
+    messages = [
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': user_message}
+    ]
+    fallback_keys = config.get('fallback_keys') or {}
+    try:
+        return call_with_fallback(
+            messages=messages,
+            config=config,
+            fallback_keys=fallback_keys,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            task_type=task_type
+        )
+    except Exception as e:
+        err_str = str(e).encode('utf-8', errors='replace').decode('utf-8')
+        logger.error('All LLM providers failed. Last error: %s', err_str[:300])
+        raise HTTPException(502, 'LLM call failed: ' + err_str)
 
 async def record_call(task_type: str, prompt: str, output: str, latency_ms: int,
                       ok: bool, account_id: Optional[str] = None, error: Optional[str] = None):
@@ -1598,6 +1670,11 @@ async def delete_skill(task_type: str, x_agent_key: str = Header(None)):
     return {'ok': True, 'deleted': task_type}
 
 # ── Config CRUD ───────────────────────────────────────────
+class FallbackProvider(BaseModel):
+    provider: str      # "nvidia" | "groq" | "deepseek" | "kimi" | "openai" | "gemini" | "anthropic"
+    model: str         # model ID tương ứng provider
+    enabled: bool = True
+
 class ConfigUpdateRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -1607,7 +1684,8 @@ class ConfigUpdateRequest(BaseModel):
     temperature: Optional[float] = None
     quality_gate_threshold: Optional[int] = None
     quality_gate_max_retry: Optional[int] = None
-    fallback_chain: Optional[List[str]] = None
+    fallback_keys: Optional[Dict[str, str]] = None
+    fallback_chain: Optional[List[FallbackProvider]] = None
     fallback_timeout_ms: Optional[int] = None
     fewshot_enabled: Optional[bool] = None
     memory_enabled: Optional[bool] = None
@@ -1625,8 +1703,11 @@ async def get_config(x_agent_key: str = Header(None)):
     # Mask API key in response
     safe = dict(cfg)
     if safe.get('api_key'):
-        k = safe['api_key']
-        safe['api_key'] = k[:6] + '...' + k[-4:] if len(k) > 12 else '***'
+        safe['api_key'] = mask_api_key(safe['api_key'])
+    if safe.get('fallback_keys') and isinstance(safe['fallback_keys'], dict):
+        safe['fallback_keys'] = {
+            k: mask_api_key(v) for k, v in safe['fallback_keys'].items()
+        }
     # Effective routing: what model each skill actually uses right now
     effective_routing = {}
     for task_type, tier in SKILL_TIERS.items():
@@ -1667,8 +1748,6 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
         raise HTTPException(400, 'quality_gate_threshold must be 1-10')
 
     # Reject api_key that looks corrupted (whitespace, non-ASCII, error-like text).
-    # Past incident: a test-failure toast string ("Test thất bại: ...") was saved as
-    # api_key → every later LLM call sent it as Bearer header → UnicodeEncodeError.
     if 'api_key' in updates:
         k = (updates['api_key'] or '').strip()
         if not k:
@@ -1692,7 +1771,38 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
         # Merge with existing
         row = await pool.fetchrow('SELECT config FROM hermes_config WHERE id = 1')
         existing = dict(row['config']) if row else {}
+
+        if 'fallback_keys' in updates:
+            existing_keys = existing.get('fallback_keys') or {}
+            if not isinstance(existing_keys, dict):
+                existing_keys = {}
+            new_keys = updates['fallback_keys'] or {}
+            for env_var, api_value in new_keys.items():
+                if api_value == "":
+                    existing_keys[env_var] = ""
+                elif api_value and not is_masked(api_value):
+                    # Basic validation similar to the primary api_key
+                    val = api_value.strip()
+                    if len(val) >= 10 and not any(c.isspace() for c in val):
+                        existing_keys[env_var] = val
+            updates['fallback_keys'] = existing_keys
+
+        if 'fallback_chain' in updates:
+            chain_list = updates['fallback_chain']
+            if isinstance(chain_list, list):
+                updates['fallback_chain'] = [p.dict() if hasattr(p, 'dict') else p for p in chain_list]
+
         merged = {**existing, **updates}
+
+        # Sync primary api_key if provider changed
+        if 'provider' in updates:
+            pconfig = PROVIDER_CONFIG.get(updates['provider'])
+            if pconfig:
+                env_var = pconfig["api_key_env"]
+                fb_keys = merged.get('fallback_keys') or {}
+                if env_var in fb_keys and fb_keys[env_var]:
+                    merged['api_key'] = fb_keys[env_var]
+
         await pool.execute(
             'UPDATE hermes_config SET config = $1, updated_at = now() WHERE id = 1',
             merged,
@@ -1715,11 +1825,26 @@ async def test_config(req: ConfigTestRequest, x_agent_key: str = Header(None)):
     verify_key(x_agent_key)
     t0 = time.time()
     try:
+        api_key = req.api_key
+        if api_key and is_masked(api_key):
+            cfg = await load_config()
+            if cfg.get('provider') == req.provider and mask_api_key(cfg.get('api_key') or '') == api_key:
+                api_key = cfg.get('api_key') or ''
+            else:
+                pconfig = PROVIDER_CONFIG.get(req.provider)
+                if pconfig:
+                    env_var = pconfig["api_key_env"]
+                    db_val = (cfg.get('fallback_keys') or {}).get(env_var)
+                    if db_val and mask_api_key(db_val) == api_key:
+                        api_key = db_val
+                    else:
+                        api_key = db_val or ""
+        
         base_url = req.base_url or PROVIDERS.get(req.provider, {}).get('base_url')
         test_cfg = {
             'provider': req.provider,
             'model': req.model,
-            'api_key': req.api_key,
+            'api_key': api_key,
             'base_url': base_url,
             # Pin model directly so _resolve_model doesn't fall back to TIER_DEFAULTS
             'skill_models': {'generic': req.model},

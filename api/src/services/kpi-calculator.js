@@ -34,7 +34,7 @@ function nickWeight(nick) {
 // When > 0, each nick gets a proportional target (min 1) and that target
 // participates in kpi_met. Prevents opp comments from masking missing
 // normal comments and vice versa.
-const DEFAULT_KPI = { daily_likes: 60, daily_comments: 15, daily_friend_requests: 10, daily_group_joins: 9, daily_opportunity_comments: 0 }
+const DEFAULT_KPI = { daily_likes: 120, daily_comments: 30, daily_friend_requests: 20, daily_group_joins: 18, daily_opportunity_comments: 0 }
 
 // VN date (UTC+7) — both cron AND agent must use the same timezone for dates.
 // The daily cron fires at 00:01 VN = 17:01 UTC, so UTC date is YESTERDAY.

@@ -1263,20 +1263,53 @@ function ExecutionTab({ campaignId }) {
     refetchInterval: 3000,
   })
 
+  const [selectedJob, setSelectedJob] = useState(null)
+
   const running = jobs.filter(j => ['claimed', 'running'].includes(j.status)).length
   const pending = jobs.filter(j => j.status === 'pending').length
   const done = jobs.filter(j => j.status === 'done').length
   const failed = jobs.filter(j => j.status === 'failed').length
 
   return (
-    <div
-      className="flex items-center gap-8 px-6 py-3"
-      style={{ borderBottom: '1px solid var(--border)' }}
-    >
-      <DenseStat value={running} label="Running" color="hermes" />
-      <DenseStat value={pending} label="Queued" />
-      <DenseStat value={done} label="Done" color="hermes" />
-      <DenseStat value={failed} label="Failed" color={failed > 0 ? 'danger' : 'primary'} />
+    <div className="flex flex-col">
+      <div
+        className="flex items-center gap-8 px-6 py-3"
+        style={{ borderBottom: '1px solid var(--border)' }}
+      >
+        <DenseStat value={running} label="Running" color="hermes" />
+        <DenseStat value={pending} label="Queued" />
+        <DenseStat value={done} label="Done" color="hermes" />
+        <DenseStat value={failed} label="Failed" color={failed > 0 ? 'danger' : 'primary'} />
+      </div>
+
+      <div className="flex-1 min-h-[200px] overflow-y-auto max-h-[400px]" style={{ borderBottom: '1px solid var(--border)' }}>
+        {jobs.length === 0 ? (
+          <div className="p-8 text-center text-xs text-app-muted">Chưa có công việc nào trong chiến dịch này.</div>
+        ) : (
+          <div className="divide-y divide-app-border">
+            {jobs.map(j => (
+              <JobRow key={j.id} job={j} onClick={() => setSelectedJob(selectedJob?.id === j.id ? null : j)} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {selectedJob && (
+        <div className="p-4 bg-app-elevated font-mono-ui text-[11px] border-b border-app-border">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-semibold text-app-primary">Chi tiết Job: {selectedJob.type}</span>
+            <button onClick={() => setSelectedJob(null)} className="text-app-muted hover:text-app-primary">✕</button>
+          </div>
+          <div className="space-y-1.5 overflow-x-auto text-app-muted">
+            <div><span className="text-app-primary">ID:</span> {selectedJob.id}</div>
+            <div><span className="text-app-primary">Trạng thái:</span> <span className={selectedJob.status === 'failed' ? 'text-danger' : 'text-app-primary'}>{selectedJob.status}</span></div>
+            {selectedJob.error_message && (
+              <div className="text-danger font-semibold whitespace-pre-wrap"><span className="text-app-primary font-normal">Lỗi:</span> {selectedJob.error_message}</div>
+            )}
+            <div><span className="text-app-primary">Payload:</span> <pre className="mt-1 p-2 bg-app-base rounded text-[10px] text-app-muted">{JSON.stringify(selectedJob.payload, null, 2)}</pre></div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1300,6 +1333,22 @@ const ACTION_ICON = {
   membership_rejected: '🚫',
   membership_pending: '⏳',
   comment_rejected: '🛑',
+  ops_monitor: '🔍',
+  session_start: '🎬',
+  session_end: '🛑',
+  feed_browse: '📱',
+  ai_next_action: '🤖',
+  nurture_extract: '📥',
+  nurture_dom_debug: '🛠️',
+  nurture_group_decision: '🤔',
+  error: '❌',
+  nurture_group_error: '⚠️',
+  daily_plan: '📅',
+  ai_control: '🕹️',
+  visit_profile: '👤',
+  scan: '🔎',
+  ai_filter: '🧹',
+  weekly_strategy: '📊',
 }
 const ACTION_LABEL = {
   like: 'đã like bài',
@@ -1318,6 +1367,22 @@ const ACTION_LABEL = {
   membership_rejected: 'bị từ chối vào nhóm',
   membership_pending: 'đang chờ duyệt vào nhóm',
   comment_rejected: 'comment bị quality-gate từ chối',
+  ops_monitor: 'giám sát chiến dịch',
+  session_start: 'bắt đầu phiên làm việc',
+  session_end: 'kết thúc phiên làm việc',
+  feed_browse: 'lướt bảng tin',
+  ai_next_action: 'AI quyết định hành động tiếp theo',
+  nurture_extract: 'trích xuất dữ liệu nuôi tài khoản',
+  nurture_dom_debug: 'debug DOM nuôi tài khoản',
+  nurture_group_decision: 'AI quyết định tương tác nhóm',
+  error: 'lỗi hệ thống',
+  nurture_group_error: 'lỗi tương tác nhóm',
+  daily_plan: 'lập kế hoạch hàng ngày',
+  ai_control: 'AI kiểm soát luồng',
+  visit_profile: 'vào trang cá nhân',
+  scan: 'quét dữ liệu',
+  ai_filter: 'AI lọc nội dung',
+  weekly_strategy: 'lập chiến lược hàng tuần',
 }
 const FILTERABLE_TYPES = [
   { value: '',                    label: 'Tất cả' },
@@ -1335,6 +1400,9 @@ const FILTERABLE_TYPES = [
   { value: 'comment_rejected',    label: '🛑 Comment bị từ chối' },
   { value: 'membership_approved', label: '✅ Duyệt vào nhóm' },
   { value: 'membership_rejected', label: '🚫 Từ chối vào nhóm' },
+  { value: 'ops_monitor',         label: '🔍 Giám sát chiến dịch' },
+  { value: 'error',               label: '❌ Lỗi hệ thống' },
+  { value: 'ai_next_action',      label: '🤖 AI quyết định' },
 ]
 
 function fmtTime(iso) {
@@ -2295,10 +2363,9 @@ function HermesModelQuickSelect() {
     { p: 'nvidia', m: 'meta/llama-3.3-70b-instruct', label: 'NVIDIA Llama 3.3' },
     { p: 'nvidia', m: 'deepseek-ai/deepseek-r1', label: 'NVIDIA DeepSeek R1' },
     { p: 'deepseek', m: 'deepseek-chat', label: 'DeepSeek V3' },
-    { p: 'deepseek', m: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-    { p: 'kimi', m: 'kimi-k2.6', label: 'Kimi K2.6' },
+    { p: 'kimi', m: 'kimi-k2-0711-preview', label: 'Kimi K2' },
     { p: 'openai', m: 'gpt-4o-mini', label: 'GPT-4o-mini' },
-    { p: 'gemini', m: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { p: 'gemini', m: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { p: 'groq', m: 'llama-3.3-70b-versatile', label: 'Groq Llama 3.3' },
   ]
 

@@ -20,13 +20,13 @@
 
 // Mature nick ceiling — matches HARD_LIMITS in the agent
 const MATURE_BUDGET = {
-  like:                { max: 80 },
-  comment:             { max: 15 },
-  post:                { max: 3 },
-  join_group:          { max: 3 },
-  friend_request:      { max: 10 },
-  opportunity_comment: { max: 2 },
-  scan:                { max: 15 },
+  like:                { max: 150 },
+  comment:             { max: 40 },
+  post:                { max: 5 },
+  join_group:          { max: 8 },
+  friend_request:      { max: 30 },
+  opportunity_comment: { max: 5 },
+  scan:                { max: 30 },
 }
 
 /**
@@ -35,11 +35,11 @@ const MATURE_BUDGET = {
  */
 function getWarmupMax(ageDays) {
   const a = Number.isFinite(ageDays) ? ageDays : 0
-  if (a < 7)  return { like: 10, comment: 2,  join_group: 1, friend_request: 3  }
-  if (a < 14) return { like: 20, comment: 4,  join_group: 2, friend_request: 5  }
-  if (a < 30) return { like: 40, comment: 8,  join_group: 2, friend_request: 8  }
-  if (a < 60) return { like: 60, comment: 12, join_group: 3, friend_request: 10 }
-  return { like: 80, comment: 15, join_group: 3, friend_request: 10 }
+  if (a < 7)  return { like: 20, comment: 4,  join_group: 2, friend_request: 6  }
+  if (a < 14) return { like: 40, comment: 8,  join_group: 4, friend_request: 10 }
+  if (a < 30) return { like: 80, comment: 15, join_group: 4, friend_request: 16 }
+  if (a < 60) return { like: 120, comment: 25, join_group: 6, friend_request: 20 }
+  return { like: 150, comment: 40, join_group: 8, friend_request: 30 }
 }
 
 /**

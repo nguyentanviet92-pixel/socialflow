@@ -22,9 +22,99 @@ const asArray = (d) => Array.isArray(d) ? d
   : []
 
 // ───────────────────────────────────────────────────────────
-// SECTION 1: Model & Provider
+// SECTION 1: Model & Provider constants and tabs
 // ───────────────────────────────────────────────────────────
-function ModelSection() {
+export const DEFAULT_FALLBACK_CHAIN = [
+  { provider: 'nvidia',    model: 'meta/llama-3.3-70b-instruct',  enabled: true  },
+  { provider: 'groq',      model: 'llama-3.3-70b-versatile',      enabled: true  },
+  { provider: 'deepseek',  model: 'deepseek-chat',                enabled: true  },
+  { provider: 'openai',    model: 'gpt-4o-mini',                  enabled: false },
+  { provider: 'gemini',    model: 'gemini-2.5-flash',             enabled: false },
+  { provider: 'kimi',      model: 'moonshot-v1-128k',             enabled: false },
+  { provider: 'anthropic', model: 'claude-sonnet-4-6',            enabled: false },
+];
+
+export const PROVIDER_KEY_MAP = {
+  nvidia:    'NVIDIA_API_KEY',
+  groq:      'GROQ_API_KEY',
+  deepseek:  'DEEPSEEK_API_KEY',
+  kimi:      'KIMI_API_KEY',
+  openai:    'OPENAI_API_KEY',
+  gemini:    'GEMINI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+};
+
+export const PROVIDER_BASE_URLS = {
+  nvidia:    'https://integrate.api.nvidia.com/v1',
+  groq:      'https://api.groq.com/openai/v1',
+  deepseek:  'https://api.deepseek.com/v1',
+  kimi:      'https://api.moonshot.cn/v1',
+  openai:    'https://api.openai.com/v1',
+  gemini:    'https://generativelanguage.googleapis.com/v1beta/openai/',
+  anthropic: 'https://api.anthropic.com/v1',
+};
+
+export const PROVIDER_MODELS = {
+  nvidia: [
+    { id: 'meta/llama-3.3-70b-instruct',            label: 'Llama 3.3 70B ⭐' },
+    { id: 'meta/llama-3.1-8b-instruct',             label: 'Llama 3.1 8B (fast)' },
+    { id: 'openai/gpt-oss-120b',                    label: 'GPT OSS 120B' },
+    { id: 'deepseek-ai/deepseek-r1',                label: 'DeepSeek R1 (reasoning)' },
+    { id: 'deepseek-ai/deepseek-v3',                label: 'DeepSeek V3 (chat)' },
+    { id: 'deepseek-ai/deepseek-v4-flash',          label: 'DeepSeek V4 Flash (1M ctx)' },
+    { id: 'moonshotai/kimi-k2',                     label: 'Kimi K2 (200K ctx)' },
+    { id: 'nvidia/nemotron-3-super-120b',           label: 'Nemotron 3 Super 120B' },
+    { id: 'minimaxai/minimax-m2.7',                 label: 'MiniMax M2.7' },
+    { id: 'zhipuai/glm-5.1',                        label: 'GLM-5.1 (multilingual)' },
+    { id: 'qwen/qwen3-235b-a22b',                   label: 'Qwen3 235B MoE' },
+  ],
+  groq: [
+    { id: 'llama-3.3-70b-versatile',                label: 'Llama 3.3 70B [PROD] 280t/s ⭐' },
+    { id: 'llama-3.1-8b-instant',                   label: 'Llama 3.1 8B [PROD] 560t/s' },
+    { id: 'openai/gpt-oss-120b',                    label: 'GPT OSS 120B [PROD] 500t/s' },
+    { id: 'openai/gpt-oss-20b',                     label: 'GPT OSS 20B [PROD] 1000t/s ⚡' },
+    { id: 'qwen/qwen3-32b',                         label: 'Qwen3 32B [PREVIEW] 400t/s 🧠' },
+    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout [PREVIEW] 750t/s' },
+    { id: 'moonshotai/kimi-k2-instruct-0905',       label: 'Kimi K2 [PREVIEW]' },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat',     label: 'DeepSeek V3 Chat ⭐' },
+    { id: 'deepseek-reasoner', label: 'DeepSeek R1 Reasoner' },
+  ],
+  kimi: [
+    { id: 'kimi-k2-0711-preview', label: 'Kimi K2 (latest)' },
+    { id: 'moonshot-v1-128k',     label: 'Moonshot v1 128K ⭐' },
+    { id: 'moonshot-v1-32k',      label: 'Moonshot v1 32K' },
+  ],
+  openai: [
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini ⭐' },
+    { id: 'gpt-4o',      label: 'GPT-4o' },
+    { id: 'o3-mini',     label: 'o3-mini (reasoning)' },
+    { id: 'o3',          label: 'o3 (flagship)' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash ⭐' },
+    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (stable)' },
+  ],
+  anthropic: [
+    { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6 ⭐' },
+    { id: 'claude-opus-4-6',          label: 'Claude Opus 4.6' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (fast)' },
+  ],
+};
+
+const PROVIDER_LABELS = {
+  nvidia: 'NVIDIA NIM (Free tier)',
+  groq: 'Groq (fast + free tier)',
+  deepseek: 'DeepSeek',
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  kimi: 'Kimi (Moonshot)',
+  anthropic: 'Anthropic',
+};
+
+function ModelSection({ defaultSubTab = 'active' }) {
   const qc = useQueryClient()
   const { data: cfgData, isLoading } = useQuery({
     queryKey: ['hermes', 'config'],
@@ -33,106 +123,249 @@ function ModelSection() {
 
   const providers = cfgData?.providers || {}
   const cfg = cfgData?.config || {}
+  
+  const [subTab, setSubTab] = useState(defaultSubTab) // 'active' | 'keys' | 'fallback'
+  
+  // Tab 1 Form State
   const [form, setForm] = useState({
-    provider: 'deepseek', model: '', api_key: '', base_url: '',
-    max_tokens: 500, temperature: 0.7,
+    provider: 'nvidia',
+    model: 'meta/llama-3.3-70b-instruct',
+    api_key: '',
+    base_url: 'https://integrate.api.nvidia.com/v1',
+    max_tokens: 500,
+    temperature: 0.7,
   })
-  const [testing, setTesting] = useState(null) // null | 'pending' | result object
+  const [customModelMode, setCustomModelMode] = useState(false)
+  const [customModelInput, setCustomModelInput] = useState('')
+  const [testingActive, setTestingActive] = useState(null)
 
+  // Tab 2 Form State (keys dict)
+  const [keysForm, setKeysForm] = useState({})
+  const [testingKeys, setTestingKeys] = useState({})
+
+  // Tab 3 Form State (fallback chain list)
+  const [chainForm, setChainForm] = useState([])
+  const [dragIdx, setDragIdx] = useState(null)
+
+  // Keep subTab synced with defaults when switching views from sidebar
+  useEffect(() => {
+    setSubTab(defaultSubTab)
+  }, [defaultSubTab])
+
+  // Sync from backend config
   useEffect(() => {
     if (cfg && !isLoading) {
-      setForm(f => ({
-        provider: cfg.provider || 'deepseek',
-        model: cfg.model || '',
-        api_key: '', // always blank; user enters new or leaves empty
-        base_url: cfg.base_url || '',
+      const activeProvider = cfg.provider || 'nvidia'
+      const activeModel = cfg.model || 'meta/llama-3.3-70b-instruct'
+      
+      const isPreset = PROVIDER_MODELS[activeProvider]?.some(m => m.id === activeModel)
+      setCustomModelMode(!isPreset)
+      if (!isPreset) {
+        setCustomModelInput(activeModel)
+      }
+
+      setForm({
+        provider: activeProvider,
+        model: activeModel,
+        api_key: '',
+        base_url: cfg.base_url || PROVIDER_BASE_URLS[activeProvider] || '',
         max_tokens: cfg.max_tokens ?? 500,
         temperature: cfg.temperature ?? 0.7,
-      }))
-    }
-  }, [cfgData])
-
-  const modelOptions = providers[form.provider]?.models || []
-  // Auto-set base_url when provider changes. Model: keep user-typed value if it
-  // looks custom (contains /), otherwise default to first preset.
-  useEffect(() => {
-    if (providers[form.provider]) {
-      setForm(f => {
-        const keepModel = f.model && (f.model.includes('/') || modelOptions.includes(f.model))
-        return {
-          ...f,
-          base_url: providers[f.provider].base_url,
-          model: keepModel ? f.model : modelOptions[0] || '',
-        }
       })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.provider, providers])
 
-  // Reject obvious garbage as api_key — prevents the past bug where the test
-  // error toast string got pasted in and corrupted hermes_config.
+      // Keys mapping
+      const initialKeys = {}
+      Object.keys(PROVIDER_KEY_MAP).forEach(prov => {
+        const envKey = PROVIDER_KEY_MAP[prov]
+        initialKeys[envKey] = cfg.fallback_keys?.[envKey] || ''
+      })
+      setKeysForm(initialKeys)
+
+      // Fallback chain reorder
+      let initialChain = cfg.fallback_chain || []
+      if (!Array.isArray(initialChain) || initialChain.length === 0) {
+        initialChain = DEFAULT_FALLBACK_CHAIN
+      }
+      // Ensure all 7 providers exist in the list
+      const existingProviders = initialChain.map(item => item.provider)
+      const missing = DEFAULT_FALLBACK_CHAIN.filter(d => !existingProviders.includes(d.provider))
+      setChainForm([...initialChain, ...missing])
+    }
+  }, [cfgData, isLoading])
+
   const looksLikeApiKey = (k) => {
     if (!k || typeof k !== 'string') return false
     const trimmed = k.trim()
     if (trimmed.length < 10 || trimmed.length > 200) return false
-    if (/\s/.test(trimmed)) return false                          // no whitespace
-    if (/[^\x20-\x7e]/.test(trimmed)) return false                // ASCII printable only
-    if (/error|failed|invalid|thất bại/i.test(trimmed)) return false  // looks like an error msg
-    if (/[{}[\]:,]/.test(trimmed)) return false                   // looks like JSON / object
+    if (/\s/.test(trimmed)) return false
+    if (/[^\x20-\x7e]/.test(trimmed)) return false
+    if (/error|failed|invalid|thất bại/i.test(trimmed)) return false
+    if (/[{}[\]:,]/.test(trimmed)) return false
     return true
   }
 
-  const save = useMutation({
+  // Tab 1 actions
+  const saveActive = useMutation({
     mutationFn: async () => {
+      const selectedModel = customModelMode ? customModelInput.trim() : form.model
+      if (!selectedModel) {
+        throw new Error('Vui lòng chọn hoặc điền Model ID')
+      }
+
       const payload = {
         provider: form.provider,
-        model: form.model,
+        model: selectedModel,
         base_url: form.base_url,
         max_tokens: parseInt(form.max_tokens),
         temperature: parseFloat(form.temperature),
       }
+
       if (form.api_key && form.api_key.trim().length > 0) {
         if (!looksLikeApiKey(form.api_key)) {
-          throw new Error('API key không hợp lệ — chứa ký tự lạ hoặc trông giống error message. Test trước rồi mới Lưu.')
+          throw new Error('API key không hợp lệ — chứa ký tự lạ hoặc trông giống error message.')
         }
         payload.api_key = form.api_key.trim()
+        
+        // Also update fallback_keys
+        const envKey = PROVIDER_KEY_MAP[form.provider]
+        if (envKey) {
+          payload.fallback_keys = {
+            ...keysForm,
+            [envKey]: form.api_key.trim()
+          }
+        }
       }
+
       await api.put('/ai-hermes/config', payload)
     },
     onSuccess: () => {
-      toast.success('Đã lưu cài đặt model')
-      setForm(f => ({ ...f, api_key: '' }))   // clear field after save (key now stored on server)
+      toast.success('Đã lưu cài đặt model mặc định')
+      setForm(f => ({ ...f, api_key: '' }))
       qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
     },
     onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
   })
 
-  const testConnection = async () => {
-    if (!form.api_key) {
-      toast.error('Nhập API key để test')
+  const testActiveConnection = async () => {
+    const selectedModel = customModelMode ? customModelInput.trim() : form.model
+    const envKey = PROVIDER_KEY_MAP[form.provider]
+    const currentKey = form.api_key || keysForm[envKey] || ''
+    
+    if (!currentKey) {
+      toast.error('Nhập API key hoặc cấu hình key trong Tab 2 trước')
       return
     }
-    setTesting('pending')
+
+    setTestingActive('pending')
     try {
       const res = await api.post('/ai-hermes/config/test', {
         provider: form.provider,
-        model: form.model,
-        api_key: form.api_key,
+        model: selectedModel,
+        api_key: currentKey,
         base_url: form.base_url,
       })
-      setTesting(res.data)
+      setTestingActive(res.data)
       if (res.data.ok) {
         toast.success(`Kết nối OK (${res.data.latency_ms}ms)`)
       } else {
         toast.error(`Test thất bại: ${res.data.error}`)
       }
     } catch (err) {
-      setTesting({ ok: false, error: err.message })
+      setTestingActive({ ok: false, error: err.message })
       toast.error(`Test lỗi: ${err.message}`)
     }
   }
 
-  // Quick-switch presets — 1 click to swap provider+model without typing
+  // Tab 2 actions
+  const saveAllKeys = useMutation({
+    mutationFn: async () => {
+      // Validate all edited keys
+      const cleanKeys = {}
+      for (const envKey of Object.keys(keysForm)) {
+        const val = keysForm[envKey] || ''
+        if (val && !val.includes('...') && val !== '***') {
+          if (!looksLikeApiKey(val)) {
+            throw new Error(`API key của ${envKey} không hợp lệ — chứa ký tự lạ hoặc trông giống error message.`)
+          }
+        }
+        cleanKeys[envKey] = val.trim()
+      }
+
+      await api.put('/ai-hermes/config', {
+        fallback_keys: cleanKeys
+      })
+    },
+    onSuccess: () => {
+      toast.success('Đã lưu tất cả API Keys')
+      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+    },
+    onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
+  })
+
+  const testKeyConnection = async (prov) => {
+    const envKey = PROVIDER_KEY_MAP[prov]
+    const key = keysForm[envKey] || ''
+    if (!key) {
+      toast.error(`Nhập API key cho ${PROVIDER_LABELS[prov]} để test`)
+      return
+    }
+
+    setTestingKeys(prev => ({ ...prev, [prov]: 'pending' }))
+    const defaultModel = PROVIDER_MODELS[prov]?.[0]?.id || ''
+    const defaultUrl = PROVIDER_BASE_URLS[prov] || ''
+
+    try {
+      const res = await api.post('/ai-hermes/config/test', {
+        provider: prov,
+        model: defaultModel,
+        api_key: key,
+        base_url: defaultUrl,
+      })
+      setTestingKeys(prev => ({ ...prev, [prov]: res.data }))
+      if (res.data.ok) {
+        toast.success(`Kết nối ${prov.toUpperCase()} OK (${res.data.latency_ms}ms)`)
+      } else {
+        toast.error(`Kết nối ${prov.toUpperCase()} lỗi: ${res.data.error}`)
+      }
+    } catch (err) {
+      setTestingKeys(prev => ({ ...prev, [prov]: { ok: false, error: err.message } }))
+      toast.error(`Test lỗi: ${err.message}`)
+    }
+  }
+
+  // Tab 3 actions
+  const saveChain = useMutation({
+    mutationFn: async () => {
+      await api.put('/ai-hermes/config', {
+        fallback_chain: chainForm
+      })
+    },
+    onSuccess: () => {
+      toast.success('Đã lưu thứ tự fallback chain')
+      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+    },
+    onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
+  })
+
+  const reorder = (fromIdx, toIdx) => {
+    if (fromIdx < 0 || toIdx < 0 || fromIdx >= chainForm.length || toIdx >= chainForm.length) return
+    const arr = [...chainForm]
+    const [item] = arr.splice(fromIdx, 1)
+    arr.splice(toIdx, 0, item)
+    setChainForm(arr)
+  }
+
+  const QUICK_PRESETS = [
+    { p: 'chatgpt-oauth', m: 'custom-gpt',         label: '🤖 ChatGPT (OAuth)',  color: 'text-cyan-400 font-bold' },
+    { p: 'nvidia',   m: 'meta/llama-3.3-70b-instruct', label: 'NVIDIA Llama 3.3',    color: 'text-amber-500' },
+    { p: 'nvidia',   m: 'deepseek-ai/deepseek-r1',     label: 'NVIDIA DeepSeek R1',  color: 'text-amber-500 font-bold' },
+    { p: 'deepseek', m: 'deepseek-chat',           label: 'DeepSeek V3',         color: 'text-info' },
+    { p: 'kimi',     m: 'kimi-k2-0711-preview',    label: 'Kimi K2',             color: 'text-cyan-500' },
+    { p: 'openai',   m: 'gpt-4o-mini',             label: 'GPT-4o-mini',         color: 'text-emerald-600' },
+    { p: 'gemini',   m: 'gemini-2.5-flash',        label: 'Gemini 2.5 Flash',    color: 'text-purple-500' },
+    { p: 'groq',     m: 'llama-3.3-70b-versatile', label: 'Groq Llama 3.3',      color: 'text-red-500' },
+  ]
+
   const quickSwitch = (provider, model) => {
     if (provider === 'chatgpt-oauth') {
       const targetUrl = cfgData?.config?.gpt_link || 'https://chatgpt.com'
@@ -141,205 +374,432 @@ function ModelSection() {
         ...f,
         provider: 'openai',
         model: 'chatgpt-action',
-        base_url: '',
+        base_url: 'https://api.openai.com/v1',
         api_key: '',
       }))
+      setCustomModelMode(false)
       toast.success('Đã chọn ChatGPT OAuth và mở tab mới để ủy quyền kết nối! 🚀')
       return
     }
-    const baseUrl = providers[provider]?.base_url || ''
+    const baseUrl = PROVIDER_BASE_URLS[provider] || ''
     setForm(f => ({ ...f, provider, model, base_url: baseUrl, api_key: '' }))
-    toast.success(`Đã đổi sang ${provider} / ${model} — nhập API key rồi Test + Lưu`)
+    setCustomModelMode(false)
+    toast.success(`Đã đổi sang ${provider} / ${model} — Lưu cấu hình để kích hoạt`)
   }
 
-  const QUICK_PRESETS = [
-    { p: 'chatgpt-oauth', m: 'custom-gpt',         label: '🤖 ChatGPT (OAuth)',  color: 'text-cyan-400 font-bold' },
-    { p: 'nvidia',   m: 'meta/llama-3.3-70b-instruct', label: 'NVIDIA Llama 3.3',    color: 'text-amber-500' },
-    { p: 'nvidia',   m: 'deepseek-ai/deepseek-r1',     label: 'NVIDIA DeepSeek R1',  color: 'text-amber-500 font-bold' },
-    { p: 'deepseek', m: 'deepseek-chat',           label: 'DeepSeek V3',         color: 'text-info' },
-    { p: 'deepseek', m: 'deepseek-v4-pro',         label: 'DeepSeek V4 Pro',     color: 'text-info' },
-    { p: 'kimi',     m: 'kimi-k2.6',               label: 'Kimi K2.6',           color: 'text-cyan-500' },
-    { p: 'openai',   m: 'gpt-4o-mini',             label: 'GPT-4o-mini',         color: 'text-emerald-600' },
-    { p: 'gemini',   m: 'gemini-2.0-flash',        label: 'Gemini 2.0 Flash',    color: 'text-purple-500' },
-    { p: 'groq',     m: 'llama-3.3-70b-versatile', label: 'Groq Llama 3.3',      color: 'text-red-500' },
-  ]
-
-  if (isLoading) return <div className="p-6 text-app-muted font-mono-ui">Đang tải cấu hình...</div>
+  const activeModels = PROVIDER_MODELS[form.provider] || []
 
   return (
-    <div className="p-6 font-mono-ui max-w-2xl">
+    <div className="p-6 font-mono-ui max-w-3xl">
       <h2 className="text-app-primary text-base mb-1">1. Model & Provider</h2>
-      <p className="text-app-muted text-xs mb-4">Chọn nhà cung cấp LLM và thông số cho Hermes.</p>
+      <p className="text-app-muted text-xs mb-6">Cấu hình LLM chính, API Keys riêng biệt, và thứ tự Fallback khi có lỗi.</p>
 
-      {/* Quick-switch */}
-      <div className="mb-6 p-3" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
-        <div className="text-[10px] uppercase text-app-muted mb-2">Đổi nhanh provider/model</div>
-        <div className="flex flex-wrap gap-2">
-          {QUICK_PRESETS.map(({ p, m, label, color }) => {
-            const active = form.provider === p && form.model === m
-            return (
-              <button
-                key={`${p}/${m}`}
-                onClick={() => quickSwitch(p, m)}
-                className={`text-xs px-3 py-1.5 ${active ? 'text-hermes' : color + ' hover:opacity-80'}`}
-                style={{
-                  background: active ? 'var(--hermes-dim)' : 'var(--bg-base)',
-                  border: '1px solid ' + (active ? 'var(--hermes-fade)' : 'var(--border)'),
-                }}
-              >
-                {label}
-              </button>
-            )
-          })}
-        </div>
-        <div className="text-[10px] text-app-dim mt-2">
-          Click 1 preset → fill provider+model+base_url → nhập API key của provider đó → Test → Lưu
-        </div>
+      {/* Sub-tab selection */}
+      <div className="flex gap-2 mb-6 border-b border-border pb-2">
+        <button
+          type="button"
+          onClick={() => setSubTab('active')}
+          className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+            subTab === 'active'
+              ? 'text-hermes border-hermes'
+              : 'text-app-muted border-transparent hover:text-app-primary'
+          }`}
+          style={{ marginBottom: '-9px' }}
+        >
+          Tab 1: Model mặc định
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('keys')}
+          className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+            subTab === 'keys'
+              ? 'text-hermes border-hermes'
+              : 'text-app-muted border-transparent hover:text-app-primary'
+          }`}
+          style={{ marginBottom: '-9px' }}
+        >
+          Tab 2: Quản lý API Keys
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('fallback')}
+          className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+            subTab === 'fallback'
+              ? 'text-hermes border-hermes'
+              : 'text-app-muted border-transparent hover:text-app-primary'
+          }`}
+          style={{ marginBottom: '-9px' }}
+        >
+          Tab 3: Thứ tự Fallback
+        </button>
       </div>
 
-      <div className="space-y-4">
-        {/* Provider */}
-        <div>
-          <label className="block text-[10px] uppercase text-app-muted mb-1">Provider</label>
-          <select
-            value={form.provider}
-            onChange={(e) => setForm(f => ({ ...f, provider: e.target.value }))}
-            className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
-            style={{ border: '1px solid var(--border-bright)' }}
-          >
-            {Object.keys(providers).map(p => (
-              <option key={p} value={p}>{providers[p].label || p}</option>
-            ))}
-          </select>
-          <div className="text-[10px] text-app-muted mt-1 font-mono-ui">
-            {providers[form.provider]?.base_url}
-          </div>
-        </div>
-
-        {/* Model — datalist cho gợi ý + type tuỳ ý */}
-        <div>
-          <label className="block text-[10px] uppercase text-app-muted mb-1">
-            Model <span className="text-app-dim">(chọn preset hoặc gõ model ID bất kỳ)</span>
-          </label>
-          <input
-            type="text"
-            list="model-options"
-            value={form.model}
-            onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))}
-            placeholder="vd: nousresearch/hermes-3-llama-3.1-70b"
-            className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
-            style={{ border: '1px solid var(--border-bright)' }}
-          />
-          <datalist id="model-options">
-            {modelOptions.map(m => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          {modelOptions.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1">
-              {modelOptions.slice(0, 6).map(m => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setForm(f => ({ ...f, model: m }))}
-                  className={`text-[10px] px-2 py-0.5 font-mono-ui ${
-                    form.model === m ? 'text-hermes' : 'text-app-muted hover:text-app-primary'
-                  }`}
-                  style={{
-                    background: form.model === m ? 'var(--hermes-dim)' : 'var(--bg-elevated)',
-                    border: '1px solid ' + (form.model === m ? 'var(--hermes-fade)' : 'var(--border)'),
-                  }}
-                >
-                  {m}
-                </button>
-              ))}
-              {modelOptions.length > 6 && (
-                <span className="text-[10px] text-app-dim self-center ml-1">
-                  +{modelOptions.length - 6} khác (gõ tên)
-                </span>
-              )}
+      {/* SUBTAB 1: Active Model */}
+      {subTab === 'active' && (
+        <div className="space-y-4 max-w-2xl">
+          {/* Quick-presets */}
+          <div className="p-3" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+            <div className="text-[10px] uppercase text-app-muted mb-2">Đổi nhanh provider/model</div>
+            <div className="flex flex-wrap gap-2">
+              {QUICK_PRESETS.map(({ p, m, label, color }) => {
+                const active = form.provider === p && form.model === m
+                return (
+                  <button
+                    key={`${p}/${m}`}
+                    onClick={() => quickSwitch(p, m)}
+                    className={`text-xs px-3 py-1.5 ${active ? 'text-hermes' : color + ' hover:opacity-80'}`}
+                    style={{
+                      background: active ? 'var(--hermes-dim)' : 'var(--bg-base)',
+                      border: '1px solid ' + (active ? 'var(--hermes-fade)' : 'var(--border)'),
+                    }}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
             </div>
-          )}
-        </div>
-
-        {/* API Key */}
-        <div>
-          <label className="block text-[10px] uppercase text-app-muted mb-1">
-            API Key {cfgData?.api_key_set && <span className="text-hermes">(đã set)</span>}
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={form.api_key}
-              onChange={(e) => setForm(f => ({ ...f, api_key: e.target.value }))}
-              placeholder={cfgData?.api_key_set ? 'Để trống nếu không đổi' : 'sk-...'}
-              className="flex-1 px-3 py-2 bg-app-elevated text-app-primary text-sm"
-              style={{ border: '1px solid var(--border-bright)' }}
-            />
-            <button
-              onClick={testConnection}
-              disabled={testing === 'pending' || !form.api_key}
-              className="btn-ghost whitespace-nowrap"
-            >
-              {testing === 'pending' ? <Loader size={12} className="animate-spin" /> : 'Test kết nối'}
-            </button>
           </div>
-          {testing && testing !== 'pending' && (
-            <div className={`mt-2 text-xs ${testing.ok ? 'text-hermes' : 'text-danger'}`}>
-              {testing.ok
-                ? `✓ OK (${testing.latency_ms}ms) · "${testing.response_preview}"`
-                : `✗ ${testing.error}`}
-            </div>
-          )}
-        </div>
 
-        {/* Base URL */}
-        <div>
-          <label className="block text-[10px] uppercase text-app-muted mb-1">Base URL</label>
-          <input
-            type="text"
-            value={form.base_url}
-            onChange={(e) => setForm(f => ({ ...f, base_url: e.target.value }))}
-            className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
-            style={{ border: '1px solid var(--border-bright)' }}
-          />
-        </div>
-
-        {/* Max tokens + Temperature */}
-        <div className="grid grid-cols-2 gap-4">
+          {/* Provider dropdown */}
           <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Max tokens</label>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">Provider chính</label>
+            <select
+              value={form.provider}
+              onChange={(e) => {
+                const newProv = e.target.value
+                const defaultModel = PROVIDER_MODELS[newProv]?.[0]?.id || ''
+                const defaultUrl = PROVIDER_BASE_URLS[newProv] || ''
+                setForm(f => ({
+                  ...f,
+                  provider: newProv,
+                  model: defaultModel,
+                  base_url: defaultUrl,
+                  api_key: '',
+                }))
+                setCustomModelMode(false)
+              }}
+              className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+              style={{ border: '1px solid var(--border-bright)' }}
+            >
+              {Object.keys(PROVIDER_LABELS).map(p => (
+                <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Model selection */}
+          <div>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">Model mặc định</label>
+            <div className="flex gap-2 mb-2">
+              <button
+                type="button"
+                onClick={() => setCustomModelMode(false)}
+                className={`text-[10px] px-3 py-1 ${!customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
+                style={{ border: '1px solid var(--border-bright)' }}
+              >
+                Chọn từ Preset
+              </button>
+              <button
+                type="button"
+                onClick={() => setCustomModelMode(true)}
+                className={`text-[10px] px-3 py-1 ${customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
+                style={{ border: '1px solid var(--border-bright)' }}
+              >
+                Nhập Model ID tự do
+              </button>
+            </div>
+
+            {!customModelMode ? (
+              <select
+                value={form.model}
+                onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))}
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
+                style={{ border: '1px solid var(--border-bright)' }}
+              >
+                {activeModels.map(m => (
+                  <option key={m.id} value={m.id}>{m.label} ({m.id})</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={customModelInput}
+                onChange={(e) => setCustomModelInput(e.target.value)}
+                placeholder="Ví dụ: deepseek-ai/deepseek-r1"
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+            )}
+          </div>
+
+          {/* API Key */}
+          <div>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">
+              API Key <span className="text-app-dim">(nếu không điền sẽ lấy key trong Tab 2)</span>
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={form.api_key}
+                onChange={(e) => setForm(f => ({ ...f, api_key: e.target.value }))}
+                placeholder={keysForm[PROVIDER_KEY_MAP[form.provider]] ? `Cấu hình sẵn: ${keysForm[PROVIDER_KEY_MAP[form.provider]]}` : 'Chưa cấu hình API Key'}
+                className="flex-1 px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+              <button
+                type="button"
+                onClick={testActiveConnection}
+                disabled={testingActive === 'pending'}
+                className="btn-ghost whitespace-nowrap"
+              >
+                {testingActive === 'pending' ? <Loader size={12} className="animate-spin" /> : '🔌 Test kết nối'}
+              </button>
+            </div>
+            {testingActive && testingActive !== 'pending' && (
+              <div className={`mt-2 text-xs ${testingActive.ok ? 'text-hermes' : 'text-danger'}`}>
+                {testingActive.ok
+                  ? `✓ Kết nối thành công (${testingActive.latency_ms}ms) · Phản hồi: "${testingActive.response_preview}"`
+                  : `✗ Lỗi kết nối: ${testingActive.error}`}
+              </div>
+            )}
+          </div>
+
+          {/* Base URL */}
+          <div>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">Base URL</label>
             <input
-              type="number"
-              min={50}
-              max={8000}
-              value={form.max_tokens}
-              onChange={(e) => setForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 500 }))}
+              type="text"
+              value={form.base_url}
+              onChange={(e) => setForm(f => ({ ...f, base_url: e.target.value }))}
               className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
               style={{ border: '1px solid var(--border-bright)' }}
             />
           </div>
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">
-              Temperature: <span className="text-hermes">{form.temperature.toFixed(2)}</span>
-            </label>
-            <input
-              type="range" min={0} max={2} step={0.05}
-              value={form.temperature}
-              onChange={(e) => setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
-              className="w-full"
-            />
+
+          {/* Max tokens + Temperature */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] uppercase text-app-muted mb-1">Max tokens</label>
+              <input
+                type="number"
+                min={50}
+                max={8000}
+                value={form.max_tokens}
+                onChange={(e) => setForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 500 }))}
+                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                style={{ border: '1px solid var(--border-bright)' }}
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase text-app-muted mb-1">
+                Temperature: <span className="text-hermes">{form.temperature.toFixed(2)}</span>
+              </label>
+              <input
+                type="range" min={0} max={2} step={0.05}
+                value={form.temperature}
+                onChange={(e) => setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => saveActive.mutate()}
+            disabled={saveActive.isPending}
+            className="btn-hermes"
+          >
+            {saveActive.isPending ? 'Đang lưu…' : '💾 Lưu cấu hình'}
+          </button>
+        </div>
+      )}
+
+      {/* SUBTAB 2: Manage API Keys */}
+      {subTab === 'keys' && (
+        <div className="space-y-4">
+          <p className="text-app-muted text-xs">Cấu hình API Key độc lập cho từng nhà cung cấp. Keys được tự động masked che giấu.</p>
+          
+          <div className="overflow-x-auto" style={{ border: '1px solid var(--border)' }}>
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="bg-app-elevated font-mono-ui border-b border-border text-app-muted uppercase text-[10px] tracking-wider">
+                  <th className="p-3">Provider</th>
+                  <th className="p-3">API Key (Env Variable)</th>
+                  <th className="p-3 text-right">Hành động</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {Object.keys(PROVIDER_KEY_MAP).map(prov => {
+                  const envKey = PROVIDER_KEY_MAP[prov]
+                  const keyVal = keysForm[envKey] || ''
+                  const isConfigured = keyVal && keyVal !== '***'
+                  const testRes = testingKeys[prov]
+
+                  return (
+                    <tr key={prov} className="hover:bg-app-elevated/40">
+                      <td className="p-3 font-semibold text-app-primary">
+                        {PROVIDER_LABELS[prov]}
+                        {form.provider === prov && (
+                          <span className="ml-2 text-[9px] bg-hermes-dim text-hermes px-1.5 py-0.5 rounded font-normal uppercase">Primary</span>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex flex-col gap-1">
+                          <input
+                            type="password"
+                            value={keyVal}
+                            onChange={(e) => setKeysForm({ ...keysForm, [envKey]: e.target.value })}
+                            placeholder={isConfigured ? '••••••••' : 'Chưa cấu hình API Key'}
+                            className="px-2 py-1 bg-app-base text-app-primary text-sm font-mono-ui w-64"
+                            style={{ border: '1px solid var(--border)' }}
+                          />
+                          <span className="text-[10px] text-app-dim">{envKey}</span>
+                        </div>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="inline-flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => testKeyConnection(prov)}
+                            disabled={testRes === 'pending'}
+                            className="px-2 py-1 bg-app-base hover:bg-app-elevated border border-border text-[11px] rounded text-app-primary transition-all"
+                          >
+                            {testRes === 'pending' ? <Loader size={10} className="animate-spin inline mr-1" /> : '🔌 Test'}
+                          </button>
+                        </div>
+                        {testRes && testRes !== 'pending' && (
+                          <div className={`text-[10px] mt-1 ${testRes.ok ? 'text-hermes' : 'text-danger'}`}>
+                            {testRes.ok ? `✓ OK (${testRes.latency_ms}ms)` : `✗ Lỗi`}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => saveAllKeys.mutate()}
+              disabled={saveAllKeys.isPending}
+              className="btn-hermes"
+            >
+              {saveAllKeys.isPending ? 'Đang lưu…' : '💾 Lưu tất cả API Keys'}
+            </button>
           </div>
         </div>
+      )}
 
-        <button
-          onClick={() => save.mutate()}
-          disabled={save.isPending}
-          className="btn-hermes"
-        >
-          {save.isPending ? 'Đang lưu...' : 'Lưu'}
-        </button>
-      </div>
+      {/* SUBTAB 3: Fallback Chain */}
+      {subTab === 'fallback' && (
+        <div className="space-y-4">
+          <p className="text-app-muted text-xs">Sắp xếp chuỗi fallback (thứ tự ưu tiên từ trên xuống dưới). Khi provider trước gặp lỗi rate limit (429) hoặc server down (5xx), hệ thống tự động gọi provider tiếp theo.</p>
+
+          <div className="space-y-2 max-w-2xl">
+            {chainForm.map((item, i) => {
+              const envKey = PROVIDER_KEY_MAP[item.provider]
+              const hasKey = keysForm[envKey] && keysForm[envKey] !== ''
+              const providerLabel = PROVIDER_LABELS[item.provider] || item.provider
+              const active = item.enabled
+
+              return (
+                <div
+                  key={item.provider}
+                  draggable
+                  onDragStart={() => setDragIdx(i)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => {
+                    if (dragIdx !== null) reorder(dragIdx, i)
+                    setDragIdx(null)
+                  }}
+                  className={`flex items-center gap-3 px-3 py-2 bg-app-elevated rounded border transition-all ${
+                    active ? 'border-border-bright opacity-100' : 'border-border opacity-50'
+                  }`}
+                  style={{ background: 'var(--bg-elevated)' }}
+                >
+                  <GripVertical size={14} className="text-app-muted cursor-move" />
+                  
+                  {/* Enabled Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={item.enabled}
+                    onChange={(e) => {
+                      const updated = [...chainForm]
+                      updated[i] = { ...item, enabled: e.target.checked }
+                      setChainForm(updated)
+                    }}
+                    className="cursor-pointer"
+                  />
+
+                  {/* Priority number */}
+                  <span className="text-app-muted text-[10px] w-6">#{i + 1}</span>
+
+                  {/* Provider name */}
+                  <span className="text-app-primary text-xs font-semibold w-32">{providerLabel}</span>
+
+                  {/* Model selector dropdown */}
+                  <div className="flex-1">
+                    <select
+                      value={item.model}
+                      onChange={(e) => {
+                        const updated = [...chainForm]
+                        updated[i] = { ...item, model: e.target.value }
+                        setChainForm(updated)
+                      }}
+                      className="px-2 py-1 bg-app-base text-app-primary text-xs font-mono-ui border border-border rounded max-w-xs"
+                    >
+                      {(PROVIDER_MODELS[item.provider] || []).map(m => (
+                        <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Key configuration alert warning */}
+                  {!hasKey && (
+                    <span className="text-[10px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded flex items-center gap-1">
+                      <AlertTriangle size={10} /> Chưa có API Key (bị skip)
+                    </span>
+                  )}
+
+                  {/* Up/Down buttons for mobile/backup click reordering */}
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      disabled={i === 0}
+                      onClick={() => reorder(i, i - 1)}
+                      className="p-1 hover:bg-app-base rounded text-app-muted hover:text-app-primary disabled:opacity-30"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={i === chainForm.length - 1}
+                      onClick={() => reorder(i, i + 1)}
+                      className="p-1 hover:bg-app-base rounded text-app-muted hover:text-app-primary disabled:opacity-30"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => saveChain.mutate()}
+              disabled={saveChain.isPending}
+              className="btn-hermes"
+            >
+              {saveChain.isPending ? 'Đang lưu…' : '💾 Lưu thứ tự'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -822,93 +1282,7 @@ function QualityGateSection() {
   )
 }
 
-// ───────────────────────────────────────────────────────────
-// SECTION 4: Fallback chain
-// ───────────────────────────────────────────────────────────
-function FallbackSection() {
-  const qc = useQueryClient()
-  const { data: cfgData } = useQuery({
-    queryKey: ['hermes', 'config'],
-    queryFn: async () => (await api.get('/ai-hermes/config')).data,
-  })
-  const cfg = cfgData?.config || {}
-  const [chain, setChain] = useState(['nvidia', 'deepseek', 'kimi'])
-  const [timeoutMs, setTimeoutMs] = useState(3000)
-  const [dragIdx, setDragIdx] = useState(null)
-
-  useEffect(() => {
-    if (Array.isArray(cfg.fallback_chain)) setChain(cfg.fallback_chain)
-    if (cfg.fallback_timeout_ms !== undefined) setTimeoutMs(cfg.fallback_timeout_ms)
-  }, [cfgData])
-
-  const save = useMutation({
-    mutationFn: async () => {
-      await api.put('/ai-hermes/config', {
-        fallback_chain: chain,
-        fallback_timeout_ms: timeoutMs,
-      })
-    },
-    onSuccess: () => {
-      toast.success('Đã lưu fallback chain')
-      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
-    },
-    onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
-  })
-
-  const reorder = (fromIdx, toIdx) => {
-    if (fromIdx === toIdx) return
-    const arr = [...chain]
-    const [item] = arr.splice(fromIdx, 1)
-    arr.splice(toIdx, 0, item)
-    setChain(arr)
-  }
-
-  return (
-    <div className="p-6 font-mono-ui max-w-2xl">
-      <h2 className="text-app-primary text-base mb-1">4. Fallback chain</h2>
-      <p className="text-app-muted text-xs mb-6">Nếu provider đầu fail, thử tiếp theo thứ tự. Kéo thả để sắp xếp.</p>
-
-      <div className="space-y-2 mb-4">
-        {chain.map((name, i) => (
-          <div
-            key={name}
-            draggable
-            onDragStart={() => setDragIdx(i)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => {
-              if (dragIdx !== null) reorder(dragIdx, i)
-              setDragIdx(null)
-            }}
-            className="flex items-center gap-3 px-3 py-2 bg-app-elevated cursor-move"
-            style={{ border: '1px solid var(--border-bright)' }}
-          >
-            <GripVertical size={14} className="text-app-muted" />
-            <span className="text-app-muted text-[10px] w-4">{i + 1}.</span>
-            <span className="flex-1 text-app-primary">{name}</span>
-            {i === 0 && <span className="text-[10px] text-hermes">PRIMARY</span>}
-          </div>
-        ))}
-      </div>
-
-      <div className="mb-4">
-        <label className="block text-[10px] uppercase text-app-muted mb-1">
-          Timeout (ms) trước khi chuyển sang fallback
-        </label>
-        <input
-          type="number" min={500} max={30000}
-          value={timeoutMs}
-          onChange={(e) => setTimeoutMs(parseInt(e.target.value) || 3000)}
-          className="w-32 px-3 py-2 bg-app-elevated text-app-primary text-sm"
-          style={{ border: '1px solid var(--border-bright)' }}
-        />
-      </div>
-
-      <button onClick={() => save.mutate()} disabled={save.isPending} className="btn-hermes">
-        {save.isPending ? 'Đang lưu...' : 'Lưu'}
-      </button>
-    </div>
-  )
-}
+// FallbackSection has been consolidated into ModelSection Tab 3
 
 // ───────────────────────────────────────────────────────────
 // SECTION 5: Memory & Learning
@@ -1766,13 +2140,13 @@ export default function HermesSettings() {
       </div>
 
       <div className="flex-1 overflow-auto">
-        {section === 'model'     && <ModelSection />}
+        {section === 'model'     && <ModelSection defaultSubTab="active" />}
         {section === 'oauth'     && <OauthSection />}
         {section === 'per_task'  && <PerTaskModelSection />}
         {section === 'agent_pw'  && <AgentPlaywrightSection />}
         {section === 'skills'    && <SkillsSection />}
         {section === 'quality'   && <QualityGateSection />}
-        {section === 'fallback'  && <FallbackSection />}
+        {section === 'fallback'  && <ModelSection defaultSubTab="fallback" />}
         {section === 'memory'    && <MemorySection />}
         {section === 'soul'      && <SoulSection />}
         {section === 'decisions' && <DecisionsSection />}

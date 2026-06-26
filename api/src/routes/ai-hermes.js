@@ -4,10 +4,10 @@ module.exports = async (fastify) => {
   const HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8100'
   const AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY
   const SHORT_TIMEOUT_MS = 5000
-  const NORMAL_TIMEOUT_MS = 15000
-  const COMMENT_TIMEOUT_MS = 30000
-  const EVALUATE_TIMEOUT_MS = 45000
-  const LONG_TIMEOUT_MS = 60000
+  const NORMAL_TIMEOUT_MS = 30000
+  const COMMENT_TIMEOUT_MS = 60000
+  const EVALUATE_TIMEOUT_MS = 90000
+  const LONG_TIMEOUT_MS = 120000
   console.log('[HERMES] Using URL:', HERMES_URL, 'secret configured:', !!AGENT_SECRET)
 
   async function proxyToHermes(path, body, timeout = COMMENT_TIMEOUT_MS) {
@@ -60,7 +60,7 @@ module.exports = async (fastify) => {
 
   // ─── Generic generate (drop-in for orchestrator) ───────
   fastify.post('/generate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/generate', req.body, COMMENT_TIMEOUT_MS)
+    const { status, json } = await proxyToHermes('/generate', req.body, LONG_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
@@ -89,7 +89,7 @@ module.exports = async (fastify) => {
   })
 
   fastify.post('/agent/generate', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/generate', req.body, COMMENT_TIMEOUT_MS)
+    const { status, json } = await proxyToHermes('/generate', req.body, LONG_TIMEOUT_MS)
     return reply.code(status).send(json)
   })
 
