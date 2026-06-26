@@ -2086,7 +2086,6 @@ function AgentPlaywrightSection() {
         </div>
       </div>
     </div>
-      </div>
   )
 }
 
