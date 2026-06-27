@@ -2098,32 +2098,43 @@ function WpAuditSection() {
 
   const cfg = cfgData?.config || {}
 
-  // WordPress credentials form state
-  const [form, setForm] = useState({
-    wp_url: '',
-    wp_token: '',
-  })
+  // Multi-site WordPress config
+  const [sites, setSites] = useState([])
+  const [activeSiteIdx, setActiveSiteIdx] = useState(0)
 
-  // Sync credentials from backend
+  // Sync sites from backend
   useEffect(() => {
     if (cfg && !isCfgLoading) {
-      setForm({
-        wp_url: cfg.wp_url || '',
-        wp_token: cfg.wp_token || '',
-      })
+      const existingSites = cfg.wp_sites || []
+      // Backward compat: if no wp_sites but has wp_url, migrate
+      if (existingSites.length === 0 && cfg.wp_url) {
+        setSites([{ name: 'Default', url: cfg.wp_url, token: cfg.wp_token || '' }])
+      } else {
+        setSites(existingSites.length > 0 ? existingSites : [{ name: '', url: '', token: '' }])
+      }
     }
   }, [cfgData, isCfgLoading])
 
+  const addSite = () => setSites(prev => [...prev, { name: '', url: '', token: '' }])
+  const removeSite = (idx) => {
+    setSites(prev => prev.filter((_, i) => i !== idx))
+    if (activeSiteIdx >= sites.length - 1) setActiveSiteIdx(Math.max(0, sites.length - 2))
+  }
+  const updateSite = (idx, field, value) => {
+    setSites(prev => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s))
+  }
+
   const saveConfig = useMutation({
     mutationFn: async () => {
-      const payload = {
-        wp_url: form.wp_url.trim(),
-      }
-      // Only include token if it's new/changed and not masked
-      if (form.wp_token && !form.wp_token.includes('...') && form.wp_token !== '***') {
-        payload.wp_token = form.wp_token.trim()
-      }
-      await api.put('/ai-hermes/config', payload)
+      const cleanSites = sites
+        .filter(s => s.url?.trim())
+        .map(s => ({
+          name: (s.name || '').trim() || new URL(s.url.trim()).hostname,
+          url: s.url.trim(),
+          // Only send token if not masked
+          ...(s.token && !s.token.includes('...') && s.token !== '***' ? { token: s.token.trim() } : {}),
+        }))
+      await api.put('/ai-hermes/config', { wp_sites: cleanSites })
     },
     onSuccess: () => {
       toast.success('Đã lưu cấu hình WordPress')
@@ -2134,12 +2145,12 @@ function WpAuditSection() {
 
   // Testing connection state
   const [testingConnection, setTestingConnection] = useState(false)
-  const testConnection = async () => {
+  const testConnection = async (idx) => {
     setTestingConnection(true)
     try {
-      const res = await api.get('/ai-hermes/wp/posts?per_page=1')
+      const res = await api.get(`/ai-hermes/wp/posts?per_page=1&site_idx=${idx}`)
       if (res.data && res.data.posts) {
-        toast.success('Kết nối WordPress thành công! 🚀')
+        toast.success(`Kết nối "${sites[idx]?.name || sites[idx]?.url}" thành công! 🚀`)
       } else {
         toast.error('Không thể tải bài viết từ WordPress')
       }
@@ -2157,11 +2168,13 @@ function WpAuditSection() {
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
 
+  const hasSites = sites.some(s => s.url?.trim())
+
   // Categories list
   const { data: catData } = useQuery({
-    queryKey: ['hermes', 'wp-categories'],
-    queryFn: async () => (await api.get('/ai-hermes/wp/categories')).data,
-    enabled: !!cfg.wp_url, // only fetch if URL is configured
+    queryKey: ['hermes', 'wp-categories', activeSiteIdx],
+    queryFn: async () => (await api.get(`/ai-hermes/wp/categories?site_idx=${activeSiteIdx}`)).data,
+    enabled: hasSites,
   })
   const categories = catData?.categories || []
   const [selectedCategory, setSelectedCategory] = useState('')
@@ -2171,7 +2184,7 @@ function WpAuditSection() {
     const nextPage = resetPage ? 1 : page
     try {
       const catParam = selectedCategory ? `&category_id=${selectedCategory}` : ''
-      const res = await api.get(`/ai-hermes/wp/posts?page=${nextPage}&per_page=10&search=${encodeURIComponent(search)}${catParam}`)
+      const res = await api.get(`/ai-hermes/wp/posts?page=${nextPage}&per_page=10&search=${encodeURIComponent(search)}${catParam}&site_idx=${activeSiteIdx}`)
       const fetched = res.data.posts || []
       
       if (resetPage) {
@@ -2189,12 +2202,13 @@ function WpAuditSection() {
     }
   }
 
-  // Run initial load or when category changes
+  // Run initial load or when site/category changes
   useEffect(() => {
-    if (cfg.wp_url) {
+    if (hasSites) {
       loadPosts(true)
     }
-  }, [selectedCategory, cfg.wp_url])
+  }, [selectedCategory, activeSiteIdx])
+
 
   // Audit Results state
   const [auditResults, setAuditResults] = useState({})
@@ -2206,7 +2220,7 @@ function WpAuditSection() {
   const runAudit = async (postId) => {
     setAuditingId(postId)
     try {
-      const res = await api.post(`/ai-hermes/wp/audit/${postId}`)
+      const res = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}`)
       if (res.data && res.data.audit) {
         // Find the post info for the result page
         const postInfo = posts.find(p => p.id === postId) || { id: postId }
@@ -2244,61 +2258,112 @@ function WpAuditSection() {
         <p className="text-app-muted text-[11px]">Fetch các bài viết từ WordPress và tiến hành audit chất lượng SEO/GEO/Topic Cluster.</p>
       </div>
 
-      {/* Connection Config Panel */}
+      {/* Multi-site Config Panel */}
       <div className="p-4 bg-app-elevated space-y-4 border border-border">
-        <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🌐 WordPress Connection Cấu hình</h4>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Site URL</label>
-            <input
-              type="text"
-              value={form.wp_url}
-              onChange={(e) => setForm(prev => ({ ...prev, wp_url: e.target.value }))}
-              placeholder="https://tino.vn"
-              className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">
-              Token
-              <span className="ml-1 text-app-dim normal-case font-normal">(username:app_password)</span>
-            </label>
-            <input
-              type="password"
-              value={form.wp_token}
-              onChange={(e) => setForm(prev => ({ ...prev, wp_token: e.target.value }))}
-              placeholder="admin:xxxx xxxx xxxx xxxx xxxx xxxx"
-              className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
-            />
-            <div className="text-[10px] text-app-dim mt-1">
-              ℹ️ Tạo tại WP Admin → Users → Application Passwords
-            </div>
-          </div>
+        <div className="flex items-center justify-between">
+          <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🌐 WordPress Sites</h4>
+          <button
+            onClick={addSite}
+            className="btn-hermes px-3 py-1 text-xs font-semibold rounded flex items-center gap-1"
+          >
+            <Plus className="w-3 h-3" /> Thêm site
+          </button>
         </div>
-        <div className="flex gap-2">
+
+        <div className="space-y-3">
+          {sites.map((site, idx) => (
+            <div key={idx} className="p-3 bg-app-base border border-border rounded space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase text-app-muted font-bold">Site #{idx + 1}</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => testConnection(idx)}
+                    disabled={testingConnection || !site.url}
+                    className="text-[10px] text-hermes hover:underline font-semibold"
+                  >
+                    {testingConnection ? '...' : 'Test'}
+                  </button>
+                  {sites.length > 1 && (
+                    <button
+                      onClick={() => removeSite(idx)}
+                      className="text-[10px] text-danger hover:underline font-semibold"
+                    >
+                      Xoá
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-[10px] uppercase text-app-dim mb-0.5">Tên</label>
+                  <input
+                    type="text"
+                    value={site.name || ''}
+                    onChange={(e) => updateSite(idx, 'name', e.target.value)}
+                    placeholder="Tino Blog"
+                    className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase text-app-dim mb-0.5">Site URL</label>
+                  <input
+                    type="text"
+                    value={site.url || ''}
+                    onChange={(e) => updateSite(idx, 'url', e.target.value)}
+                    placeholder="https://tino.vn/blog"
+                    className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase text-app-dim mb-0.5">
+                    Token <span className="normal-case font-normal">(user:app_pass)</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={site.token || ''}
+                    onChange={(e) => updateSite(idx, 'token', e.target.value)}
+                    placeholder="admin:xxxx xxxx xxxx"
+                    className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
           <button
             onClick={() => saveConfig.mutate()}
             disabled={saveConfig.isPending}
             className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded"
           >
-            {saveConfig.isPending ? 'Đang lưu…' : 'Lưu cấu hình'}
+            {saveConfig.isPending ? 'Đang lưu…' : 'Lưu tất cả'}
           </button>
-          <button
-            onClick={testConnection}
-            disabled={testingConnection || !form.wp_url}
-            className="btn-ghost px-4 py-1.5 text-xs font-semibold flex items-center gap-1.5 border border-border rounded"
-          >
-            {testingConnection ? <Loader className="w-3.5 h-3.5 animate-spin" /> : 'Test kết nối'}
-          </button>
+          <span className="text-[10px] text-app-dim">
+            ℹ️ Tạo App Password tại WP Admin → Users → Application Passwords
+          </span>
         </div>
       </div>
 
       {/* Post browser list */}
-      {cfg.wp_url && (
+      {hasSites && (
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2 items-center justify-between">
             <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🔍 Browse Posts từ WordPress</h4>
             <div className="flex gap-2 items-center">
+              {/* Site Selector */}
+              {sites.filter(s => s.url?.trim()).length > 1 && (
+                <select
+                  value={activeSiteIdx}
+                  onChange={(e) => { setActiveSiteIdx(Number(e.target.value)); setSelectedCategory('') }}
+                  className="px-2 py-1 bg-app-elevated border border-hermes/40 text-hermes rounded font-mono-ui text-xs font-semibold"
+                >
+                  {sites.map((s, i) => s.url?.trim() ? (
+                    <option key={i} value={i}>🌐 {s.name || new URL(s.url).hostname}</option>
+                  ) : null)}
+                </select>
+              )}
+
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
@@ -2327,6 +2392,7 @@ function WpAuditSection() {
               </div>
             </div>
           </div>
+
 
           <div className="border border-border rounded overflow-hidden">
             <div
