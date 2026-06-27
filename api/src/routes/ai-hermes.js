@@ -745,9 +745,10 @@ module.exports = async (fastify) => {
   fastify.post('/wp/audit/:post_id', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const postId = req.params.post_id
-      const { site_idx = 0 } = req.query
+      const { site_idx = 0, force = 'false' } = req.query
       const url = new URL(`${HERMES_URL}/hermes/wp/audit/${postId}`)
       url.searchParams.append('site_idx', site_idx)
+      url.searchParams.append('force', force)
 
       const res = await fetch(url.toString(), {
         method: 'POST',

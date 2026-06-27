@@ -11,8 +11,10 @@ import {
   ArrowLeft, Copy, CheckCircle2, AlertTriangle, ExternalLink,
   ChevronRight, Bookmark, Search, FileText, Globe, Link2, Tag,
   Lightbulb, List, Shield, Zap, Target, Hash, Layers, Star,
-  CheckSquare, XCircle, Info, PenTool,
+  CheckSquare, XCircle, Info, PenTool, RefreshCw, Loader,
 } from 'lucide-react'
+import api from '../../lib/api'
+
 
 /* ═══════════════════════════════════════════════════════════════
    HELPERS
@@ -314,6 +316,28 @@ export default function WpAuditResult() {
   const [activeSection, setActiveSection] = useState('scores')
   const mainRef = useRef(null)
 
+  const [reAuditing, setReAuditing] = useState(false)
+
+  const handleReAudit = async () => {
+    setReAuditing(true)
+    const siteIdx = data?.site_idx ?? 0
+    try {
+      const res = await api.post(`/ai-hermes/wp/audit/${postId}?force=true&site_idx=${siteIdx}`)
+      if (res.data && res.data.audit) {
+        const newData = { ...res.data, post: data.post }
+        setData(newData)
+        try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(newData)) } catch {}
+        toast.success('Đã đánh giá lại bài viết thành công! 📊')
+      } else {
+        toast.error('Đánh giá lại thất bại')
+      }
+    } catch (err) {
+      toast.error(`Lỗi: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setReAuditing(false)
+    }
+  }
+
   /* ─── Load data ─── */
   useEffect(() => {
     // 1. From navigation state
@@ -409,14 +433,36 @@ export default function WpAuditResult() {
         }}
       >
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center gap-2">
-          {/* Back */}
-          <button
-            onClick={() => navigate('/hermes/wp-audit')}
-            className="inline-flex items-center gap-2 text-sm text-app-muted hover:text-hermes transition-colors"
-          >
-            <ArrowLeft size={16} />
-            <span>Quay lại danh sách</span>
-          </button>
+          {/* Back & Re-Audit Actions */}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/hermes/wp-audit')}
+              className="inline-flex items-center gap-2 text-sm text-app-muted hover:text-hermes transition-colors"
+            >
+              <ArrowLeft size={16} />
+              <span>Quay lại danh sách</span>
+            </button>
+
+            <button
+              onClick={handleReAudit}
+              disabled={reAuditing}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes transition-all text-xs font-semibold"
+              title="Đánh giá lại bài viết (quét mới và lưu đè)"
+            >
+              {reAuditing ? (
+                <>
+                  <Loader className="w-3.5 h-3.5 animate-spin" />
+                  <span>Đang quét lại...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Đánh giá lại</span>
+                </>
+              )}
+            </button>
+          </div>
+
 
           <div className="sm:ml-4 flex-1 min-w-0">
             <div className="flex items-center gap-3 flex-wrap">
