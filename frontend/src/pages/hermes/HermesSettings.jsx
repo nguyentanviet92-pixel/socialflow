@@ -2201,14 +2201,22 @@ function WpAuditSection() {
   const [auditingId, setAuditingId] = useState(null)
   const [activeAuditId, setActiveAuditId] = useState(null)
 
+  const nav = useNavigate()
+
   const runAudit = async (postId) => {
     setAuditingId(postId)
     try {
       const res = await api.post(`/ai-hermes/wp/audit/${postId}`)
       if (res.data && res.data.audit) {
-        setAuditResults(prev => ({ ...prev, [postId]: res.data }))
-        setActiveAuditId(postId)
+        // Find the post info for the result page
+        const postInfo = posts.find(p => p.id === postId) || { id: postId }
+        const auditData = { ...res.data, post: postInfo }
+        setAuditResults(prev => ({ ...prev, [postId]: auditData }))
+        // Save to sessionStorage for the audit result page
+        try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(auditData)) } catch {}
         toast.success('Đã hoàn thành Audit bài viết! 📊')
+        // Navigate to dedicated audit result page
+        nav(`/hermes/wp-audit/${postId}`, { state: auditData })
       } else {
         toast.error('Audit thất bại: Không nhận được kết quả phân tích')
       }
@@ -2218,6 +2226,7 @@ function WpAuditSection() {
       setAuditingId(null)
     }
   }
+
 
   const handleCopy = (text, label) => {
     navigator.clipboard.writeText(text)
@@ -2355,27 +2364,29 @@ function WpAuditSection() {
                         <button
                           onClick={() => {
                             if (audited) {
-                              setActiveAuditId(activeAuditId === post.id ? null : post.id)
+                              try { sessionStorage.setItem(`wp_audit_${post.id}`, JSON.stringify(audited)) } catch {}
+                              nav(`/hermes/wp-audit/${post.id}`, { state: audited })
                             } else {
                               runAudit(post.id)
                             }
                           }}
                           disabled={auditingId === post.id}
                           className={`px-3 py-1 text-xs font-semibold rounded w-full ${
-                            audited 
-                              ? activeAuditId === post.id ? 'bg-app-base text-app-muted border border-border' : 'border border-hermes text-hermes hover:bg-hermes/10'
+                            audited
+                              ? 'border border-hermes text-hermes hover:bg-hermes/10'
                               : 'btn-hermes text-white'
                           }`}
                         >
                           {auditingId === post.id ? (
                             <Loader className="w-3 h-3 animate-spin mx-auto text-app-primary" />
                           ) : audited ? (
-                            activeAuditId === post.id ? 'Đóng' : 'Xem Audit'
+                            'Xem Audit'
                           ) : (
                             'Audit'
                           )}
                         </button>
                       </div>
+
                     </div>
 
                     {/* Audit result panel inside table row */}

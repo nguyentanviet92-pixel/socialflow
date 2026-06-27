@@ -39,6 +39,7 @@ import AccountHealth from './pages/accounts/AccountHealth'
 import DataCenter from './pages/data-center/DataCenter'
 import NickNurture from './pages/nick-nurture/NickNurture'
 import GroupMonitor from './pages/groups/GroupMonitor'
+import WpAuditResult from './pages/hermes/WpAuditResult'
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -127,6 +128,7 @@ export default function App() {
                 <Route path="/hermes/settings" element={<HermesBrain />} />
                 <Route path="/hermes/terminal" element={<HermesBrain />} />
                 <Route path="/hermes/wp-audit" element={<HermesBrain />} />
+                <Route path="/hermes/wp-audit/:postId" element={<WpAuditResult />} />
 
                 {/* ── Legacy redirects & auxiliary sub-routes ── */}
                 <Route path="/dashboard-legacy" element={<Navigate to="/dashboard" replace />} />
