@@ -2743,10 +2743,47 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
         if wp_url and wp_url in href:
             internal_links.append({"text": a.get_text(strip=True), "href": href})
 
-    # 5. Yoast meta nếu có
-    yoast = post.get("yoast_head_json", {}) or {}
-    meta_title = yoast.get("title", "")
-    meta_desc  = yoast.get("description", "")
+    # 5. Extract meta title and description (support RankMath, Yoast, etc.)
+    meta_title = ""
+    meta_desc = ""
+
+    # Try public HTML fetch first (works for all published posts regardless of plugin)
+    public_url = post.get("link", "")
+    if public_url:
+        import httpx
+        from bs4 import BeautifulSoup
+        try:
+            logger.info(f"[WP Audit] Attempting to fetch public HTML for meta tags: {public_url}")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            # Fast timeout to avoid blocking if page is private or down
+            with httpx.Client(follow_redirects=True, timeout=3.0) as http_client:
+                r = http_client.get(public_url, headers=headers)
+                if r.status_code == 200:
+                    soup_html = BeautifulSoup(r.text, 'html.parser')
+                    title_tag = soup_html.find('title')
+                    if title_tag:
+                        t_text = title_tag.get_text(strip=True)
+                        if "page not found" not in t_text.lower() and "404" not in t_text:
+                            meta_title = t_text
+                    
+                    desc_tag = soup_html.find('meta', attrs={'name': 'description'})
+                    if desc_tag and desc_tag.has_attr('content'):
+                        meta_desc = desc_tag['content']
+                    
+                    logger.info(f"[WP Audit] Successfully extracted public meta tags. Title: {meta_title[:50]}..., Desc: {meta_desc[:50]}...")
+        except Exception as e:
+            logger.warning(f"[WP Audit] Failed to fetch public HTML: {e}")
+
+    # Fallback to Yoast or standard WP fields if public fetch didn't yield anything
+    if not meta_title or not meta_desc:
+        yoast = post.get("yoast_head_json", {}) or {}
+        if not meta_title:
+            meta_title = yoast.get("title", "") or post.get("title", {}).get("rendered", "")
+        if not meta_desc:
+            meta_desc = yoast.get("description", "") or post.get("excerpt", {}).get("rendered", "")
+        logger.info(f"[WP Audit] Fallback meta tags used. Title: {meta_title[:50]}..., Desc: {meta_desc[:50]}...")
 
     # 6. Xây dựng context về pillar/cluster
     pillar_context = ""
