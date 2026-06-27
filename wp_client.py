@@ -3,15 +3,42 @@ import base64
 from typing import Optional, List, Dict
 
 class WordPressClient:
-    def __init__(self, wp_url: str, username: str, app_password: str):
-        # Trim space inside Application Password (e.g. xxxx xxxx xxxx)
-        clean_app_pass = app_password.replace(" ", "")
+    def __init__(self, wp_url: str, username: str = "", app_password: str = "", token: str = ""):
+        """
+        Accepts either:
+          - token: pre-built "username:app_password" string (spaces in app_password are stripped)
+          - username + app_password: individual fields (legacy)
+        The token is base64-encoded and sent as HTTP Basic Auth header.
+        """
         self.base = wp_url.rstrip("/") + "/wp-json/wp/v2"
-        creds = base64.b64encode(f"{username}:{clean_app_pass}".encode()).decode()
+
+        if token:
+            # Token can be "user:pass" plain text or already base64-encoded
+            try:
+                # Try decoding to detect if already base64
+                decoded = base64.b64decode(token).decode("utf-8")
+                # Valid base64 with colon → use as-is
+                if ":" in decoded:
+                    creds = token.strip()
+                else:
+                    raise ValueError("not a user:pass base64")
+            except Exception:
+                # Plain "username:app_password" → strip spaces in password part
+                if ":" in token:
+                    parts = token.split(":", 1)
+                    clean = parts[0] + ":" + parts[1].replace(" ", "")
+                else:
+                    clean = token.replace(" ", "")
+                creds = base64.b64encode(clean.encode()).decode()
+        else:
+            clean_app_pass = app_password.replace(" ", "")
+            creds = base64.b64encode(f"{username}:{clean_app_pass}".encode()).decode()
+
         self.headers = {
             "Authorization": f"Basic {creds}",
             "Content-Type": "application/json",
         }
+
 
     async def list_posts(
         self,

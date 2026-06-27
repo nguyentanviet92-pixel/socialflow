@@ -2101,8 +2101,7 @@ function WpAuditSection() {
   // WordPress credentials form state
   const [form, setForm] = useState({
     wp_url: '',
-    wp_username: '',
-    wp_app_password: '',
+    wp_token: '',
   })
 
   // Sync credentials from backend
@@ -2110,8 +2109,7 @@ function WpAuditSection() {
     if (cfg && !isCfgLoading) {
       setForm({
         wp_url: cfg.wp_url || '',
-        wp_username: cfg.wp_username || '',
-        wp_app_password: cfg.wp_app_password || '',
+        wp_token: cfg.wp_token || '',
       })
     }
   }, [cfgData, isCfgLoading])
@@ -2119,12 +2117,11 @@ function WpAuditSection() {
   const saveConfig = useMutation({
     mutationFn: async () => {
       const payload = {
-        wp_url: form.wp_url.strip ? form.wp_url.strip() : form.wp_url.trim(),
-        wp_username: form.wp_username.strip ? form.wp_username.strip() : form.wp_username.trim(),
+        wp_url: form.wp_url.trim(),
       }
-      // Only include password if it's new/changed and not masked
-      if (form.wp_app_password && !form.wp_app_password.includes('...') && form.wp_app_password !== '***') {
-        payload.wp_app_password = form.wp_app_password.strip ? form.wp_app_password.strip() : form.wp_app_password.trim()
+      // Only include token if it's new/changed and not masked
+      if (form.wp_token && !form.wp_token.includes('...') && form.wp_token !== '***') {
+        payload.wp_token = form.wp_token.trim()
       }
       await api.put('/ai-hermes/config', payload)
     },
@@ -2241,7 +2238,7 @@ function WpAuditSection() {
       {/* Connection Config Panel */}
       <div className="p-4 bg-app-elevated space-y-4 border border-border">
         <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🌐 WordPress Connection Cấu hình</h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <label className="block text-[10px] uppercase text-app-muted mb-1">Site URL</label>
             <input
@@ -2253,24 +2250,20 @@ function WpAuditSection() {
             />
           </div>
           <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Username</label>
-            <input
-              type="text"
-              value={form.wp_username}
-              onChange={(e) => setForm(prev => ({ ...prev, wp_username: e.target.value }))}
-              placeholder="admin"
-              className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Application Password</label>
+            <label className="block text-[10px] uppercase text-app-muted mb-1">
+              Token
+              <span className="ml-1 text-app-dim normal-case font-normal">(username:app_password)</span>
+            </label>
             <input
               type="password"
-              value={form.wp_app_password}
-              onChange={(e) => setForm(prev => ({ ...prev, wp_app_password: e.target.value }))}
-              placeholder="xxxx xxxx xxxx xxxx"
+              value={form.wp_token}
+              onChange={(e) => setForm(prev => ({ ...prev, wp_token: e.target.value }))}
+              placeholder="admin:xxxx xxxx xxxx xxxx xxxx xxxx"
               className="w-full px-2 py-1 bg-app-base border border-border text-app-primary rounded"
             />
+            <div className="text-[10px] text-app-dim mt-1">
+              ℹ️ Tạo tại WP Admin → Users → Application Passwords
+            </div>
           </div>
         </div>
         <div className="flex gap-2">
