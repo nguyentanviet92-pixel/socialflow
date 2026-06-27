@@ -2123,7 +2123,7 @@ function WpAuditSection() {
   const [quickScanning, setQuickScanning] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
   const [selectedModel, setSelectedModel] = useState(() => {
-    return localStorage.getItem('wp_audit_selected_model') || 'nvidia:meta/llama-3.3-70b-instruct'
+    return localStorage.getItem('wp_audit_selected_model') || 'kimi:kimi-k2-thinking'
   })
 
   // Sync sites from backend
