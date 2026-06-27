@@ -106,6 +106,7 @@ export default function HermesBrain() {
     if (pathname === '/hermes/learning') return 'learning'
     if (pathname === '/hermes/skills') return 'skills'
     if (pathname === '/hermes/terminal') return 'terminal'
+    if (pathname === '/hermes/wp-audit') return 'wp-audit'
     return 'overview'
   }
   const tab = getActiveTab()
@@ -168,7 +169,8 @@ export default function HermesBrain() {
           { id: 'skills', label: 'Kỹ năng (Skills)' },
           { id: 'learning', label: 'Học tập (Learning)' },
           { id: 'terminal', label: '⚡ Terminal (CLI)' },
-          { id: 'settings', label: 'Cấu hình' }
+          { id: 'settings', label: 'Cấu hình' },
+          { id: 'wp-audit', label: 'WP Audit' }
         ].map((t) => (
           <button
             key={t.id}
@@ -189,6 +191,9 @@ export default function HermesBrain() {
 
       {/* Tab: Settings */}
       {tab === 'settings' && <div className="flex-1 overflow-y-auto"><HermesSettings /></div>}
+
+      {/* Tab: WP Audit */}
+      {tab === 'wp-audit' && <div className="flex-1 overflow-y-auto"><HermesSettings defaultSection="wp_audit" /></div>}
 
       {/* Tab: Learning — self-improvement timeline */}
       {tab === 'learning' && <LearningTimeline />}

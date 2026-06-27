@@ -11,7 +11,7 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Users, Target, Radio, Mail, FileText,
   Brain, Settings, LogOut, Database, Activity, SlidersHorizontal,
-  ChevronsRight, ChevronsLeft,
+  ChevronsRight, ChevronsLeft, Globe,
 } from 'lucide-react'
 import HermesBar from './HermesBar'
 import useAuthStore from '../../store/auth.store'
@@ -27,6 +27,7 @@ const NAV_ITEMS = [
   { to: '/content',       Icon: FileText,          label: 'Nội dung',       short: 'Content' },
   { to: '/data-center',   Icon: Database,          label: 'Data',           short: 'Data' },
   { to: '/hermes',        Icon: Brain,             label: 'Hermes Brain',   short: 'Hermes' },
+  { to: '/hermes/wp-audit', Icon: Globe,            label: 'WP Audit',       short: 'WPAudit' },
   { to: '/hermes/settings', Icon: SlidersHorizontal, label: 'Hermes Config', short: 'Config' },
   { to: '/analytics',     Icon: Activity,          label: 'Thống kê',       short: 'Analytics' },
 ]

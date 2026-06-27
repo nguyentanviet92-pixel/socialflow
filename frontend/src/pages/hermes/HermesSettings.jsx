@@ -2687,8 +2687,15 @@ const SECTIONS = [
   { key: 'wp_audit',  label: 'WP Audit' },
 ]
 
-export default function HermesSettings() {
-  const [section, setSection] = useState('model')
+export default function HermesSettings({ defaultSection }) {
+  const [section, setSection] = useState(defaultSection || 'model')
+
+  useEffect(() => {
+    if (defaultSection) {
+      setSection(defaultSection)
+    }
+  }, [defaultSection])
+
 
   return (
     <div className="flex flex-col h-full">

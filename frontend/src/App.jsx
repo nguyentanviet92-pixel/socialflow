@@ -126,6 +126,7 @@ export default function App() {
                 <Route path="/hermes/learning" element={<HermesBrain />} />
                 <Route path="/hermes/settings" element={<HermesBrain />} />
                 <Route path="/hermes/terminal" element={<HermesBrain />} />
+                <Route path="/hermes/wp-audit" element={<HermesBrain />} />
 
                 {/* ── Legacy redirects & auxiliary sub-routes ── */}
                 <Route path="/dashboard-legacy" element={<Navigate to="/dashboard" replace />} />
