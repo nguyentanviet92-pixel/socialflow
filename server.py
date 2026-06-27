@@ -45,6 +45,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
 import asyncpg
+import httpx
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('hermes-api')
@@ -2750,8 +2752,6 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
     # Try public HTML fetch first (works for all published posts regardless of plugin)
     public_url = post.get("link", "")
     if public_url:
-        import httpx
-        from bs4 import BeautifulSoup
         try:
             logger.info(f"[WP Audit] Attempting to fetch public HTML for meta tags: {public_url}")
             headers = {
