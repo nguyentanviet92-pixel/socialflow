@@ -973,7 +973,7 @@ def _call_provider(
                 raise
         return (resp.choices[0].message.content or '').strip()
 
-FALLBACK_TRIGGER_STATUS = {429, 500, 502, 503, 504}
+FALLBACK_TRIGGER_STATUS = {401, 402, 403, 429, 500, 502, 503, 504}
 
 def call_with_fallback(
     messages: list,
@@ -1069,7 +1069,7 @@ def call_with_fallback(
             if "timeout" in err_str or "timed out" in err_str or "connection" in err_str or "connect error" in err_str:
                 is_fallback_trigger = True
             
-            if status_code in {400, 401, 403}:
+            if status_code in {400}:
                 is_fallback_trigger = False
                 
             if is_fallback_trigger:
