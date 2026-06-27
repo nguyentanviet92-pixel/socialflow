@@ -2559,7 +2559,9 @@ async def run_audit_llm(
 
     fallback_keys = config.get('fallback_keys') or {}
 
-    response_text = call_with_fallback(
+    import asyncio
+    response_text = await asyncio.to_thread(
+        call_with_fallback,
         messages=[
             {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
