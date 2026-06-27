@@ -59,7 +59,7 @@ class WordPressClient:
         if search:
             params["search"] = search
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             r = await client.get(
                 f"{self.base}/posts",
                 headers=self.headers,
@@ -70,7 +70,7 @@ class WordPressClient:
             return r.json()
 
     async def get_post(self, post_id: int) -> dict:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             r = await client.get(
                 f"{self.base}/posts/{post_id}",
                 headers=self.headers,
@@ -81,7 +81,7 @@ class WordPressClient:
             return r.json()
 
     async def get_categories(self) -> List[dict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             r = await client.get(
                 f"{self.base}/categories",
                 headers=self.headers,
@@ -93,7 +93,7 @@ class WordPressClient:
 
     async def update_post(self, post_id: int, data: dict) -> dict:
         """Phase 2: apply suggestions lên WP"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             r = await client.post(
                 f"{self.base}/posts/{post_id}",
                 headers=self.headers,
