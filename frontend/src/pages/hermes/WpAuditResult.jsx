@@ -311,6 +311,20 @@ const STEPS = [
   { label: 'Đồng bộ và lưu kết quả vào Database', icon: '💾' }
 ]
 
+const AUDIT_MODELS = [
+  { id: 'nvidia:meta/llama-3.3-70b-instruct', name: 'NVIDIA Llama 3.3 70B (Khuyên dùng)', badge: 'NVIDIA' },
+  { id: 'nvidia:nvidia/llama-3.1-nemotron-70b-instruct', name: 'NVIDIA Nemotron 70B (Đánh giá tốt)', badge: 'NVIDIA' },
+  { id: 'nvidia:meta/llama-3.1-405b-instruct', name: 'NVIDIA Llama 3.1 405B (Chất lượng cao)', badge: 'NVIDIA' },
+  { id: 'groq:llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B (Tốc độ nhanh)', badge: 'Groq' },
+  { id: 'groq:qwen/qwen3-32b', name: 'Groq Qwen 3 32B', badge: 'Groq' },
+  { id: 'nvidia:deepseek-ai/deepseek-r1', name: 'DeepSeek R1 via NVIDIA (Suy luận)', badge: 'Reasoning' },
+  { id: 'deepseek:deepseek-reasoner', name: 'DeepSeek R1 Direct', badge: 'Reasoning' },
+  { id: 'deepseek:deepseek-chat', name: 'DeepSeek V3', badge: 'DeepSeek' },
+  { id: 'openrouter:anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', badge: 'Claude' },
+  { id: 'openai:gpt-4o', name: 'GPT-4o (Đa dụng)', badge: 'OpenAI' },
+  { id: 'gemini:gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro', badge: 'Gemini' }
+]
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -322,6 +336,9 @@ export default function WpAuditResult() {
 
   const [data, setData] = useState(null)
   const [activeSection, setActiveSection] = useState('scores')
+  const [selectedModel, setSelectedModel] = useState(() => {
+    return localStorage.getItem('wp_audit_selected_model') || 'nvidia:meta/llama-3.3-70b-instruct'
+  })
   const mainRef = useRef(null)
 
   const [reAuditing, setReAuditing] = useState(false)
@@ -341,7 +358,8 @@ export default function WpAuditResult() {
     let apiData = null
 
     // Start API request in parallel
-    api.post(`/ai-hermes/wp/audit/${postId}?force=true&site_idx=${siteIdx}`)
+    const modelParam = selectedModel ? `&model=${encodeURIComponent(selectedModel)}` : ''
+    api.post(`/ai-hermes/wp/audit/${postId}?force=true&site_idx=${siteIdx}${modelParam}`)
       .then(res => {
         apiData = res.data
         apiResolved = true
@@ -497,7 +515,7 @@ export default function WpAuditResult() {
       >
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center gap-2">
           {/* Back & Re-Audit Actions */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <button
               onClick={() => navigate('/hermes/wp-audit')}
               className="inline-flex items-center gap-2 text-sm text-app-muted hover:text-hermes transition-colors"
@@ -506,24 +524,40 @@ export default function WpAuditResult() {
               <span>Quay lại danh sách</span>
             </button>
 
-            <button
-              onClick={handleReAudit}
-              disabled={reAuditing}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes transition-all text-xs font-semibold"
-              title="Đánh giá lại bài viết (quét mới và lưu đè)"
-            >
-              {reAuditing ? (
-                <>
-                  <Loader className="w-3.5 h-3.5 animate-spin" />
-                  <span>Đang quét lại...</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Đánh giá lại</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedModel}
+                onChange={(e) => {
+                  setSelectedModel(e.target.value)
+                  localStorage.setItem('wp_audit_selected_model', e.target.value)
+                }}
+                className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs outline-none"
+                style={{ background: 'rgba(9,11,16,0.6)', border: '1px solid var(--border)' }}
+              >
+                {AUDIT_MODELS.map(m => (
+                  <option key={m.id} value={m.id}>🤖 {m.name}</option>
+                ))}
+              </select>
+
+              <button
+                onClick={handleReAudit}
+                disabled={reAuditing}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes transition-all text-xs font-semibold"
+                title="Đánh giá lại bài viết (quét mới và lưu đè)"
+              >
+                {reAuditing ? (
+                  <>
+                    <Loader className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang quét lại...</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Đánh giá lại</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
 

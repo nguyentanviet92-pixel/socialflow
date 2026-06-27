@@ -2089,6 +2089,20 @@ function AgentPlaywrightSection() {
   )
 }
 
+const AUDIT_MODELS = [
+  { id: 'nvidia:meta/llama-3.3-70b-instruct', name: 'NVIDIA Llama 3.3 70B (Khuyên dùng)', badge: 'NVIDIA' },
+  { id: 'nvidia:nvidia/llama-3.1-nemotron-70b-instruct', name: 'NVIDIA Nemotron 70B (Đánh giá tốt)', badge: 'NVIDIA' },
+  { id: 'nvidia:meta/llama-3.1-405b-instruct', name: 'NVIDIA Llama 3.1 405B (Chất lượng cao)', badge: 'NVIDIA' },
+  { id: 'groq:llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B (Tốc độ nhanh)', badge: 'Groq' },
+  { id: 'groq:qwen/qwen3-32b', name: 'Groq Qwen 3 32B', badge: 'Groq' },
+  { id: 'nvidia:deepseek-ai/deepseek-r1', name: 'DeepSeek R1 via NVIDIA (Suy luận)', badge: 'Reasoning' },
+  { id: 'deepseek:deepseek-reasoner', name: 'DeepSeek R1 Direct', badge: 'Reasoning' },
+  { id: 'deepseek:deepseek-chat', name: 'DeepSeek V3', badge: 'DeepSeek' },
+  { id: 'openrouter:anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', badge: 'Claude' },
+  { id: 'openai:gpt-4o', name: 'GPT-4o (Đa dụng)', badge: 'OpenAI' },
+  { id: 'gemini:gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro', badge: 'Gemini' }
+]
+
 function WpAuditSection() {
   const qc = useQueryClient()
   const { data: cfgData, isLoading: isCfgLoading } = useQuery({
@@ -2105,6 +2119,9 @@ function WpAuditSection() {
   const [quickInput, setQuickInput] = useState('')
   const [quickScanning, setQuickScanning] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
+  const [selectedModel, setSelectedModel] = useState(() => {
+    return localStorage.getItem('wp_audit_selected_model') || 'nvidia:meta/llama-3.3-70b-instruct'
+  })
 
   // Sync sites from backend
   useEffect(() => {
@@ -2243,7 +2260,7 @@ function WpAuditSection() {
       }
 
       // Run audit
-      const auditRes = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}`)
+      const auditRes = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}&model=${encodeURIComponent(selectedModel)}`)
       if (auditRes.data && auditRes.data.audit) {
         const auditData = { ...auditRes.data, post: postInfo || { id: postId } }
         try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(auditData)) } catch {}
@@ -2271,7 +2288,7 @@ function WpAuditSection() {
   const runAudit = async (postId) => {
     setAuditingId(postId)
     try {
-      const res = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}`)
+      const res = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}&model=${encodeURIComponent(selectedModel)}`)
       if (res.data && res.data.audit) {
         // Find the post info for the result page
         const postInfo = posts.find(p => p.id === postId) || { id: postId }
@@ -2508,6 +2525,18 @@ function WpAuditSection() {
             <div className="flex flex-wrap gap-2 items-center justify-between">
               <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🔍 Browse Posts từ WordPress</h4>
               <div className="flex gap-2 items-center">
+                <select
+                  value={selectedModel}
+                  onChange={(e) => {
+                    setSelectedModel(e.target.value)
+                    localStorage.setItem('wp_audit_selected_model', e.target.value)
+                  }}
+                  className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs"
+                >
+                  {AUDIT_MODELS.map(m => (
+                    <option key={m.id} value={m.id}>🤖 {m.name}</option>
+                  ))}
+                </select>
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}

@@ -990,6 +990,14 @@ def call_with_fallback(
     chain = config.get("fallback_chain") or DEFAULT_FALLBACK_CHAIN
     active_chain = [p for p in chain if p.get("enabled")]
 
+    model_override = kwargs.get("model_override")
+    if model_override and ":" in model_override:
+        parts = model_override.split(":", 1)
+        prov, mdl = parts[0], parts[1]
+        override_item = {"provider": prov, "model": mdl, "enabled": True}
+        active_chain = [override_item] + [p for p in active_chain if not (p.get("provider") == prov and p.get("model") == mdl)]
+
+
     last_error = None
 
     for i, provider_cfg in enumerate(active_chain):
@@ -2356,7 +2364,7 @@ Expected LSI Keywords: [danh sách cách nhau bằng dấu phẩy]"""
 async def run_audit_llm(
     title, slug, url, content, headings, internal_links,
     meta_title, meta_desc, excerpt, pillar_context, config,
-    raw_html=""
+    raw_html="", model_override: str = None
 ) -> dict:
     from bs4 import BeautifulSoup
     import re
@@ -2456,6 +2464,7 @@ async def run_audit_llm(
         fallback_keys=fallback_keys,
         temperature=0.2,
         max_tokens=3000,
+        model_override=model_override,
     )
 
     # Clean and parse JSON
@@ -2561,13 +2570,13 @@ async def wp_list_posts(
     return {"posts": posts, "page": page, "per_page": per_page}
 
 @app.post("/hermes/wp/audit/{post_id}")
-async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, x_agent_key: str = Header(None)):
+async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, model: str = None, x_agent_key: str = Header(None)):
     verify_key(x_agent_key)
     config = await load_config()
     client = get_wp_client(config, site_idx)
 
-    # 1. Check cache first if not forced
-    if not force:
+    # 1. Check cache first if not forced and no model override is requested
+    if not force and not model:
         try:
             pool = await get_pool()
             cached = await pool.fetchrow(
@@ -2642,6 +2651,7 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, x_
         pillar_context=pillar_context,
         config=config,
         raw_html=raw_html,
+        model_override=model,
     )
 
     # 8. Save/upsert result in database
