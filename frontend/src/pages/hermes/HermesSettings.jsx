@@ -12,7 +12,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, GripVertical, AlertTriangle, Check, Loader } from 'lucide-react'
+import { Plus, Trash2, GripVertical, AlertTriangle, Check, Loader, ArrowLeft, ChevronRight, Globe, Settings2 } from 'lucide-react'
 import api, { API_BASE } from '../../lib/api'
 import SkillsEditor from './SkillsEditor'
 
@@ -2101,6 +2101,10 @@ function WpAuditSection() {
   // Multi-site WordPress config
   const [sites, setSites] = useState([])
   const [activeSiteIdx, setActiveSiteIdx] = useState(0)
+  const [insideSiteIdx, setInsideSiteIdx] = useState(null)
+  const [quickInput, setQuickInput] = useState('')
+  const [quickScanning, setQuickScanning] = useState(false)
+  const [showConfig, setShowConfig] = useState(false)
 
   // Sync sites from backend
   useEffect(() => {
@@ -2119,6 +2123,7 @@ function WpAuditSection() {
   const removeSite = (idx) => {
     setSites(prev => prev.filter((_, i) => i !== idx))
     if (activeSiteIdx >= sites.length - 1) setActiveSiteIdx(Math.max(0, sites.length - 2))
+    if (insideSiteIdx === idx) setInsideSiteIdx(null)
   }
   const updateSite = (idx, field, value) => {
     setSites(prev => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s))
@@ -2174,12 +2179,13 @@ function WpAuditSection() {
   const { data: catData } = useQuery({
     queryKey: ['hermes', 'wp-categories', activeSiteIdx],
     queryFn: async () => (await api.get(`/ai-hermes/wp/categories?site_idx=${activeSiteIdx}`)).data,
-    enabled: hasSites,
+    enabled: hasSites && insideSiteIdx !== null,
   })
   const categories = catData?.categories || []
   const [selectedCategory, setSelectedCategory] = useState('')
 
   const loadPosts = async (resetPage = false) => {
+    if (insideSiteIdx === null) return
     setLoadingPosts(true)
     const nextPage = resetPage ? 1 : page
     try {
@@ -2204,10 +2210,55 @@ function WpAuditSection() {
 
   // Run initial load or when site/category changes
   useEffect(() => {
-    if (hasSites) {
+    if (hasSites && insideSiteIdx !== null) {
       loadPosts(true)
     }
-  }, [selectedCategory, activeSiteIdx])
+  }, [selectedCategory, activeSiteIdx, insideSiteIdx])
+
+  const handleQuickScan = async () => {
+    if (!quickInput.trim()) return toast.error('Vui lòng nhập URL hoặc ID bài viết')
+    setQuickScanning(true)
+    try {
+      const input = quickInput.trim()
+      let postId = null
+      let postInfo = null
+
+      if (/^\d+$/.test(input)) {
+        postId = parseInt(input)
+        const res = await api.get(`/ai-hermes/wp/posts?page=1&per_page=1&site_idx=${activeSiteIdx}&search=${postId}`)
+        if (res.data && res.data.posts && res.data.posts.length > 0) {
+          postInfo = res.data.posts.find(p => p.id === postId)
+        }
+      } else {
+        // Resolve URL or slug
+        const res = await api.get(`/ai-hermes/wp/resolve?url=${encodeURIComponent(input)}&site_idx=${activeSiteIdx}`)
+        if (res.data && res.data.post) {
+          postId = res.data.post.id
+          postInfo = res.data.post
+        }
+      }
+
+      if (!postId) {
+        throw new Error('Không tìm thấy bài viết tương ứng với URL/ID này')
+      }
+
+      // Run audit
+      const auditRes = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}`)
+      if (auditRes.data && auditRes.data.audit) {
+        const auditData = { ...auditRes.data, post: postInfo || { id: postId } }
+        try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(auditData)) } catch {}
+        toast.success('Đã hoàn thành Audit bài viết! 📊')
+        nav(`/hermes/wp-audit/${postId}`, { state: auditData })
+      } else {
+        toast.error('Audit thất bại: Không nhận được kết quả phân tích')
+      }
+    } catch (err) {
+      toast.error(`Quét nhanh lỗi: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setQuickScanning(false)
+    }
+  }
+
 
 
   // Audit Results state
@@ -2258,140 +2309,235 @@ function WpAuditSection() {
         <p className="text-app-muted text-[11px]">Fetch các bài viết từ WordPress và tiến hành audit chất lượng SEO/GEO/Topic Cluster.</p>
       </div>
 
-      {/* Multi-site Config Panel */}
-      <div className="p-4 bg-app-elevated space-y-4 border border-border">
-        <div className="flex items-center justify-between">
-          <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🌐 WordPress Sites</h4>
-          <button
-            onClick={addSite}
-            className="btn-hermes px-3 py-1 text-xs font-semibold rounded flex items-center gap-1"
-          >
-            <Plus className="w-3 h-3" /> Thêm site
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          {sites.map((site, idx) => (
-            <div key={idx} className="p-3 bg-app-base border border-border rounded space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase text-app-muted font-bold">Site #{idx + 1}</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => testConnection(idx)}
-                    disabled={testingConnection || !site.url}
-                    className="text-[10px] text-hermes hover:underline font-semibold"
-                  >
-                    {testingConnection ? '...' : 'Test'}
-                  </button>
-                  {sites.length > 1 && (
-                    <button
-                      onClick={() => removeSite(idx)}
-                      className="text-[10px] text-danger hover:underline font-semibold"
-                    >
-                      Xoá
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div>
-                  <label className="block text-[10px] uppercase text-app-dim mb-0.5">Tên</label>
-                  <input
-                    type="text"
-                    value={site.name || ''}
-                    onChange={(e) => updateSite(idx, 'name', e.target.value)}
-                    placeholder="Tino Blog"
-                    className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] uppercase text-app-dim mb-0.5">Site URL</label>
-                  <input
-                    type="text"
-                    value={site.url || ''}
-                    onChange={(e) => updateSite(idx, 'url', e.target.value)}
-                    placeholder="https://tino.vn/blog"
-                    className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] uppercase text-app-dim mb-0.5">
-                    Token <span className="normal-case font-normal">(user:app_pass)</span>
-                  </label>
-                  <input
-                    type="password"
-                    value={site.token || ''}
-                    onChange={(e) => updateSite(idx, 'token', e.target.value)}
-                    placeholder="admin:xxxx xxxx xxxx"
-                    className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => saveConfig.mutate()}
-            disabled={saveConfig.isPending}
-            className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded"
-          >
-            {saveConfig.isPending ? 'Đang lưu…' : 'Lưu tất cả'}
-          </button>
-          <span className="text-[10px] text-app-dim">
-            ℹ️ Tạo App Password tại WP Admin → Users → Application Passwords
-          </span>
-        </div>
-      </div>
-
-      {/* Post browser list */}
-      {hasSites && (
+      {insideSiteIdx === null ? (
+        // DASHBOARD VIEW: List of configured sites
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-2 items-center justify-between">
-            <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🔍 Browse Posts từ WordPress</h4>
-            <div className="flex gap-2 items-center">
-              {/* Site Selector */}
-              {sites.filter(s => s.url?.trim()).length > 1 && (
-                <select
-                  value={activeSiteIdx}
-                  onChange={(e) => { setActiveSiteIdx(Number(e.target.value)); setSelectedCategory('') }}
-                  className="px-2 py-1 bg-app-elevated border border-hermes/40 text-hermes rounded font-mono-ui text-xs font-semibold"
-                >
-                  {sites.map((s, i) => s.url?.trim() ? (
-                    <option key={i} value={i}>🌐 {s.name || new URL(s.url).hostname}</option>
-                  ) : null)}
-                </select>
-              )}
-
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs"
+          <div className="flex items-center justify-between">
+            <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider flex items-center gap-1.5">
+              <Globe className="w-4 h-4 text-hermes" /> WordPress Sites ({sites.filter(s => s.url?.trim()).length})
+            </h4>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowConfig(!showConfig)}
+                className="btn-ghost px-3 py-1 text-xs font-semibold border border-border rounded flex items-center gap-1"
               >
-                <option value="">📂 Tất cả danh mục</option>
-                {categories.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.count})</option>
-                ))}
-              </select>
-              <div className="flex">
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && loadPosts(true)}
-                  placeholder="Tìm kiếm bài viết..."
-                  className="px-2 py-1 bg-app-base border border-border text-app-primary w-48 rounded-l border-r-0 font-mono-ui text-xs"
-                />
-                <button
-                  onClick={() => loadPosts(true)}
-                  className="btn-hermes px-3 py-1 rounded-r text-xs border border-hermes font-semibold"
-                >
-                  Tìm
-                </button>
-              </div>
+                <Settings2 className="w-3.5 h-3.5" /> {showConfig ? 'Đóng cấu hình' : 'Quản lý sites'}
+              </button>
+              <button
+                onClick={addSite}
+                className="btn-hermes px-3 py-1 text-xs font-semibold rounded flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> Thêm site
+              </button>
             </div>
           </div>
+
+          {/* Config Editor Panel (Toggled) */}
+          {showConfig && (
+            <div className="p-4 bg-app-elevated space-y-4 border border-border rounded">
+              <div className="space-y-3">
+                {sites.map((site, idx) => (
+                  <div key={idx} className="p-3 bg-app-base border border-border rounded space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase text-app-muted font-bold">Site #{idx + 1}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => testConnection(idx)}
+                          disabled={testingConnection || !site.url}
+                          className="text-[10px] text-hermes hover:underline font-semibold"
+                        >
+                          {testingConnection ? '...' : 'Test'}
+                        </button>
+                        {sites.length > 1 && (
+                          <button
+                            onClick={() => removeSite(idx)}
+                            className="text-[10px] text-danger hover:underline font-semibold"
+                          >
+                            Xoá
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10px] uppercase text-app-dim mb-0.5">Tên</label>
+                        <input
+                          type="text"
+                          value={site.name || ''}
+                          onChange={(e) => updateSite(idx, 'name', e.target.value)}
+                          placeholder="Tino Blog"
+                          className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs font-mono-ui"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase text-app-dim mb-0.5">Site URL</label>
+                        <input
+                          type="text"
+                          value={site.url || ''}
+                          onChange={(e) => updateSite(idx, 'url', e.target.value)}
+                          placeholder="https://tino.vn/blog"
+                          className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs font-mono-ui"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase text-app-dim mb-0.5">
+                          Token <span className="normal-case font-normal">(user:app_pass)</span>
+                        </label>
+                        <input
+                          type="password"
+                          value={site.token || ''}
+                          onChange={(e) => updateSite(idx, 'token', e.target.value)}
+                          placeholder="admin:xxxx xxxx xxxx"
+                          className="w-full px-2 py-1 bg-app-elevated border border-border text-app-primary rounded text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    saveConfig.mutate()
+                    setShowConfig(false)
+                  }}
+                  disabled={saveConfig.isPending}
+                  className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded"
+                >
+                  {saveConfig.isPending ? 'Đang lưu…' : 'Lưu tất cả'}
+                </button>
+                <span className="text-[10px] text-app-dim">
+                  ℹ️ Tạo App Password tại WP Admin → Users → Application Passwords
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Grid of Site Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {sites.filter(s => s.url?.trim()).map((site, idx) => (
+              <div
+                key={idx}
+                onClick={() => {
+                  setActiveSiteIdx(idx)
+                  setInsideSiteIdx(idx)
+                }}
+                className="p-4 bg-app-elevated border border-border hover:border-hermes/60 rounded cursor-pointer transition-all duration-150 group flex items-center justify-between"
+              >
+                <div className="space-y-1.5 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🌐</span>
+                    <span className="font-bold text-app-primary text-sm group-hover:text-hermes transition-colors truncate block">
+                      {site.name || 'Default Site'}
+                    </span>
+                  </div>
+                  <div className="text-app-muted text-[11px] font-mono-ui truncate max-w-xs">{site.url}</div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-app-muted group-hover:text-hermes group-hover:translate-x-0.5 transition-all" />
+              </div>
+            ))}
+            {sites.filter(s => s.url?.trim()).length === 0 && (
+              <div className="col-span-2 text-center p-8 bg-app-elevated border border-dashed border-border rounded text-app-muted">
+                Chưa có WordPress site nào được cấu hình. Hãy click "Quản lý sites" để cấu hình.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        // INSIDE SITE VIEW: Load posts browser & quick URL scanning
+        <div className="space-y-6">
+          {/* Breadcrumb / Site Header */}
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setInsideSiteIdx(null)}
+                className="btn-ghost p-1 border border-border rounded text-app-muted hover:text-app-primary"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+              <div>
+                <h4 className="text-app-primary font-bold text-sm">
+                  {sites[insideSiteIdx]?.name || 'WordPress Site'}
+                </h4>
+                <div className="text-app-dim text-[11px] font-mono-ui">{sites[insideSiteIdx]?.url}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => testConnection(insideSiteIdx)}
+              disabled={testingConnection}
+              className="text-[11px] btn-ghost px-3 py-1 border border-border rounded text-app-primary font-semibold flex items-center gap-1"
+            >
+              {testingConnection ? <Loader className="w-3 h-3 animate-spin" /> : 'Test kết nối'}
+            </button>
+          </div>
+
+          {/* Quick Scan / URL Input Section */}
+          <div className="p-4 bg-app-elevated border border-border rounded space-y-3">
+            <h5 className="font-bold text-app-primary text-xs uppercase tracking-wider flex items-center gap-1.5">
+              🚀 Quét nhanh bài viết bằng URL hoặc ID
+            </h5>
+            <p className="text-app-muted text-[11px]">Dán link bài viết trực tiếp hoặc nhập ID từ WordPress để tiến hành audit ngay.</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={quickInput}
+                onChange={(e) => setQuickInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleQuickScan()}
+                placeholder="Ví dụ: https://tino.vn/blog/api-model-ai/ hoặc 12345"
+                className="flex-1 px-3 py-1.5 bg-app-base border border-border text-app-primary rounded font-mono-ui text-xs"
+              />
+              <button
+                onClick={handleQuickScan}
+                disabled={quickScanning || !quickInput.trim()}
+                className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded flex items-center gap-1.5"
+              >
+                {quickScanning ? (
+                  <>
+                    <Loader className="w-3.5 h-3.5 animate-spin" /> Đang quét…
+                  </>
+                ) : (
+                  'Quét ngay'
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Browser Section */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2 items-center justify-between">
+              <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🔍 Browse Posts từ WordPress</h4>
+              <div className="flex gap-2 items-center">
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs"
+                >
+                  <option value="">📂 Tất cả danh mục</option>
+                  {categories.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.count})</option>
+                  ))}
+                </select>
+                <div className="flex">
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && loadPosts(true)}
+                    placeholder="Tìm kiếm bài viết..."
+                    className="px-2 py-1 bg-app-base border border-border text-app-primary w-48 rounded-l border-r-0 font-mono-ui text-xs"
+                  />
+                  <button
+                    onClick={() => loadPosts(true)}
+                    className="btn-hermes px-3 py-1 rounded-r text-xs border border-hermes font-semibold"
+                  >
+                    Tìm
+                  </button>
+                </div>
+            </div>
+          </div>
+
+
 
 
           <div className="border border-border rounded overflow-hidden">
@@ -2736,9 +2882,11 @@ function WpAuditSection() {
             )}
           </div>
         </div>
-      )}
-    </div>
-  )
+      </div>
+    )}
+  </div>
+)
+
 }
 
 const SECTIONS = [
