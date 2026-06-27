@@ -2289,6 +2289,56 @@ Dựa vào content THỰC TẾ ở trên để viết suggestions — không dù
 Trả về JSON với structure sau:
 
 {{
+  "checklist": {{
+    "seo": {{
+      "meta_title_has_keyword": true,
+      "meta_title_len_60": true,
+      "meta_title_len_opt": false,
+      "meta_desc_has_keyword": true,
+      "meta_desc_len_160": true,
+      "meta_desc_has_cta": false,
+      "h1_exactly_one": true,
+      "h1_has_keyword": true,
+      "h2_count_3": true,
+      "h2_count_5": false,
+      "word_count_min": true,
+      "word_count_opt": false,
+      "internal_links_keyword": true,
+      "internal_links_count": false,
+      "keyword_in_opening": true,
+      "images_have_alt": true
+    }},
+    "geo": {{
+      "opening_definition": true,
+      "definition_independent": true,
+      "has_faq_5": true,
+      "faq_at_end": true,
+      "faq_user_style": true,
+      "comparison_table": false,
+      "step_by_step": true,
+      "entity_context": true,
+      "statistics": false,
+      "current_year": true
+    }},
+    "pillar_cluster": {{
+      "correct_type": true,
+      "correct_direction": true,
+      "sufficient_links": true,
+      "anchors_have_keyword": true,
+      "topic_coverage": true,
+      "no_cluster_gaps": false,
+      "not_orphan": true
+    }},
+    "semantic": {{
+      "keyword_h1": true,
+      "keyword_opening": true,
+      "secondary_entities": false,
+      "lsi_natural": true,
+      "intent_complete": true,
+      "no_cannibalization": true,
+      "depth_freshness": true
+    }}
+  }},
   "post_type": "pillar" | "cluster" | "standalone",
   "pillar_topic": "tên pillar",
   "main_keyword": "keyword chính thực sự của bài (không phải slug)",
@@ -2360,6 +2410,58 @@ Expected LSI Keywords: [danh sách cách nhau bằng dấu phẩy]"""
         return entities or "N/A", lsi or "N/A"
     except Exception:
         return "N/A", "N/A"
+
+SEO_CHECKLIST = {
+    "meta_title_has_keyword": ("Meta title chứa main keyword", 2),
+    "meta_title_len_60": ("Meta title ≤60 ký tự", 2),
+    "meta_title_len_opt": ("Meta title 50–60 ký tự (zone tối ưu)", 1),
+    "meta_desc_has_keyword": ("Meta description chứa main keyword", 2),
+    "meta_desc_len_160": ("Meta description ≤160 ký tự", 1),
+    "meta_desc_has_cta": ("Meta description có call-to-action", 1),
+    "h1_exactly_one": ("Đúng 1 thẻ H1", 2),
+    "h1_has_keyword": ("H1 chứa main keyword", 2),
+    "h2_count_3": ("Có ≥3 thẻ H2", 2),
+    "h2_count_5": ("Có ≥5 thẻ H2", 1),
+    "word_count_min": ("Word count đạt chuẩn tối thiểu (1500w pillar / 800w cluster)", 2),
+    "word_count_opt": ("Word count đạt chuẩn tối ưu (2500w pillar / 1200w cluster)", 1),
+    "internal_links_keyword": ("≥5 internal links có anchor text chứa keyword", 2),
+    "internal_links_count": ("≥10 internal links", 1),
+    "keyword_in_opening": ("Keyword xuất hiện trong 100 từ đầu", 1),
+    "images_have_alt": ("Tất cả ảnh có alt text", 2),
+}
+
+GEO_CHECKLIST = {
+    "opening_definition": ("200 từ đầu có câu định nghĩa rõ ràng dạng [X] là...", 5),
+    "definition_independent": ("Định nghĩa có thể đọc độc lập (không dùng đại từ)", 3),
+    "has_faq_5": ("Có FAQ block ≥5 cặp Q&A", 4),
+    "faq_at_end": ("FAQ nằm cuối bài (đúng vị trí)", 2),
+    "faq_user_style": ("Câu hỏi FAQ dạng người thực hỏi", 2),
+    "comparison_table": ("Có bảng so sánh (table)", 3),
+    "step_by_step": ("Có numbered list hoặc step-by-step", 2),
+    "entity_context": ("Entity có số liệu/context cụ thể đi kèm", 2),
+    "statistics": ("Có số liệu thống kê cụ thể (%, $, năm, số lượng)", 1),
+    "current_year": ("Có năm hiện tại (2025/2026) trong title hoặc content", 1),
+}
+
+PILLAR_CLUSTER_CHECKLIST = {
+    "correct_type": ("Xác định đúng loại bài (pillar/cluster) và nội dung phù hợp", 5),
+    "correct_direction": ("Internal link đúng chiều (pillar→cluster / cluster→pillar)", 4),
+    "sufficient_links": ("Số lượng internal link đủ theo loại bài", 3),
+    "anchors_have_keyword": ("Anchor text của internal link có keyword liên quan", 3),
+    "topic_coverage": ("Topic coverage đủ (pillar ≥70% / cluster focus 1 subtopic)", 5),
+    "no_cluster_gaps": ("Không có cluster gap nghiêm trọng", 3),
+    "not_orphan": ("Không phải orphan page (có link từ pillar về cluster)", 2),
+}
+
+SEMANTIC_CHECKLIST = {
+    "keyword_h1": ("Main keyword xuất hiện trong H1", 3),
+    "keyword_opening": ("Main keyword xuất hiện trong 100 từ đầu", 3),
+    "secondary_entities": ("Entity coverage: có thêm secondary entities", 3),
+    "lsi_natural": ("LSI keywords đa dạng, xuất hiện tự nhiên", 3),
+    "intent_complete": ("Cover cả intent informational lẫn commercial", 3),
+    "no_cannibalization": ("Không có dấu hiệu keyword cannibalization", 3),
+    "depth_freshness": ("Độ sâu kiến thức & độ tươi mới nội dung", 7),
+}
 
 async def run_audit_llm(
     title, slug, url, content, headings, internal_links,
@@ -2478,15 +2580,20 @@ async def run_audit_llm(
 
     result = json.loads(raw_text.strip())
 
-    # Mandatory post-processing validation
-    if "score_breakdown" not in result:
-        result["score_breakdown"] = {}
+    # Calculate scores based on the checklist
+    chk = result.get("checklist", {})
+    if not isinstance(chk, dict):
+        chk = {}
 
-    b = result["score_breakdown"]
-    seo = b.get("seo") if b.get("seo") is not None else b.get("seo_score", 0)
-    geo = b.get("geo") if b.get("geo") is not None else b.get("geo_score", 0)
-    pillar_cluster = b.get("pillar_cluster", 0)
-    semantic = b.get("semantic") if b.get("semantic") is not None else b.get("semantic_score", 0)
+    seo_chk = chk.get("seo", {}) if isinstance(chk.get("seo"), dict) else {}
+    geo_chk = chk.get("geo", {}) if isinstance(chk.get("geo"), dict) else {}
+    pc_chk = chk.get("pillar_cluster", {}) if isinstance(chk.get("pillar_cluster"), dict) else {}
+    sem_chk = chk.get("semantic", {}) if isinstance(chk.get("semantic"), dict) else {}
+
+    seo = sum(val[1] for k, val in SEO_CHECKLIST.items() if seo_chk.get(k) is True)
+    geo = sum(val[1] for k, val in GEO_CHECKLIST.items() if geo_chk.get(k) is True)
+    pillar_cluster = sum(val[1] for k, val in PILLAR_CLUSTER_CHECKLIST.items() if pc_chk.get(k) is True)
+    semantic = sum(val[1] for k, val in SEMANTIC_CHECKLIST.items() if sem_chk.get(k) is True)
 
     # Normalize within 0-25
     seo = max(0, min(25, seo))
@@ -2494,13 +2601,23 @@ async def run_audit_llm(
     pillar_cluster = max(0, min(25, pillar_cluster))
     semantic = max(0, min(25, semantic))
 
-    b["seo"] = seo
-    b["seo_score"] = seo
-    b["geo"] = geo
-    b["geo_score"] = geo
-    b["pillar_cluster"] = pillar_cluster
-    b["semantic"] = semantic
-    b["semantic_score"] = semantic
+    # Construct checklist_results for frontend
+    result["checklist_results"] = {
+        "seo": [{"key": k, "label": val[0], "points": val[1], "passed": seo_chk.get(k) is True} for k, val in SEO_CHECKLIST.items()],
+        "geo": [{"key": k, "label": val[0], "points": val[1], "passed": geo_chk.get(k) is True} for k, val in GEO_CHECKLIST.items()],
+        "pillar_cluster": [{"key": k, "label": val[0], "points": val[1], "passed": pc_chk.get(k) is True} for k, val in PILLAR_CLUSTER_CHECKLIST.items()],
+        "semantic": [{"key": k, "label": val[0], "points": val[1], "passed": sem_chk.get(k) is True} for k, val in SEMANTIC_CHECKLIST.items()]
+    }
+
+    result["score_breakdown"] = {
+        "seo": seo,
+        "seo_score": seo,
+        "geo": geo,
+        "geo_score": geo,
+        "pillar_cluster": pillar_cluster,
+        "semantic": semantic,
+        "semantic_score": semantic
+    }
 
     # Update total score
     result["audit_score"] = seo + geo + pillar_cluster + semantic

@@ -262,6 +262,7 @@ function SemanticChip({ text }) {
    ═══════════════════════════════════════════════════════════════ */
 const TOC_ITEMS = [
   { id: 'scores',      label: 'Điểm tổng quan',        icon: Target },
+  { id: 'checklist',   label: 'Tiêu chí đánh giá',     icon: List },
   { id: 'strengths',   label: 'Điểm mạnh',             icon: Star },
   { id: 'issues',      label: 'Vấn đề cần sửa',        icon: AlertTriangle },
   { id: 'suggestions', label: 'Đề xuất chỉnh sửa',     icon: PenTool },
@@ -342,6 +343,7 @@ export default function WpAuditResult() {
   const [selectedModel, setSelectedModel] = useState(() => {
     return localStorage.getItem('wp_audit_selected_model') || 'nvidia:meta/llama-3.3-70b-instruct'
   })
+  const [checklistTab, setChecklistTab] = useState('seo')
   const mainRef = useRef(null)
 
   const [reAuditing, setReAuditing] = useState(false)
@@ -660,6 +662,84 @@ export default function WpAuditResult() {
                 </span>
               </div>
             </div>
+          </section>
+
+          {/* ─── 1.5. DETAILED AUDIT CHECKLIST ─── */}
+          <section id="checklist" className="scroll-mt-24">
+            <Section id="checklist-section" icon={List} title="📋 Chi tiết tiêu chí kiểm tra (Audit Checklist)">
+              {audit.checklist_results ? (
+                <div className="space-y-4">
+                  {/* Category Tabs */}
+                  <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+                    {Object.entries({
+                      seo: { label: 'SEO Fundamentals', score: sb.seo_score ?? sb.seo ?? 0 },
+                      geo: { label: 'Generative Engine (GEO)', score: sb.geo_score ?? sb.geo ?? 0 },
+                      pillar_cluster: { label: 'Pillar / Topic Cluster', score: sb.pillar_cluster ?? 0 },
+                      semantic: { label: 'Semantic Content', score: sb.semantic_score ?? sb.semantic ?? 0 }
+                    }).map(([key, cat]) => {
+                      const active = checklistTab === key
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => setChecklistTab(key)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${
+                            active
+                              ? 'bg-hermes/15 border-hermes text-hermes'
+                              : 'bg-app-elevated border-border text-app-muted hover:text-app-primary'
+                          }`}
+                        >
+                          {cat.label} ({cat.score}/25)
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Checklist Items list */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    {(audit.checklist_results[checklistTab] || []).map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 hover-row"
+                        style={{
+                          background: 'var(--bg-elevated)',
+                          borderColor: item.passed ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                        }}
+                      >
+                        <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-app-base border border-border">
+                          {item.passed ? (
+                            <CheckCircle2 size={14} className="text-green-500" />
+                          ) : (
+                            <XCircle size={14} className="text-red-500" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs ${item.passed ? 'text-app-primary font-medium' : 'text-app-dim'}`}>
+                            {item.label}
+                          </p>
+                        </div>
+                        <span
+                          className={`text-xs font-mono-ui font-bold px-2 py-0.5 rounded ${
+                            item.passed
+                              ? 'bg-green-500/10 text-green-500 border border-green-500/20'
+                              : 'bg-app-base text-app-dim border border-border'
+                          }`}
+                        >
+                          +{item.points}đ
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 bg-app-elevated border border-border rounded-xl flex flex-col items-center justify-center gap-3 text-center">
+                  <Info className="w-8 h-8 text-hermes" />
+                  <p className="text-xs text-app-muted max-w-md leading-relaxed">
+                    Dữ liệu checklist chi tiết chưa khả dụng cho bản quét cũ này.
+                    Vui lòng bấm <strong className="text-hermes">Đánh giá lại</strong> ở góc trên bên phải để quét mới và hiển thị đầy đủ checklist chi tiết.
+                  </p>
+                </div>
+              )}
+            </Section>
           </section>
 
           {/* ─── 2. STRENGTHS ─── */}
