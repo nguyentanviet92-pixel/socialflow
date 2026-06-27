@@ -724,12 +724,13 @@ module.exports = async (fastify) => {
   // ─── WordPress Integration ──────────────────────────────
   fastify.get('/wp/posts', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
-      const { page = 1, per_page = 20, search = '', category_id } = req.query
+      const { page = 1, per_page = 20, search = '', category_id, site_idx = 0 } = req.query
       const url = new URL(`${HERMES_URL}/hermes/wp/posts`)
       url.searchParams.append('page', page)
       url.searchParams.append('per_page', per_page)
       if (search) url.searchParams.append('search', search)
       if (category_id) url.searchParams.append('category_id', category_id)
+      url.searchParams.append('site_idx', site_idx)
 
       const res = await fetch(url.toString(), {
         headers: { 'X-Agent-Key': AGENT_SECRET },
@@ -744,7 +745,11 @@ module.exports = async (fastify) => {
   fastify.post('/wp/audit/:post_id', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const postId = req.params.post_id
-      const res = await fetch(`${HERMES_URL}/hermes/wp/audit/${postId}`, {
+      const { site_idx = 0 } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/wp/audit/${postId}`)
+      url.searchParams.append('site_idx', site_idx)
+
+      const res = await fetch(url.toString(), {
         method: 'POST',
         headers: { 'X-Agent-Key': AGENT_SECRET },
         signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
@@ -758,7 +763,11 @@ module.exports = async (fastify) => {
   fastify.put('/wp/apply/:post_id', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const postId = req.params.post_id
-      const res = await fetch(`${HERMES_URL}/hermes/wp/apply/${postId}`, {
+      const { site_idx = 0 } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/wp/apply/${postId}`)
+      url.searchParams.append('site_idx', site_idx)
+
+      const res = await fetch(url.toString(), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -775,7 +784,11 @@ module.exports = async (fastify) => {
 
   fastify.get('/wp/categories', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
-      const res = await fetch(`${HERMES_URL}/hermes/wp/categories`, {
+      const { site_idx = 0 } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/wp/categories`)
+      url.searchParams.append('site_idx', site_idx)
+
+      const res = await fetch(url.toString(), {
         headers: { 'X-Agent-Key': AGENT_SECRET },
         signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
@@ -784,4 +797,23 @@ module.exports = async (fastify) => {
       return reply.code(503).send({ error: err.message })
     }
   })
+
+  fastify.get('/wp/resolve', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const { url: wpUrl, slug, site_idx = 0 } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/wp/resolve`)
+      if (wpUrl) url.searchParams.append('url', wpUrl)
+      if (slug) url.searchParams.append('slug', slug)
+      url.searchParams.append('site_idx', site_idx)
+
+      const res = await fetch(url.toString(), {
+        headers: { 'X-Agent-Key': AGENT_SECRET },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
 }
