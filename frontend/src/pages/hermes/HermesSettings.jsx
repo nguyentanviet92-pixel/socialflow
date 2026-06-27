@@ -12,7 +12,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, GripVertical, AlertTriangle, Check, Loader, ArrowLeft, ChevronRight, Globe, Settings2 } from 'lucide-react'
+import { Plus, Trash2, GripVertical, AlertTriangle, Check, Loader, ArrowLeft, ChevronRight, Globe, Settings2, RefreshCw } from 'lucide-react'
 import api, { API_BASE } from '../../lib/api'
 import SkillsEditor from './SkillsEditor'
 
@@ -2176,7 +2176,7 @@ function WpAuditSection() {
   const hasSites = sites.some(s => s.url?.trim())
 
   // Categories list
-  const { data: catData } = useQuery({
+  const { data: catData, refetch: refetchCategories } = useQuery({
     queryKey: ['hermes', 'wp-categories', activeSiteIdx],
     queryFn: async () => (await api.get(`/ai-hermes/wp/categories?site_idx=${activeSiteIdx}`)).data,
     enabled: hasSites && insideSiteIdx !== null,
@@ -2518,7 +2518,19 @@ function WpAuditSection() {
                     <option key={c.id} value={c.id}>{c.name} ({c.count})</option>
                   ))}
                 </select>
+                <button
+                  onClick={() => {
+                    refetchCategories()
+                    loadPosts(true)
+                    toast.success('Đã tải lại danh mục & bài viết 🔄')
+                  }}
+                  className="btn-ghost p-1 border border-border rounded text-app-muted hover:text-app-primary"
+                  title="Làm mới chủ đề & bài viết"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
                 <div className="flex">
+
                   <input
                     type="text"
                     value={search}
