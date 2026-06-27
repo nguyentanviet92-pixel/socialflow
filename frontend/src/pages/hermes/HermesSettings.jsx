@@ -2192,6 +2192,8 @@ function WpAuditSection() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
+  const [showAuditPopup, setShowAuditPopup] = useState(false)
+  const [auditPopupData, setAuditPopupData] = useState(null)
 
   const hasSites = sites.some(s => s.url?.trim())
 
@@ -2268,7 +2270,8 @@ function WpAuditSection() {
         const auditData = { ...auditRes.data, post: postInfo || { id: postId } }
         try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(auditData)) } catch {}
         toast.success('Đã hoàn thành Audit bài viết! 📊')
-        nav(`/hermes/wp-audit/${postId}`, { state: auditData })
+        setAuditPopupData(auditData)
+        setShowAuditPopup(true)
       } else {
         toast.error('Audit thất bại: Không nhận được kết quả phân tích')
       }
@@ -2300,8 +2303,8 @@ function WpAuditSection() {
         // Save to sessionStorage for the audit result page
         try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(auditData)) } catch {}
         toast.success('Đã hoàn thành Audit bài viết! 📊')
-        // Navigate to dedicated audit result page
-        nav(`/hermes/wp-audit/${postId}`, { state: auditData })
+        setAuditPopupData(auditData)
+        setShowAuditPopup(true)
       } else {
         toast.error('Audit thất bại: Không nhận được kết quả phân tích')
       }
@@ -2924,6 +2927,126 @@ function WpAuditSection() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ─── AUDIT COMPLETE POPUP MODAL ─── */}
+    {showAuditPopup && auditPopupData && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(8px)' }}>
+        <div 
+          className="w-full max-w-lg rounded-2xl p-6 md:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in duration-200 text-left"
+          style={{ 
+            background: 'var(--bg-surface)', 
+            border: '1px solid var(--border)',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+          }}
+        >
+          {/* Header */}
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full mb-2" style={{ background: 'var(--hermes-dim)', border: '1px solid var(--hermes-fade)' }}>
+              <span className="text-2xl animate-bounce">🎉</span>
+            </div>
+            <h3 className="text-lg font-bold text-app-primary">Hoàn thành Audit bài viết!</h3>
+            <p 
+              className="text-xs text-app-muted font-semibold line-clamp-2 max-w-sm mx-auto"
+              dangerouslySetInnerHTML={{ __html: auditPopupData.post?.title?.rendered }}
+            />
+            <span className="inline-block text-[10px] uppercase font-bold px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--hermes)' }}>
+              ID: {auditPopupData.post_id} | Mode: {auditPopupData.audit?.post_type || 'cluster'}
+            </span>
+          </div>
+
+          {/* Score Wheel Overview */}
+          <div className="flex flex-col items-center justify-center py-2 space-y-2">
+            <div className="relative w-28 h-28 flex items-center justify-center">
+              {/* SVG Progress Circle */}
+              <svg className="w-full h-full transform -rotate-90" viewBox="0 0 112 112">
+                <circle cx="56" cy="56" r="48" fill="none" stroke="var(--border)" strokeWidth="6" />
+                <circle 
+                  cx="56" 
+                  cy="56" 
+                  r="48" 
+                  fill="none" 
+                  stroke={(auditPopupData.audit?.audit_score || 0) >= 70 ? '#22c55e' : (auditPopupData.audit?.audit_score || 0) >= 50 ? '#eab308' : '#ef4444'} 
+                  strokeWidth="8" 
+                  strokeDasharray={2 * Math.PI * 48}
+                  strokeDashoffset={2 * Math.PI * 48 * (1 - (auditPopupData.audit?.audit_score || 0) / 100)}
+                  strokeLinecap="round"
+                  style={{ transition: 'stroke-dashoffset 1s ease-in-out' }}
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <span className="text-3xl font-extrabold text-app-primary font-mono-ui" style={{ lineHeight: 1 }}>{auditPopupData.audit?.audit_score || 0}</span>
+                <span className="text-[9px] uppercase tracking-wider text-app-dim font-bold mt-0.5">/100 Điểm</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Breakdown progress rows */}
+          <div className="grid grid-cols-2 gap-3">
+            {Object.entries(auditPopupData.audit?.score_breakdown || {}).map(([key, val]) => (
+              <div key={key} className="p-2.5 rounded-xl border border-border" style={{ background: 'var(--bg-elevated)' }}>
+                <div className="text-[9px] uppercase text-app-dim font-bold tracking-wider">{key.replace('_', ' ')}</div>
+                <div className="flex items-baseline justify-between mt-1">
+                  <span className="font-mono-ui font-extrabold text-app-primary text-sm">{val}/25</span>
+                  <span className="text-[9px] font-mono-ui text-app-muted">{Math.round((val/25)*100)}%</span>
+                </div>
+                <div className="w-full bg-app-base h-1.5 mt-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full rounded-full" 
+                    style={{ 
+                      width: `${(val/25)*100}%`,
+                      background: val >= 18 ? '#22c55e' : val >= 12 ? '#eab308' : '#ef4444'
+                    }}
+                  ></div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Stats counts banner */}
+          <div className="flex items-center justify-around p-3 rounded-xl border border-border text-center font-mono-ui text-[10px]" style={{ background: 'var(--bg-elevated)' }}>
+            <div>
+              <div className="text-app-dim uppercase font-bold">Vấn đề nghiêm trọng</div>
+              <div className="text-sm font-extrabold mt-0.5" style={{ color: '#ef4444' }}>
+                {auditPopupData.audit?.critical_issues?.length || 0}
+              </div>
+            </div>
+            <div className="w-px h-6 bg-border"></div>
+            <div>
+              <div className="text-app-dim uppercase font-bold">GEO Quick Wins</div>
+              <div className="text-sm font-extrabold mt-0.5 text-hermes">
+                {auditPopupData.audit?.geo_quick_wins?.length || 0}
+              </div>
+            </div>
+            <div className="w-px h-6 bg-border"></div>
+            <div>
+              <div className="text-app-dim uppercase font-bold">Entities / Keywords</div>
+              <div className="text-sm font-extrabold mt-0.5 text-app-primary">
+                {(auditPopupData.audit?.suggestions?.missing_entities?.length || 0) + (auditPopupData.audit?.suggestions?.missing_lsi_keywords?.length || 0)}
+              </div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setShowAuditPopup(false)}
+              className="flex-1 btn-ghost border border-border py-2 text-xs font-semibold rounded-xl text-app-primary"
+            >
+              Đóng
+            </button>
+            <button
+              onClick={() => {
+                setShowAuditPopup(false)
+                nav(`/hermes/wp-audit/${auditPopupData.post_id}`, { state: auditPopupData })
+              }}
+              className="flex-1 btn-hermes py-2 text-xs font-semibold rounded-xl text-white flex items-center justify-center gap-1.5"
+            >
+              Xem Đánh Giá Chi Tiết 👉
+            </button>
           </div>
         </div>
       </div>
