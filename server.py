@@ -2586,6 +2586,7 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, x_
                     "title": title,
                     "url": url,
                     "audit": audit_data,
+                    "site_idx": site_idx,
                     "cached": True
                 }
         except Exception as e:
@@ -2664,6 +2665,7 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, x_
         "title": title,
         "url": url,
         "audit": audit_result,
+        "site_idx": site_idx,
         "cached": False
     }
 

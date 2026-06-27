@@ -303,6 +303,14 @@ function TableOfContents({ activeSection }) {
   )
 }
 
+const STEPS = [
+  { label: 'Lấy dữ liệu bài viết mới nhất từ WordPress', icon: '📥' },
+  { label: 'Phân tích cấu trúc bài viết (headings, ảnh, links)', icon: '📊' },
+  { label: 'Trích xuất thực thể & LSI kỳ vọng của chủ đề', icon: '🔍' },
+  { label: 'Tiến hành chấm điểm SEO, GEO & Semantic bằng AI', icon: '🤖' },
+  { label: 'Đồng bộ và lưu kết quả vào Database', icon: '💾' }
+]
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -317,14 +325,67 @@ export default function WpAuditResult() {
   const mainRef = useRef(null)
 
   const [reAuditing, setReAuditing] = useState(false)
+  const [showModal, setShowModal] = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [stepsStatus, setStepsStatus] = useState(['pending', 'pending', 'pending', 'pending', 'pending'])
 
   const handleReAudit = async () => {
     setReAuditing(true)
+    setShowModal(true)
+    setCurrentStep(0)
+    setStepsStatus(['active', 'pending', 'pending', 'pending', 'pending'])
+
     const siteIdx = data?.site_idx ?? 0
+    let apiResolved = false
+    let apiError = null
+    let apiData = null
+
+    // Start API request in parallel
+    api.post(`/ai-hermes/wp/audit/${postId}?force=true&site_idx=${siteIdx}`)
+      .then(res => {
+        apiData = res.data
+        apiResolved = true
+      })
+      .catch(err => {
+        apiError = err
+        apiResolved = true
+      })
+
+    // Simulate progress steps
     try {
-      const res = await api.post(`/ai-hermes/wp/audit/${postId}?force=true&site_idx=${siteIdx}`)
-      if (res.data && res.data.audit) {
-        const newData = { ...res.data, post: data.post }
+      // Step 0: WP Fetch
+      await new Promise(r => setTimeout(r, 1200))
+      setStepsStatus(['done', 'active', 'pending', 'pending', 'pending'])
+      setCurrentStep(1)
+
+      // Step 1: Heading/Alts
+      await new Promise(r => setTimeout(r, 1200))
+      setStepsStatus(['done', 'done', 'active', 'pending', 'pending'])
+      setCurrentStep(2)
+
+      // Step 2: LSI/Entities
+      await new Promise(r => setTimeout(r, 1500))
+      setStepsStatus(['done', 'done', 'done', 'active', 'pending'])
+      setCurrentStep(3)
+
+      // Step 3: LLM Audit (waits until API resolves)
+      while (!apiResolved) {
+        await new Promise(r => setTimeout(r, 200))
+      }
+
+      if (apiError) {
+        throw apiError
+      }
+
+      setStepsStatus(['done', 'done', 'done', 'done', 'active'])
+      setCurrentStep(4)
+
+      // Step 4: Save/Sync
+      await new Promise(r => setTimeout(r, 800))
+      setStepsStatus(['done', 'done', 'done', 'done', 'done'])
+
+      if (apiData && apiData.audit) {
+        const newData = { ...apiData, post: data.post }
         setData(newData)
         try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(newData)) } catch {}
         toast.success('Đã đánh giá lại bài viết thành công! 📊')
@@ -334,6 +395,8 @@ export default function WpAuditResult() {
     } catch (err) {
       toast.error(`Lỗi: ${err.response?.data?.error || err.message}`)
     } finally {
+      await new Promise(r => setTimeout(r, 500))
+      setShowModal(false)
       setReAuditing(false)
     }
   }
@@ -896,6 +959,47 @@ export default function WpAuditResult() {
           <div className="h-16" />
         </main>
       </div>
+
+      {/* ═══ PROGRESS MODAL ═══ */}
+      {showModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md p-6 bg-app-elevated border border-border rounded-xl space-y-5 shadow-2xl animate-in fade-in zoom-in duration-200" style={{ background: 'var(--bg-surface)' }}>
+            <div className="flex items-center gap-2.5">
+              <RefreshCw className="w-5 h-5 text-hermes animate-spin" />
+              <h3 className="text-sm font-bold text-app-primary uppercase tracking-wider">🔄 Đang đánh giá lại bài viết...</h3>
+            </div>
+
+            <div className="space-y-3.5 pt-2">
+              {STEPS.map((step, idx) => {
+                const status = stepsStatus[idx]
+                return (
+                  <div key={idx} className="flex items-start gap-3 text-xs transition-opacity duration-200">
+                    <span className="text-base select-none mt-0.5">{step.icon}</span>
+                    <div className="flex-1">
+                      <p className={`font-semibold ${status === 'active' ? 'text-hermes font-bold' : status === 'done' ? 'text-app-primary' : 'text-app-dim'}`}>
+                        {step.label}
+                      </p>
+                    </div>
+                    <div className="w-5 h-5 flex items-center justify-center">
+                      {status === 'active' && <Loader className="w-3.5 h-3.5 text-hermes animate-spin" />}
+                      {status === 'done' && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
+                      {status === 'pending' && <div className="w-1.5 h-1.5 rounded-full bg-app-dim" />}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Simple progress bar */}
+            <div className="w-full bg-app-base h-1.5 rounded-full overflow-hidden border border-border">
+              <div 
+                className="bg-hermes h-full transition-all duration-300 rounded-full"
+                style={{ width: `${((stepsStatus.filter(s => s === 'done').length) / STEPS.length) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
