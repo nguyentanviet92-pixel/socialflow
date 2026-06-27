@@ -7,6 +7,7 @@ import api from '../../lib/api'
 const roleBadge = {
   admin: { label: 'Admin', cls: 'bg-red-100 text-red-700', icon: Shield },
   manager: { label: 'Manager', cls: 'bg-blue-100 text-info', icon: UserCheck },
+  editor: { label: 'Editor', cls: 'bg-yellow-100 text-yellow-700', icon: UserCheck },
   user: { label: 'User', cls: 'bg-app-elevated text-app-muted', icon: UserCheck }
 }
 
@@ -166,6 +167,7 @@ export default function UserManager() {
                       className="text-xs px-2 py-1 rounded-lg border border-app-border bg-app-surface"
                     >
                       <option value="user">User</option>
+                      <option value="editor">Editor</option>
                       <option value="manager">Manager</option>
                       <option value="admin">Admin</option>
                     </select>
@@ -304,6 +306,7 @@ export default function UserManager() {
                   className="w-full border rounded-lg px-3 py-2"
                 >
                   <option value="user">User</option>
+                  <option value="editor">Editor</option>
                   <option value="manager">Manager</option>
                   <option value="admin">Admin</option>
                 </select>

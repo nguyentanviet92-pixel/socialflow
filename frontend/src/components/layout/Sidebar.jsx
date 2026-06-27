@@ -38,9 +38,13 @@ const settingsLinks = []
 export default function Sidebar({ onClose }) {
   const profile = useAuthStore((s) => s.profile)
   const isAdmin = profile?.role === 'admin'
+  const isEditor = profile?.role === 'editor'
 
-  // Filter links - only admins can access Hermes Hub
+  // Filter links - editors only see campaigns, accounts, and hermes
   const filteredLinks = mainLinks.filter(link => {
+    if (isEditor) {
+      return link.to === '/campaigns' || link.to === '/accounts' || link.to === '/hermes'
+    }
     if (link.to === '/hermes') return isAdmin
     return true
   })

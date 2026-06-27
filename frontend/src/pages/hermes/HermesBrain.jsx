@@ -15,6 +15,7 @@ import DenseStat from '../../components/hermes/DenseStat'
 import SkillsEditor from './SkillsEditor'
 import HermesSettings from './HermesSettings'
 import HermesTerminal from './HermesTerminal'
+import useAuthStore from '../../store/auth.store'
 
 function formatAgo(ts) {
   if (!ts) return '—'
@@ -97,6 +98,9 @@ function LearningTimeline() {
 }
 
 export default function HermesBrain() {
+  const profile = useAuthStore((s) => s.profile)
+  const isEditor = profile?.role === 'editor'
+
   const [selected, setSelected] = useState(null)
   const { pathname } = useLocation()
   const nav = useNavigate()
@@ -107,7 +111,7 @@ export default function HermesBrain() {
     if (pathname === '/hermes/skills') return 'skills'
     if (pathname === '/hermes/terminal') return 'terminal'
     if (pathname === '/hermes/wp-audit') return 'wp-audit'
-    return 'overview'
+    return isEditor ? 'wp-audit' : 'overview'
   }
   const tab = getActiveTab()
   
@@ -165,13 +169,13 @@ export default function HermesBrain() {
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         {[
-          { id: 'overview', label: 'Tổng quan' },
-          { id: 'skills', label: 'Kỹ năng (Skills)' },
-          { id: 'learning', label: 'Học tập (Learning)' },
-          { id: 'terminal', label: '⚡ Terminal (CLI)' },
-          { id: 'settings', label: 'Cấu hình' },
-          { id: 'wp-audit', label: 'WP Audit' }
-        ].map((t) => (
+          { id: 'overview', label: 'Tổng quan', visible: !isEditor },
+          { id: 'skills', label: 'Kỹ năng (Skills)', visible: !isEditor },
+          { id: 'learning', label: 'Học tập (Learning)', visible: !isEditor },
+          { id: 'terminal', label: '⚡ Terminal (CLI)', visible: !isEditor },
+          { id: 'settings', label: 'Cấu hình', visible: !isEditor },
+          { id: 'wp-audit', label: 'WP Audit', visible: true }
+        ].filter(t => t.visible).map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
