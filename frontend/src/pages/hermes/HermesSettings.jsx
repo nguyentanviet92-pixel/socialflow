@@ -2194,6 +2194,8 @@ function WpAuditSection() {
   const [hasMore, setHasMore] = useState(true)
   const [showAuditPopup, setShowAuditPopup] = useState(false)
   const [auditPopupData, setAuditPopupData] = useState(null)
+  const [auditLoadingProgress, setAuditLoadingProgress] = useState(0)
+  const [auditLoadingTitle, setAuditLoadingTitle] = useState('')
 
   const hasSites = sites.some(s => s.url?.trim())
 
@@ -2237,11 +2239,24 @@ function WpAuditSection() {
     }
   }, [selectedCategory, activeSiteIdx, insideSiteIdx])
 
+  const startAuditProgressSim = (titleText) => {
+    setAuditLoadingTitle(titleText)
+    setAuditLoadingProgress(1)
+    return setInterval(() => {
+      setAuditLoadingProgress(prev => {
+        if (prev < 4) return prev + 1
+        return prev
+      })
+    }, 4500)
+  }
+
   const handleQuickScan = async () => {
     if (!quickInput.trim()) return toast.error('Vui lòng nhập URL hoặc ID bài viết')
     setQuickScanning(true)
+    let progressInterval = null
     try {
       const input = quickInput.trim()
+      progressInterval = startAuditProgressSim(input)
       let postId = null
       let postInfo = null
 
@@ -2279,6 +2294,8 @@ function WpAuditSection() {
       toast.error(`Quét nhanh lỗi: ${err.response?.data?.error || err.message}`)
     } finally {
       setQuickScanning(false)
+      if (progressInterval) clearInterval(progressInterval)
+      setAuditLoadingProgress(0)
     }
   }
 
@@ -2293,11 +2310,13 @@ function WpAuditSection() {
 
   const runAudit = async (postId) => {
     setAuditingId(postId)
+    let progressInterval = null
     try {
+      const postInfo = posts.find(p => p.id === postId) || { id: postId }
+      const postTitle = postInfo.title?.rendered || `ID: ${postId}`
+      progressInterval = startAuditProgressSim(postTitle)
       const res = await api.post(`/ai-hermes/wp/audit/${postId}?site_idx=${activeSiteIdx}&model=${encodeURIComponent(selectedModel)}`)
       if (res.data && res.data.audit) {
-        // Find the post info for the result page
-        const postInfo = posts.find(p => p.id === postId) || { id: postId }
         const auditData = { ...res.data, post: postInfo }
         setAuditResults(prev => ({ ...prev, [postId]: auditData }))
         // Save to sessionStorage for the audit result page
@@ -2312,6 +2331,8 @@ function WpAuditSection() {
       toast.error(`Lỗi Audit: ${err.response?.data?.error || err.message}`)
     } finally {
       setAuditingId(null)
+      if (progressInterval) clearInterval(progressInterval)
+      setAuditLoadingProgress(0)
     }
   }
 
@@ -2320,6 +2341,8 @@ function WpAuditSection() {
     navigator.clipboard.writeText(text)
     toast.success(`Đã copy ${label}`)
   }
+
+  const isAnyAuditing = auditingId !== null || quickScanning
 
   if (isCfgLoading) {
     return <div className="p-6 text-app-muted font-mono-ui text-xs">Đang tải cấu hình…</div>
@@ -2512,7 +2535,7 @@ function WpAuditSection() {
               />
               <button
                 onClick={handleQuickScan}
-                disabled={quickScanning || !quickInput.trim()}
+                disabled={isAnyAuditing || !quickInput.trim()}
                 className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded flex items-center gap-1.5"
               >
                 {quickScanning ? (
@@ -2629,7 +2652,7 @@ function WpAuditSection() {
                               runAudit(post.id)
                             }
                           }}
-                          disabled={auditingId === post.id}
+                          disabled={isAnyAuditing}
                           className={`px-3 py-1 text-xs font-semibold rounded w-full ${
                             audited
                               ? 'border border-hermes text-hermes hover:bg-hermes/10'
@@ -2927,6 +2950,90 @@ function WpAuditSection() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ─── AUDIT RUNNING LOADING POPUP MODAL ─── */}
+    {isAnyAuditing && auditLoadingProgress > 0 && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(8px)' }}>
+        <div 
+          className="w-full max-w-md rounded-2xl p-6 md:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in duration-200 text-left border border-border"
+          style={{ 
+            background: 'var(--bg-surface)', 
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)'
+          }}
+        >
+          {/* Header */}
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full mb-1 bg-hermes/10 border border-hermes/20">
+              <Loader className="w-5 h-5 text-hermes animate-spin" />
+            </div>
+            <h3 className="text-base font-bold text-app-primary">Đang tiến hành Audit bài viết...</h3>
+            <p 
+              className="text-xs text-app-muted font-semibold line-clamp-2 max-w-sm mx-auto font-mono-ui"
+              dangerouslySetInnerHTML={{ __html: auditLoadingTitle }}
+            />
+          </div>
+
+          {/* Progress Steps List */}
+          <div className="space-y-3 py-2">
+            <div className="flex items-center gap-3 text-xs">
+              <span className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center font-bold ${
+                auditLoadingProgress > 1 ? 'bg-green text-white' : auditLoadingProgress === 1 ? 'bg-hermes text-white animate-pulse' : 'bg-app-base border border-border text-app-muted'
+              }`}>
+                {auditLoadingProgress > 1 ? '✓' : '1'}
+              </span>
+              <span className={auditLoadingProgress === 1 ? 'text-hermes font-bold' : auditLoadingProgress > 1 ? 'text-app-muted line-through' : 'text-app-dim'}>
+                📡 Đang kết nối WordPress & tải nội dung bài viết
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs">
+              <span className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center font-bold ${
+                auditLoadingProgress > 2 ? 'bg-green text-white' : auditLoadingProgress === 2 ? 'bg-hermes text-white animate-pulse' : 'bg-app-base border border-border text-app-muted'
+              }`}>
+                {auditLoadingProgress > 2 ? '✓' : '2'}
+              </span>
+              <span className={auditLoadingProgress === 2 ? 'text-hermes font-bold' : auditLoadingProgress > 2 ? 'text-app-muted line-through' : 'text-app-dim'}>
+                🔍 Phân tích cấu trúc bài viết (H1, H2, Meta, Links)
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs">
+              <span className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center font-bold ${
+                auditLoadingProgress > 3 ? 'bg-green text-white' : auditLoadingProgress === 3 ? 'bg-hermes text-white animate-pulse' : 'bg-app-base border border-border text-app-muted'
+              }`}>
+                {auditLoadingProgress > 3 ? '✓' : '3'}
+              </span>
+              <span className={auditLoadingProgress === 3 ? 'text-hermes font-bold' : auditLoadingProgress > 3 ? 'text-app-muted line-through' : 'text-app-dim'}>
+                🤖 Gửi dữ liệu cho AI chấm điểm (SEO, GEO & LSI Keywords)
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs">
+              <span className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center font-bold ${
+                auditLoadingProgress > 4 ? 'bg-green text-white' : auditLoadingProgress === 4 ? 'bg-hermes text-white animate-pulse' : 'bg-app-base border border-border text-app-muted'
+              }`}>
+                {auditLoadingProgress > 4 ? '✓' : '4'}
+              </span>
+              <span className={auditLoadingProgress === 4 ? 'text-hermes font-bold' : 'text-app-dim'}>
+                📊 Tính toán điểm số thành phần & lưu kết quả
+              </span>
+            </div>
+          </div>
+
+          {/* Animated loading bar */}
+          <div className="w-full bg-app-base h-1.5 rounded-full overflow-hidden relative">
+            <div 
+              className="h-full bg-hermes rounded-full transition-all duration-500" 
+              style={{ width: `${(auditLoadingProgress / 4) * 100}%` }}
+            ></div>
+          </div>
+
+          <div className="text-center text-[10px] text-app-muted font-mono-ui">
+            Quá trình phân tích chuyên sâu có thể mất khoảng 15-25 giây. Vui lòng không đóng trang.
           </div>
         </div>
       </div>
