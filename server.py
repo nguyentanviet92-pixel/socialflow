@@ -2119,6 +2119,35 @@ def get_wp_client(config, site_idx: int = 0) -> WordPressClient:
 
 # ── WORDPRESS INTEGRATION & AUDIT ───────────────────────────────────────────
 
+TOPIC_ENTITY_MAP = {
+    "ai-agent": {
+        "topic_label": "AI Agent",
+        "expected_entities": [
+            "AutoGPT", "AgentGPT", "CrewAI", "LangChain", "LangGraph",
+            "BabyAGI", "Claude Computer Use", "Devin", "SWE-agent",
+            "OpenAI Assistants API", "Microsoft Copilot", "Cursor AI",
+            "n8n", "Zapier AI", "Make (Integromat)", "Perplexity",
+            "Google Gemini Agents", "Amazon Bedrock Agents",
+        ],
+        "expected_lsi": [
+            "autonomous agent", "multi-agent system", "tool use",
+            "function calling", "chain of thought", "ReAct framework",
+            "agentic workflow", "tác nhân AI", "tự động hóa",
+            "memory", "planning", "task decomposition",
+            "RAG", "long-term memory", "short-term memory",
+        ],
+        "pillar_or_cluster": "pillar",
+        "min_word_count": 2000,
+    },
+}
+
+def detect_topic_entities(slug: str) -> dict:
+    slug_lower = (slug or "").lower()
+    for key, data in TOPIC_ENTITY_MAP.items():
+        if key in slug_lower or slug_lower in key:
+            return data
+    return {}
+
 AUDIT_SYSTEM_PROMPT = """
 Bạn là chuyên gia audit SEO/GEO nội dung tiếng Việt. Nhiệm vụ duy nhất: đọc bài viết được cung cấp, chạy audit theo 4 tiêu chí, trả về JSON.
 
@@ -2237,6 +2266,7 @@ Bắt đầu từ 0:
 4. Meta title/description đề xuất: ghi kèm "(XX ký tự)" sau chuỗi. Nếu >60 ký tự cho title → viết lại, không được phép submit title >60 ký tự.
 5. missing_entities: tên cụ thể (OpenRouter, Together.ai), không phải "các nền tảng AI".
 6. Severity: "critical" chỉ dùng khi lỗi gây mất rank nghiêm trọng (H1=0, thin content <500 từ, không có main keyword). Lỗi thông thường dùng "high"/"medium"/"low".
+7. Bắt buộc thực hiện BƯỚC 1 - TRÍCH XUẤT và ghi đầy đủ thông tin vào trường "extraction" ở gốc JSON trước khi thực hiện bước 2 audit.
 """
 
 AUDIT_USER_PROMPT = """
@@ -2284,6 +2314,15 @@ Pillar topic: {pillar_topic_hint}
 
 ---
 
+BƯỚC 1 — TRÍCH XUẤT (làm trước, không skip):
+Đọc toàn bộ content, sau đó trích xuất các thông tin dưới đây và đặt vào trường "extraction" trong JSON output:
+a) Tên các AI Agent cụ thể được đề cập trong bài (tên thật, không paraphrase)
+b) Câu đầu tiên của bài (copy nguyên văn)
+c) Có bảng so sánh không? Nếu có, liệt kê các cột?
+d) Có FAQ block không? Bao nhiêu câu hỏi?
+e) Các internal link hiện có (anchor text + URL)
+
+BƯỚC 2 — AUDIT dựa trên kết quả trích xuất ở bước 1:
 Thực hiện audit theo đúng scoring rubric trong system prompt.
 Tính điểm từng mục trước, rồi mới ghi vào JSON.
 Dựa vào content THỰC TẾ ở trên để viết suggestions — không dùng câu template.
@@ -2291,6 +2330,14 @@ Dựa vào content THỰC TẾ ở trên để viết suggestions — không dù
 Trả về JSON với structure sau:
 
 {{
+  "extraction": {{
+    "ai_agents_mentioned": ["AutoGPT", "CrewAI", "etc."],
+    "first_sentence": "copy nguyên văn câu đầu tiên",
+    "has_comparison_table": true,
+    "comparison_table_columns": ["Cột 1", "Cột 2"],
+    "faq_count": 0,
+    "existing_internal_links": [{{"anchor": "anchor text", "url": "https://url"}}]
+  }},
   "checklist": {{
     "seo": {{
       "meta_title_has_keyword": true,
@@ -2525,7 +2572,12 @@ async def run_audit_llm(
                 break
 
     # 8. Expected LSI and Entities
-    expected_entities, expected_lsi = await get_expected_terms(title, slug, config)
+    topic_data = detect_topic_entities(slug)
+    if topic_data:
+        expected_entities = ", ".join(topic_data["expected_entities"])
+        expected_lsi = ", ".join(topic_data["expected_lsi"])
+    else:
+        expected_entities, expected_lsi = await get_expected_terms(title, slug, config)
 
     headings_text = "\n".join(
         f"  {'  ' * (int(h['level'][1])-1)}{h['level'].upper()}: {h['text']}"
@@ -2535,13 +2587,22 @@ async def run_audit_llm(
         f"  [{l['text']}]({l['href']})" for l in internal_links[:20]
     ) or "  (không có internal link)"
 
-    # Truncate content if too long
+    # Truncate content with smart strategy
     words = content.split()
-    if len(words) > 8000:
-        logger.info("[Audit] Truncating content from %d words to 3000 words (2000 start + 1000 end)", len(words))
-        truncated_content = " ".join(words[:2000]) + "\n\n...[TRUNCATED due to length]...\n\n" + " ".join(words[-1000:])
-    else:
+    if word_count <= 3000:
         truncated_content = content
+    elif word_count <= 6000:
+        truncated_content = (
+            " ".join(words[:2000]) + "\n\n[...]\n\n" +
+            " ".join(words[word_count//2 - 250 : word_count//2 + 250]) +
+            "\n\n[...]\n\n" +
+            " ".join(words[-500:])
+        )
+    else:
+        truncated_content = (
+            " ".join(words[:2500]) + "\n\n[--- phần giữa lược bỏ ---]\n\n" +
+            " ".join(words[-800:])
+        )
 
     user_prompt = AUDIT_USER_PROMPT.format(
         url=url, slug=slug, post_type_hint=post_type_hint, pillar_topic_hint=pillar_topic_hint,
@@ -2633,6 +2694,33 @@ async def run_audit_llm(
             result["suggestions"]["meta_title"] = None
             result["suggestions"]["meta_title_raw"] = mt
             result["suggestions"]["meta_title_error"] = f"LLM trả về {len(mt)} ký tự — cần viết lại thủ công"
+
+        # Force minimum FAQ
+        faq = result["suggestions"].get("faq_block", [])
+        if not isinstance(faq, list):
+            faq = []
+        if len(faq) < 5:
+            result["audit_warnings"] = result.get("audit_warnings", [])
+            result["audit_warnings"].append(
+                f"FAQ chỉ có {len(faq)} câu — yêu cầu tối thiểu 5. Cần bổ sung thêm FAQ."
+            )
+
+        # Force missing_entities minimum
+        entities = result["suggestions"].get("missing_entities", [])
+        if not isinstance(entities, list):
+            entities = []
+        if len(entities) < 3 and topic_data and topic_data.get("expected_entities"):
+            # Tự fill từ expected_entities những cái không có trong content
+            content_lower = content.lower()
+            auto_missing = [
+                e for e in topic_data["expected_entities"]
+                if e.lower() not in content_lower
+            ][:8]
+            result["suggestions"]["missing_entities"] = auto_missing
+            result["audit_warnings"] = result.get("audit_warnings", [])
+            result["audit_warnings"].append(
+                "missing_entities do LLM tự detect quá ít — đã auto-fill từ TOPIC_ENTITY_MAP"
+            )
 
     return result
 
