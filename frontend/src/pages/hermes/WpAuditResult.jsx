@@ -945,30 +945,59 @@ export default function WpAuditResult() {
                 <span className="text-xs uppercase tracking-wider text-app-muted font-bold block">Internal Links cần thêm</span>
                 <div className="space-y-2">
                   {internalLinks.map((link, i) => {
-                    const linkKey = `link-${i}`
+                    const linkUrl = link.url || (link.target && String(link.target).startsWith('http') ? link.target : '')
+                    const anchorKey = `anchor-${i}`
+                    const urlKey = `url-${i}`
                     return (
                       <div
                         key={i}
-                        className="flex items-center justify-between gap-4 p-3 rounded-lg bg-app-elevated border border-border"
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3 rounded-lg bg-app-elevated border border-border"
                       >
                         <div className="flex items-start gap-2.5 min-w-0">
                           <Link2 size={14} className="text-hermes mt-0.5 flex-shrink-0" />
                           <div className="text-xs leading-relaxed min-w-0">
                             <span className="font-semibold font-mono text-hermes block truncate">"{link.anchor}"</span>
-                            {link.note && <span className="text-app-muted text-[11px]">{link.note}</span>}
+                            {linkUrl ? (
+                              <a
+                                href={linkUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] text-app-dim hover:text-hermes hover:underline block truncate mt-0.5"
+                              >
+                                Link: {linkUrl}
+                              </a>
+                            ) : (
+                              link.target && <span className="text-app-muted text-[11px] block mt-0.5">{link.target}</span>
+                            )}
+                            {link.note && link.note !== linkUrl && (
+                              <span className="text-app-muted text-[11px] block mt-0.5">{link.note}</span>
+                            )}
                           </div>
                         </div>
-                        <button
-                          onClick={() => copy(link.anchor, linkKey)}
-                          className={`inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded transition-all duration-150 flex-shrink-0 ${
-                            copiedKey === linkKey
-                              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                              : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
-                          }`}
-                        >
-                          {copiedKey === linkKey ? <CheckCircle2 size={10} /> : <Copy size={10} />}
-                          <span>{copiedKey === linkKey ? 'Copied!' : 'Copy Anchor'}</span>
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                          <button
+                            onClick={() => copy(link.anchor, anchorKey)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold rounded transition-all duration-150 ${
+                              copiedKey === anchorKey
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                            }`}
+                          >
+                            {copiedKey === anchorKey ? 'Copied!' : 'Copy Anchor'}
+                          </button>
+                          {linkUrl && (
+                            <button
+                              onClick={() => copy(linkUrl, urlKey)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold rounded transition-all duration-150 ${
+                                copiedKey === urlKey
+                                  ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                  : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                              }`}
+                            >
+                              {copiedKey === urlKey ? 'Copied!' : 'Copy URL'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )
                   })}
