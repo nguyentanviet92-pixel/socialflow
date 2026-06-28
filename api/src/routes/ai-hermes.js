@@ -7,7 +7,7 @@ module.exports = async (fastify) => {
   const NORMAL_TIMEOUT_MS = 30000
   const COMMENT_TIMEOUT_MS = 60000
   const EVALUATE_TIMEOUT_MS = 90000
-  const LONG_TIMEOUT_MS = 120000
+  const LONG_TIMEOUT_MS = 360000
   console.log('[HERMES] Using URL:', HERMES_URL, 'secret configured:', !!AGENT_SECRET)
 
   async function proxyToHermes(path, body, timeout = COMMENT_TIMEOUT_MS) {
