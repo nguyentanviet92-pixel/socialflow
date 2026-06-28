@@ -99,6 +99,19 @@ const AUDIT_MODELS = [
   { id: 'openai:gpt-4o', name: 'GPT-4o (Đa dụng)', badge: 'OpenAI' }
 ]
 
+function convertToSlug(text) {
+  if (!text) return ''
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .replace(/([^0-9a-z-\s])/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -1044,24 +1057,42 @@ export default function WpAuditResult() {
                 <span className="text-xs uppercase tracking-wider text-app-muted font-bold block">Cluster bài viết cần tạo thêm</span>
                 <div className="space-y-2">
                   {clusterPosts.map((postName, idx) => {
-                    const gapKey = `gap-${idx}`
+                    const slug = convertToSlug(postName)
+                    const titleKey = `title-${idx}`
+                    const slugKey = `slug-${idx}`
                     return (
                       <div
                         key={idx}
-                        className="flex items-center justify-between p-3 rounded-lg bg-app-elevated border border-border"
+                        className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-app-elevated border border-border gap-2"
                       >
-                        <span className="text-xs font-semibold text-app-primary">{postName}</span>
-                        <button
-                          onClick={() => copy(postName, gapKey)}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-semibold rounded transition-all duration-150 ${
-                            copiedKey === gapKey
-                              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                              : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
-                          }`}
-                        >
-                          {copiedKey === gapKey ? <CheckCircle2 size={10} /> : <Copy size={10} />}
-                          <span>{copiedKey === gapKey ? 'Copied!' : 'Copy Topic'}</span>
-                        </button>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-semibold text-app-primary block">{postName}</span>
+                          <span className="text-[10px] font-mono text-app-dim mt-0.5 block truncate" title={slug}>
+                            Slug: <span className="text-hermes font-semibold">{slug}</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                          <button
+                            onClick={() => copy(postName, titleKey)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold rounded transition-all duration-150 ${
+                              copiedKey === titleKey
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                            }`}
+                          >
+                            {copiedKey === titleKey ? 'Copied!' : 'Copy Tiêu đề'}
+                          </button>
+                          <button
+                            onClick={() => copy(slug, slugKey)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold rounded transition-all duration-150 ${
+                              copiedKey === slugKey
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                            }`}
+                          >
+                            {copiedKey === slugKey ? 'Copied!' : 'Copy Slug'}
+                          </button>
+                        </div>
                       </div>
                     )
                   })}
