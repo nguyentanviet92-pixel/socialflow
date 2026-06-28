@@ -2824,8 +2824,15 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
     
     # 3. Extract heading structure
     headings = []
+    if title:
+        headings.append({"level": "h1", "text": title})
     for tag in soup.find_all(["h1", "h2", "h3", "h4"]):
-        headings.append({"level": tag.name, "text": tag.get_text(strip=True)})
+        lvl = tag.name.lower()
+        txt = tag.get_text(strip=True)
+        # Avoid duplicating the H1 if the body content already contains the title as H1
+        if lvl == "h1" and title and txt.lower() == title.lower():
+            continue
+        headings.append({"level": lvl, "text": txt})
     
     # 4. Extract internal links
     internal_links = []
