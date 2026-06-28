@@ -2177,6 +2177,17 @@ TOPIC_ENTITY_MAP = {
     },
 }
 
+def normalize(text):
+    if not text:
+        return ""
+    import unicodedata
+    import re
+    text = text.lower()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    return " ".join(text.split())
+
 def detect_topic_entities(slug: str, title: str = "") -> dict:
     slug_lower = (slug or "").lower()
     title_lower = (title or "").lower()
@@ -2221,6 +2232,24 @@ def generate_auto_faq(post_intent: str, main_keyword: str, existing_faq_count: i
     
     kw = main_keyword or "chủ đề này"
     
+    # Làm sạch keyword nếu nó là dạng raw slug không dấu
+    if kw:
+        is_raw_ascii = all(c.isspace() or c.isdigit() or (97 <= ord(c.lower()) <= 122) or c in '-_' for c in kw)
+        if is_raw_ascii:
+            slug_normalized = kw.lower().replace(" ", "-").replace("_", "-")
+            matched_label = None
+            # Thử match flexible với TOPIC_ENTITY_MAP
+            for key, data in TOPIC_ENTITY_MAP.items():
+                key_parts = key.split("-")
+                matches = sum(1 for p in key_parts if p in slug_normalized)
+                if len(key_parts) > 0 and (matches / len(key_parts)) >= 0.6:
+                    matched_label = data.get("topic_label")
+                    break
+            if matched_label:
+                kw = matched_label
+            else:
+                kw = kw.replace("-", " ").replace("_", " ").title()
+
     templates = [
         {
             "q": f"Có thể thực hiện {kw} trên điện thoại không?",
@@ -2287,9 +2316,12 @@ Dựa trên giá trị `Post Intent` được cung cấp trong prompt, hãy tín
 ### SEO Fundamentals
 - META TITLE: 50–60 ký tự (đếm ký tự, không phải từ). Phải chứa main keyword.
   * QUY TẮC CHECK KEYWORD: Tìm kiếm TỪNG TỪ riêng lẻ của main_keyword trong title/H1 (không phân biệt dấu hay không dấu), không bắt buộc phải xuất hiện liền nhau theo thứ tự (không yêu cầu exact phrase match). Nếu ≥70% số từ đơn lẻ của main_keyword xuất hiện trong title/H1 → được tính là "có keyword". Tuyệt đối KHÔNG được báo lỗi "không có keyword" khi title chứa đủ các từ khóa chính.
-- META DESCRIPTION: 140–160 ký tự. Có keyword. Có call-to-action cuối câu.
+- META DESCRIPTION: Bắt buộc dài từ 140–160 ký tự. Phải chứa main keyword. Có call-to-action cuối câu. Nếu bản thảo nháp ngắn hơn 130 ký tự, hãy bắt buộc kéo dài bằng cách bổ sung thêm lợi ích cụ thể hoặc câu kêu gọi hành động (CTA) cho đến khi đạt độ dài tối ưu (đạt từ 140–160 ký tự).
 - H1: đúng 1 cái. Phải chứa main keyword (áp dụng cùng quy tắc check keyword ≥70% ở trên).
 - H2: ≥3 cái. Mỗi H2 là 1 chủ đề lớn. Có keyword variant.
+  * HỆ THỐNG QUY TẮC DUYỆT H2 (HEADING AUDIT):
+    - Đối với bài "how_to" cluster: Cấm đề xuất các H2 mang tính giới thiệu, lý thuyết chung chung (như "Giới thiệu về ChatGPT và Canva", "ChatGPT là gì", "Tổng quan về Canva"). Bắt buộc đề xuất thay thế bằng các H2 thực tiễn hơn như "Yêu cầu chuẩn bị trước khi bắt đầu" hoặc dạng câu hỏi truy vấn người dùng (ví dụ: "ChatGPT có kết nối với Canva được không?" để tạo GEO signal).
+    - Đối với tất cả các bài: Cấm đề xuất H2 kết luận sáo rỗng hoặc quá ngắn (như "Kết luận", "Tổng kết"). Bắt buộc đề xuất thay thế bằng H2 thực tiễn chứa keyword và GEO signal, ví dụ: "Khi nào nên dùng ChatGPT kết hợp Canva?".
 - WORD COUNT: Pillar/Top-X ≥1.500 từ. Cluster ≥800 từ. <500 từ = thin content nghiêm trọng.
 - KEYWORD DENSITY: 0.5%–2%. Dưới 0.3% = thiếu. Trên 3% = nhồi nhét.
 - INTERNAL LINKS: Pillar ≥5 links ra cluster. Cluster ≥1 link về pillar.
@@ -2378,7 +2410,7 @@ Bắt đầu từ 0:
 1. Chỉ trả về JSON. Không markdown, không giải thích, không text bên ngoài JSON.
 2. audit_score = seo + geo + pillar_cluster + semantic. Tính lại trước khi ghi.
 3. Suggestions phải CỤ THỂ từ content thực. Không được dùng câu chung chung như "thêm từ liên quan" mà không liệt kê từ cụ thể.
-4. Meta title/description đề xuất: ghi kèm "(XX ký tự)" sau chuỗi. Nếu >60 ký tự cho title → viết lại, không được phép submit title >60 ký tự.
+4. Meta title/description đề xuất: ghi kèm "(XX ký tự)" sau chuỗi. Nếu >60 ký tự cho title → viết lại, không được phép submit title >60 ký tự. Meta description đề xuất bắt buộc phải nằm trong khoảng 140–160 ký tự; nếu bản thảo nháp <130 ký tự, hãy bắt buộc kéo dài bằng cách bổ sung thêm lợi ích cụ thể hoặc câu kêu gọi hành động (CTA) cho đến khi đạt độ dài tối ưu.
 5. missing_entities: tên cụ thể (OpenRouter, Together.ai), không phải "các nền tảng AI".
 6. Severity: "critical" chỉ dùng khi lỗi gây mất rank nghiêm trọng (H1=0, thin content <500 từ, không có main keyword). Lỗi thông thường dùng "high"/"medium"/"low".
 7. Bắt buộc thực hiện BƯỚC 1 - TRÍCH XUẤT và ghi đầy đủ thông tin vào trường "extraction" ở gốc JSON trước khi thực hiện bước 2 audit.
@@ -2427,6 +2459,9 @@ Post Intent: {post_intent}
 
 ## PILLAR MAP CỦA SITE
 {pillar_context}
+
+## CÁC BÀI VIẾT KHÁC ĐANG CÓ TRÊN SITE ĐỂ LIÊN KẾT
+{recent_posts_context}
 
 ---
 
@@ -2631,7 +2666,8 @@ SEMANTIC_CHECKLIST = {
 async def run_audit_llm(
     title, slug, url, content, headings, internal_links,
     meta_title, meta_desc, excerpt, pillar_context, config,
-    raw_html="", model_override: str = None
+    raw_html="", model_override: str = None,
+    recent_posts_context: str = ""
 ) -> dict:
     from bs4 import BeautifulSoup
     import re
@@ -2740,6 +2776,7 @@ async def run_audit_llm(
         headings_text=headings_text, internal_links_text=internal_links_text,
         expected_entities=expected_entities, expected_lsi=expected_lsi,
         content=truncated_content, pillar_context=pillar_context or "",
+        recent_posts_context=recent_posts_context or "  (Không tìm thấy danh sách bài viết khác trên site)",
     )
 
     fallback_keys = config.get('fallback_keys') or {}
@@ -2766,6 +2803,14 @@ async def run_audit_llm(
             raw_text = raw_text[4:]
     if raw_text.endswith("```"):
         raw_text = raw_text[:-3]
+
+    # Save raw LLM response to file for easy debugging/inspection
+    try:
+        with open("/opt/socialflow/hermes-api/raw_audit_response.log", "w", encoding="utf-8") as lf:
+            lf.write(response_text)
+        logger.info("[WP Audit] Raw LLM response saved to raw_audit_response.log")
+    except Exception as log_err:
+        logger.warning(f"[WP Audit] Failed to save raw response log: {log_err}")
 
     result = json.loads(raw_text.strip())
 
@@ -2811,47 +2856,104 @@ async def run_audit_llm(
     # Update total score
     result["audit_score"] = seo + geo + pillar_cluster + semantic
 
-    # Meta title validations
-    if "suggestions" in result and isinstance(result["suggestions"], dict):
-        mt = result["suggestions"].get("meta_title", "")
-        if mt and len(mt) > 60:
-            result["suggestions"]["meta_title"] = None
-            result["suggestions"]["meta_title_raw"] = mt
-            result["suggestions"]["meta_title_error"] = f"LLM trả về {len(mt)} ký tự — cần viết lại thủ công"
+    # Suggestions post-processing and normalization
+    if "suggestions" not in result or not isinstance(result["suggestions"], dict):
+        result["suggestions"] = {}
 
-        # Force minimum FAQ
-        faq = result["suggestions"].get("faq_block", [])
-        if not isinstance(faq, list):
-            faq = []
-        if len(faq) < 5:
-            auto_faq = generate_auto_faq(
-                post_intent=post_intent,
-                main_keyword=result.get("main_keyword", main_keyword_guess),
-                existing_faq_count=len(faq)
-            )
-            faq.extend(auto_faq)
-            result["suggestions"]["faq_block"] = faq
+    sug = result["suggestions"]
+
+    # (1) Normalize opening_paragraph
+    op = sug.get("opening_paragraph") or sug.get("intro_paragraph") or sug.get("opening") or sug.get("intro") or sug.get("opening_paragraph_suggestion")
+    if op:
+        sug["opening_paragraph"] = op
+
+    # (2) Validate Meta Title length
+    mt = sug.get("meta_title", "")
+    if mt and len(mt) > 60:
+        sug["meta_title"] = None
+        sug["meta_title_raw"] = mt
+        sug["meta_title_error"] = f"LLM trả về {len(mt)} ký tự — cần viết lại thủ công"
+
+    # (3) Validate Meta Description length
+    md = sug.get("meta_description", "")
+    if md:
+        # Strip trailing length tag e.g. "(156 ký tự)" to validate real length
+        clean_md = re.sub(r'\s*\(\d+\s*ký\s*tự\)\s*$', '', md).strip()
+        if len(clean_md) < 130:
             result["audit_warnings"] = result.get("audit_warnings", [])
             result["audit_warnings"].append(
-                f"FAQ tự động bổ sung {len(auto_faq)} câu để đạt minimum 5"
+                f"Meta description đề xuất quá ngắn ({len(clean_md)} ký tự). LLM không tuân theo prompt. Cần viết lại thủ công."
             )
 
-        # Force missing_entities minimum
-        entities = result["suggestions"].get("missing_entities", [])
-        if not isinstance(entities, list):
-            entities = []
-        if len(entities) < 3 and topic_data and topic_data.get("expected_entities"):
-            # Tự fill từ expected_entities những cái không có trong content
-            content_lower = content.lower()
-            auto_missing = [
-                e for e in topic_data["expected_entities"]
-                if e.lower() not in content_lower
-            ][:8]
-            result["suggestions"]["missing_entities"] = auto_missing
-            result["audit_warnings"] = result.get("audit_warnings", [])
-            result["audit_warnings"].append(
-                "missing_entities do LLM tự detect quá ít — đã auto-fill từ TOPIC_ENTITY_MAP"
-            )
+    # (4) Force minimum FAQ
+    faq = sug.get("faq_block", [])
+    if not isinstance(faq, list):
+        faq = []
+    if len(faq) < 5:
+        # Clean keyword: use LLM's main_keyword or fallback
+        kw_clean = result.get("main_keyword") or (topic_data.get("topic_label") if topic_data else None) or main_keyword_guess
+        auto_faq = generate_auto_faq(
+            post_intent=post_intent,
+            main_keyword=kw_clean,
+            existing_faq_count=len(faq)
+        )
+        faq.extend(auto_faq)
+        sug["faq_block"] = faq
+        result["audit_warnings"] = result.get("audit_warnings", [])
+        result["audit_warnings"].append(
+            f"FAQ tự động bổ sung {len(auto_faq)} câu để đạt minimum 5"
+        )
+
+    # (5) Programmatic missing entities & LSI mapping
+    if topic_data:
+        content_norm = normalize(content)
+        
+        # Programmatic entities check
+        missing_ents = [
+            e for e in topic_data.get("expected_entities", [])
+            if normalize(e) not in content_norm
+        ]
+        sug["missing_entities"] = missing_ents
+        
+        # Programmatic LSI check
+        missing_lsis = [
+            l for l in topic_data.get("expected_lsi", [])
+            if normalize(l) not in content_norm
+        ]
+        sug["missing_lsi"] = missing_lsis
+        
+        result["audit_warnings"] = result.get("audit_warnings", [])
+        result["audit_warnings"].append(
+            "Đã đồng bộ và tự động quét Entity/LSI bị thiếu theo TOPIC_ENTITY_MAP (Unicode normalized)"
+        )
+    else:
+        # Fallback to LLM lists
+        if "missing_entities" not in sug or not isinstance(sug["missing_entities"], list):
+            sug["missing_entities"] = []
+        if "missing_lsi" not in sug or not isinstance(sug["missing_lsi"], list):
+            sug["missing_lsi"] = sug.get("missing_lsi_keywords") or []
+
+    # (6) Dedup internal_links_to_add with existing links in the post
+    if "internal_links_to_add" in sug and isinstance(sug["internal_links_to_add"], list):
+        existing_hrefs = {str(lnk.get("href", "")).lower().strip().rstrip("/") for lnk in internal_links if lnk.get("href")}
+        
+        deduped_links = []
+        for item in sug["internal_links_to_add"]:
+            if not isinstance(item, dict):
+                continue
+            item_url = str(item.get("url") or item.get("target") or "").lower().strip().rstrip("/")
+            
+            # Check if this URL is already linked in the post
+            is_duplicate = False
+            for eh in existing_hrefs:
+                if eh and (eh in item_url or item_url in eh):
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                deduped_links.append(item)
+                
+        sug["internal_links_to_add"] = deduped_links
 
     return result
 
@@ -3023,6 +3125,20 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
     if pillar_map:
         pillar_context = f"Pillar map của site: {json.dumps(pillar_map, ensure_ascii=False)}"
 
+    # 6.5 Fetch 50 bài viết mới nhất trên site để làm context link thực tế
+    recent_posts = []
+    try:
+        recent_posts = await client.list_posts(per_page=50, status="publish")
+    except Exception as e:
+        logger.warning(f"[WP Audit] Failed to fetch recent posts for link context: {e}")
+
+    recent_posts_context = ""
+    if recent_posts:
+        recent_posts_context = "Các bài viết mới nhất trên site có sẵn để liên kết:\n" + "\n".join(
+            f"- Tiêu đề: {p.get('title', {}).get('rendered', p.get('title', ''))} | Link: {p.get('link', '')}"
+            for p in recent_posts
+        )
+
     # 7. Gọi LLM audit
     audit_result = await run_audit_llm(
         title=title,
@@ -3038,6 +3154,7 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
         config=config,
         raw_html=raw_html,
         model_override=model,
+        recent_posts_context=recent_posts_context
     )
 
     # 8. Save/upsert result in database
