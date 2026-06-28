@@ -2420,7 +2420,7 @@ Trả về JSON với structure sau:
       {{"q": "câu hỏi dạng người VN thực hỏi", "a": "trả lời 2–4 câu tự đứng được"}}
     ],
     "internal_links_to_add": [
-      {{"anchor": "anchor text có keyword", "target": "mô tả bài cần link đến"}}
+      {{"anchor": "anchor text có keyword", "target": "tên bài cần link đến", "url": "URL tuyệt đối của bài đó lấy từ Pillar Map của site"}}
     ],
     "missing_entities": ["Tên Entity 1", "Tên Entity 2"],
     "missing_lsi": ["lsi keyword 1", "lsi keyword 2"],
