@@ -23,8 +23,12 @@ export default function HermesBar() {
         const res = await api.get('/ai-hermes/status')
         return res.data
       } catch (err) {
-        // Suppress 503/network errors from flooding console
         const status = err?.response?.status
+        // 401/403: user session expired — not an API outage, return degraded placeholder
+        if (status === 401 || status === 403) {
+          return { status: 'DEGRADED', _authError: true }
+        }
+        // 503/502/network: API unreachable
         if (status === 503 || status === 502 || !status) {
           return null // treat as offline gracefully
         }
@@ -41,6 +45,7 @@ export default function HermesBar() {
 
   const status = error || !data ? 'OFFLINE' : (data.status || 'DEGRADED')
   const online = status === 'ONLINE'
+  const authError = data?._authError
 
   return (
     <div
@@ -54,8 +59,8 @@ export default function HermesBar() {
     >
       <div className="flex items-center gap-2">
         <StatDot status={status} />
-        <span className={online ? 'text-hermes' : 'text-danger'}>HERMES</span>
-        {!online && <span className="text-danger">· {status}</span>}
+        <span className={online ? 'text-hermes' : status === 'DEGRADED' ? 'text-warn' : 'text-danger'}>HERMES</span>
+        {!online && <span className={status === 'DEGRADED' ? 'text-warn' : 'text-danger'}>· {status}</span>}
       </div>
 
       {online && (
@@ -85,7 +90,11 @@ export default function HermesBar() {
         </>
       )}
 
-      {!online && (
+      {!online && authError && (
+        <span className="text-warn">SESSION EXPIRED — please refresh page</span>
+      )}
+
+      {!online && !authError && (
         <span className="text-danger">FALLBACK MODE — check Hermes API on VPS</span>
       )}
 
