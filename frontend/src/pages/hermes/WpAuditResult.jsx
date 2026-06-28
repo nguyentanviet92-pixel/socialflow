@@ -1,23 +1,19 @@
 /**
  * /hermes/wp-audit/:postId — Dedicated full-page view for WordPress audit results.
- *
- * Data arrives via React Router location.state or sessionStorage fallback
- * key: `wp_audit_<postId>`.
+ * Optimized with a clean 4-tab layout (Overview, Checklist, Suggestions, Semantic).
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   ArrowLeft, Copy, CheckCircle2, AlertTriangle, ExternalLink,
-  ChevronRight, Bookmark, Search, FileText, Globe, Link2, Tag,
-  Lightbulb, List, Shield, Zap, Target, Hash, Layers, Star,
-  CheckSquare, XCircle, Info, PenTool, RefreshCw, Loader,
+  ChevronDown, ChevronUp, Star, CheckSquare, XCircle, Info, PenTool,
+  RefreshCw, Loader, Search, Globe, Link2, Layers, Tag
 } from 'lucide-react'
 import api from '../../lib/api'
 
-
 /* ═══════════════════════════════════════════════════════════════
-   HELPERS
+   HELPERS & CONFIG
    ═══════════════════════════════════════════════════════════════ */
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low']
@@ -36,19 +32,12 @@ const CATEGORY_COLORS = {
   Semantic:            { bg: 'rgba(34,197,94,0.15)',   color: '#22c55e' },
 }
 
-function scoreColor(score, max) {
-  const pct = (score / max) * 100
-  if (pct >= 72) return '#22c55e'
-  if (pct >= 48) return '#facc15'
-  return '#f87171'
-}
-
-function scoreColorClass(score, max) {
-  const pct = (score / max) * 100
-  if (pct >= 72) return 'text-green-400'
-  if (pct >= 48) return 'text-yellow-400'
-  return 'text-red-400'
-}
+const scoreColor = (val, max = 25) => {
+  const pct = val / max;
+  if (pct >= 0.75) return "#22c55e";   // xanh
+  if (pct >= 0.5)  return "#facc15";   // vàng
+  return "#ef4444";                     // đỏ
+};
 
 function getCopywriterNote(issue) {
   const cat = (issue.category || '').toLowerCase()
@@ -89,221 +78,6 @@ function getCopywriterNote(issue) {
   return `Copywriter cần xử lý vấn đề sau: ${fix}`
 }
 
-function copyToClipboard(text, label = 'Nội dung') {
-  navigator.clipboard.writeText(text).then(
-    () => toast.success(`Đã copy ${label}!`),
-    () => toast.error('Không thể copy. Hãy copy thủ công.'),
-  )
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   SUB-COMPONENTS
-   ═══════════════════════════════════════════════════════════════ */
-
-/** Inline copy button — small, hermes-colored. */
-function CopyBtn({ text, label = 'Nội dung', className = '' }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = () => {
-    copyToClipboard(text, label)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-  return (
-    <button
-      onClick={handleCopy}
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-md transition-all duration-200 ${className}`}
-      style={{
-        background: copied ? 'rgba(34,197,94,0.2)' : 'var(--hermes-dim)',
-        color: copied ? '#22c55e' : 'var(--hermes)',
-        border: `1px solid ${copied ? 'rgba(34,197,94,0.4)' : 'var(--hermes-fade)'}`,
-      }}
-    >
-      {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
-      {copied ? 'Đã copy' : 'Copy'}
-    </button>
-  )
-}
-
-/** Score ring — large or small. */
-function ScoreRing({ score, max, size = 120, strokeWidth = 8, label }) {
-  const radius = (size - strokeWidth) / 2
-  const circumference = 2 * Math.PI * radius
-  const pct = Math.min(score / max, 1)
-  const offset = circumference * (1 - pct)
-  const color = scoreColor(score, max)
-
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <div style={{ position: 'relative', width: size, height: size }}>
-        <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-          <circle
-            cx={size / 2} cy={size / 2} r={radius}
-            fill="none" stroke="var(--border)" strokeWidth={strokeWidth}
-          />
-          <circle
-            cx={size / 2} cy={size / 2} r={radius}
-            fill="none" stroke={color} strokeWidth={strokeWidth}
-            strokeDasharray={circumference} strokeDashoffset={offset}
-            strokeLinecap="round"
-            style={{ transition: 'stroke-dashoffset 1s cubic-bezier(.4,0,.2,1), stroke .3s' }}
-          />
-        </svg>
-        <div
-          className="absolute inset-0 flex flex-col items-center justify-center"
-          style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
-        >
-          <span className="font-mono-ui text-2xl font-bold" style={{ color, lineHeight: 1 }}>
-            {score}
-          </span>
-          <span className="text-[10px] text-app-dim font-mono-ui">/{max}</span>
-        </div>
-      </div>
-      {label && <span className="text-xs text-app-muted uppercase tracking-wider">{label}</span>}
-    </div>
-  )
-}
-
-/** Sub-score card with horizontal progress bar. */
-function SubScoreCard({ label, score, max = 25, icon: Icon }) {
-  const pct = Math.round((score / max) * 100)
-  const color = scoreColor(score, max)
-
-  return (
-    <div
-      className="flex-1 min-w-[180px] p-4 rounded-xl"
-      style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-    >
-      <div className="flex items-center gap-2 mb-3">
-        {Icon && <Icon size={16} style={{ color }} />}
-        <span className="text-xs uppercase tracking-wider text-app-muted font-medium">{label}</span>
-      </div>
-      <div className="flex items-baseline gap-2 mb-2">
-        <span className="font-mono-ui text-xl font-bold" style={{ color }}>{score}</span>
-        <span className="text-app-dim text-xs font-mono-ui">/{max}</span>
-        <span className="ml-auto text-xs font-mono-ui" style={{ color }}>{pct}%</span>
-      </div>
-      <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
-        <div
-          className="h-full rounded-full"
-          style={{
-            width: `${pct}%`,
-            background: `linear-gradient(90deg, ${color}88, ${color})`,
-            transition: 'width 1s cubic-bezier(.4,0,.2,1)',
-          }}
-        />
-      </div>
-    </div>
-  )
-}
-
-/** Section wrapper with header icon + title. */
-function Section({ id, icon: Icon, title, children, border = 'var(--border)' }) {
-  return (
-    <section id={id} className="scroll-mt-24">
-      <div
-        className="rounded-2xl overflow-hidden"
-        style={{ background: 'var(--bg-surface)', border: `1px solid ${border}`, backdropFilter: 'blur(16px)' }}
-      >
-        <div className="flex items-center gap-3 px-6 py-4" style={{ borderBottom: `1px solid ${border}` }}>
-          {Icon && <Icon size={18} className="text-hermes" style={{ flexShrink: 0 }} />}
-          <h2 className="text-base font-semibold text-app-primary tracking-wide">{title}</h2>
-        </div>
-        <div className="px-6 py-5">{children}</div>
-      </div>
-    </section>
-  )
-}
-
-/** Suggestion card with title, content, copy. */
-function SuggestionCard({ label, content, mono = true }) {
-  if (!content) return null
-  const text = Array.isArray(content) ? content.join('\n') : String(content)
-  return (
-    <div
-      className="rounded-xl p-4 space-y-3"
-      style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-app-primary">{label}</span>
-        <CopyBtn text={text} label={label} />
-      </div>
-      <div
-        className={`text-sm leading-relaxed p-3 rounded-lg ${mono ? 'font-mono-ui' : ''}`}
-        style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
-      >
-        {text}
-      </div>
-    </div>
-  )
-}
-
-/** Chip / tag for keywords & entities. */
-function SemanticChip({ text }) {
-  const handleClick = () => copyToClipboard(text, text)
-  return (
-    <button
-      onClick={handleClick}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all duration-200 hover:scale-105 cursor-pointer"
-      style={{
-        background: 'var(--hermes-dim)',
-        color: 'var(--hermes)',
-        border: '1px solid var(--hermes-fade)',
-      }}
-      title="Click để copy"
-    >
-      <Tag size={10} />
-      {text}
-    </button>
-  )
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   TABLE OF CONTENTS (floating sidebar)
-   ═══════════════════════════════════════════════════════════════ */
-const TOC_ITEMS = [
-  { id: 'scores',      label: 'Điểm tổng quan',        icon: Target },
-  { id: 'checklist',   label: 'Tiêu chí đánh giá',     icon: List },
-  { id: 'strengths',   label: 'Điểm mạnh',             icon: Star },
-  { id: 'issues',      label: 'Vấn đề cần sửa',        icon: AlertTriangle },
-  { id: 'suggestions', label: 'Đề xuất chỉnh sửa',     icon: PenTool },
-  { id: 'semantic',    label: 'Semantic Gap',            icon: Search },
-  { id: 'clusters',    label: 'Cluster mới cần tạo',    icon: Layers },
-  { id: 'geo-wins',    label: 'GEO Quick Wins',         icon: Zap },
-]
-
-function TableOfContents({ activeSection }) {
-  return (
-    <nav
-      className="hidden xl:block sticky top-24 w-56 flex-shrink-0 self-start rounded-2xl p-4 space-y-1"
-      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', backdropFilter: 'blur(16px)' }}
-    >
-      <div className="text-[10px] uppercase tracking-widest text-app-dim mb-3 px-2">Mục lục</div>
-      {TOC_ITEMS.map(item => {
-        const active = activeSection === item.id
-        return (
-          <a
-            key={item.id}
-            href={`#${item.id}`}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-all duration-200"
-            style={{
-              background: active ? 'var(--hermes-dim)' : 'transparent',
-              color: active ? 'var(--hermes)' : 'var(--text-muted)',
-              fontWeight: active ? 600 : 400,
-            }}
-            onClick={(e) => {
-              e.preventDefault()
-              document.getElementById(item.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-            }}
-          >
-            <item.icon size={13} style={{ flexShrink: 0 }} />
-            <span className="truncate">{item.label}</span>
-          </a>
-        )
-      })}
-    </nav>
-  )
-}
-
 const STEPS = [
   { label: 'Lấy dữ liệu bài viết mới nhất từ WordPress', icon: '📥' },
   { label: 'Phân tích cấu trúc bài viết (headings, ảnh, links)', icon: '📊' },
@@ -313,20 +87,16 @@ const STEPS = [
 ]
 
 const AUDIT_MODELS = [
-  { id: 'nvidia:meta/llama-3.3-70b-instruct', name: 'NVIDIA Llama 3.3 70B (Khuyên dùng)', badge: 'NVIDIA' },
-  { id: 'nvidia:nvidia/llama-3.1-nemotron-70b-instruct', name: 'NVIDIA Nemotron 70B (Đánh giá tốt)', badge: 'NVIDIA' },
-  { id: 'nvidia:meta/llama-3.1-405b-instruct', name: 'NVIDIA Llama 3.1 405B (Chất lượng cao)', badge: 'NVIDIA' },
-  { id: 'kimi:kimi-k2.6', name: 'Kimi K2.6 (Khuyên dùng - Cực mạnh tiếng Việt)', badge: 'Kimi' },
-  { id: 'kimi:kimi-k2-thinking', name: 'Kimi K2 Thinking (Suy luận sâu)', badge: 'Kimi' },
+  { id: 'kimi:kimi-k2-thinking', name: 'Kimi K2 Thinking (Suy luận sâu - Khuyên dùng)', badge: 'Kimi' },
+  { id: 'kimi:kimi-k2.6', name: 'Kimi K2.6 (Mạnh tiếng Việt)', badge: 'Kimi' },
   { id: 'kimi:kimi-k2-thinking-turbo', name: 'Kimi K2 Thinking Turbo (Nhanh)', badge: 'Kimi' },
-  { id: 'groq:llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B (Tốc độ nhanh)', badge: 'Groq' },
-  { id: 'groq:qwen/qwen3-32b', name: 'Groq Qwen 3 32B', badge: 'Groq' },
-  { id: 'nvidia:deepseek-ai/deepseek-r1', name: 'DeepSeek R1 via NVIDIA (Suy luận)', badge: 'Reasoning' },
+  { id: 'nvidia:meta/llama-3.3-70b-instruct', name: 'NVIDIA Llama 3.3 70B', badge: 'NVIDIA' },
+  { id: 'nvidia:nvidia/llama-3.1-nemotron-70b-instruct', name: 'NVIDIA Nemotron 70B', badge: 'NVIDIA' },
+  { id: 'groq:llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B', badge: 'Groq' },
   { id: 'deepseek:deepseek-reasoner', name: 'DeepSeek R1 Direct', badge: 'Reasoning' },
   { id: 'deepseek:deepseek-chat', name: 'DeepSeek V3', badge: 'DeepSeek' },
   { id: 'openrouter:anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', badge: 'Claude' },
-  { id: 'openai:gpt-4o', name: 'GPT-4o (Đa dụng)', badge: 'OpenAI' },
-  { id: 'gemini:gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro', badge: 'Gemini' }
+  { id: 'openai:gpt-4o', name: 'GPT-4o (Đa dụng)', badge: 'OpenAI' }
 ]
 
 /* ═══════════════════════════════════════════════════════════════
@@ -339,17 +109,36 @@ export default function WpAuditResult() {
   const navigate = useNavigate()
 
   const [data, setData] = useState(null)
-  const [activeSection, setActiveSection] = useState('scores')
-  const [selectedModel, setSelectedModel] = useState(() => {
-    return localStorage.getItem('wp_audit_selected_model') || 'nvidia:meta/llama-3.3-70b-instruct'
-  })
+  const [activeTab, setActiveTab] = useState('overview')
   const [checklistTab, setChecklistTab] = useState('seo')
-  const mainRef = useRef(null)
+  const [selectedModel, setSelectedModel] = useState(() => {
+    return localStorage.getItem('wp_audit_selected_model') || 'kimi:kimi-k2-thinking'
+  })
 
   const [reAuditing, setReAuditing] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
   const [stepsStatus, setStepsStatus] = useState(['pending', 'pending', 'pending', 'pending', 'pending'])
+  
+  // Real-time copy success feedback
+  const [copiedKey, setCopiedKey] = useState(null)
+  
+  // State for GEO Quick Wins checked items
+  const [checkedWins, setCheckedWins] = useState({})
+
+  // State for editable GEO Opening
+  const [draftIntro, setDraftIntro] = useState('')
+
+  // State for collapsed copywriter notes
+  const [openNotes, setOpenNotes] = useState({})
+
+  // Copy helper
+  const copy = (text, key) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
+    toast.success('Đã sao chép!');
+  };
 
   const handleReAudit = async () => {
     setReAuditing(true)
@@ -426,14 +215,11 @@ export default function WpAuditResult() {
 
   /* ─── Load data ─── */
   useEffect(() => {
-    // 1. From navigation state
     if (location.state?.audit && location.state?.post) {
       setData(location.state)
-      // Also persist to sessionStorage
       try { sessionStorage.setItem(`wp_audit_${postId}`, JSON.stringify(location.state)) } catch {}
       return
     }
-    // 2. Fallback: sessionStorage
     try {
       const raw = sessionStorage.getItem(`wp_audit_${postId}`)
       if (raw) {
@@ -441,29 +227,18 @@ export default function WpAuditResult() {
         return
       }
     } catch {}
-    // 3. Nothing found
     setData(null)
   }, [postId, location.state])
 
-  /* ─── Intersection Observer for TOC active state ─── */
+  // Sync draft GEO opening paragraph on load
   useEffect(() => {
-    const ids = TOC_ITEMS.map(t => t.id)
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setActiveSection(entry.target.id)
-            break
-          }
-        }
-      },
-      { rootMargin: '-100px 0px -60% 0px', threshold: 0.1 },
-    )
-    ids.forEach(id => {
-      const el = document.getElementById(id)
-      if (el) observer.observe(el)
-    })
-    return () => observer.disconnect()
+    if (data?.audit?.suggestions?.opening_paragraph) {
+      setDraftIntro(data.audit.suggestions.opening_paragraph)
+    } else if (data?.audit?.suggestions?.intro_paragraph) {
+      setDraftIntro(data.audit.suggestions.intro_paragraph)
+    } else {
+      setDraftIntro('')
+    }
   }, [data])
 
   /* ─── Guard: no data ─── */
@@ -486,12 +261,23 @@ export default function WpAuditResult() {
   const issues = Array.isArray(audit.critical_issues) ? audit.critical_issues : []
   const strengths = Array.isArray(audit.strengths) ? audit.strengths : null
   const geoWins = Array.isArray(audit.geo_quick_wins) ? audit.geo_quick_wins : []
-  const clusterPosts = Array.isArray(suggestions.new_cluster_posts_needed) ? suggestions.new_cluster_posts_needed : []
+  const clusterPosts = Array.isArray(suggestions.new_cluster_posts_needed) || Array.isArray(suggestions.cluster_gaps)
+    ? (suggestions.new_cluster_posts_needed || suggestions.cluster_gaps)
+    : []
   const missingEntities = Array.isArray(suggestions.missing_entities) ? suggestions.missing_entities : []
-  const missingLsi = Array.isArray(suggestions.missing_lsi_keywords) ? suggestions.missing_lsi_keywords : []
+  const missingLsi = Array.isArray(suggestions.missing_lsi_keywords) || Array.isArray(suggestions.missing_lsi)
+    ? (suggestions.missing_lsi_keywords || suggestions.missing_lsi)
+    : []
   const internalLinks = Array.isArray(suggestions.internal_links_to_add) ? suggestions.internal_links_to_add : []
   const faqs = Array.isArray(suggestions.faq_block) ? suggestions.faq_block : []
   const h2s = Array.isArray(suggestions.h2_structure) ? suggestions.h2_structure : []
+  const checklist = audit.checklist_results || audit.checklist || {}
+
+  // Parse scores safely (support fallback score fields)
+  const seoScore = sb.seo ?? sb.seo_score ?? 0
+  const geoScore = sb.geo ?? sb.geo_score ?? 0
+  const pillarClusterScore = sb.pillar_cluster ?? sb.pillar_cluster_score ?? 0
+  const semanticScore = sb.semantic ?? sb.semantic_score ?? 0
 
   // Group issues by severity
   const issuesBySeverity = {}
@@ -502,15 +288,39 @@ export default function WpAuditResult() {
     issuesBySeverity[sev].push(iss)
   })
 
+  // Priority issues (top 3 highest severity)
+  const severityValue = { critical: 4, high: 3, medium: 2, low: 1 }
+  const priorityIssues = [...issues].sort((a, b) => {
+    const aVal = severityValue[a.severity?.toLowerCase()] || 0
+    const bVal = severityValue[b.severity?.toLowerCase()] || 0
+    return bVal - aVal
+  }).slice(0, 3)
+
   const postTitle = post?.title?.rendered || post?.title || `Post #${postId}`
   const postLink = post?.link || ''
   const postDate = post?.date ? new Date(post.date).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : ''
 
+  // Function to calculate checklist tab total score
+  const getChecklistTabTotalScore = (tabKey) => {
+    const list = checklist[tabKey] || []
+    return list.reduce((acc, item) => {
+      const isPassed = item.pass ?? item.passed ?? false
+      return acc + (isPassed ? (item.points || 0) : 0)
+    }, 0)
+  }
+
+  const visibleChecklistTabs = [
+    { id: 'seo', label: 'SEO Fundamentals', score: seoScore },
+    { id: 'geo', label: 'GEO (Generative Engine)', score: geoScore },
+    { id: 'pillar_cluster', label: 'Pillar / Topic Cluster', score: pillarClusterScore },
+    { id: 'semantic', label: 'Semantic Content', score: semanticScore }
+  ]
+
   return (
-    <div className="min-h-screen" style={{ background: 'var(--bg-base)' }}>
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-base)' }}>
       {/* ═══ STICKY HEADER ═══ */}
       <header
-        className="sticky top-0 z-50 px-6 py-3"
+        className="sticky top-0 z-50 px-6 py-3 shrink-0"
         style={{
           background: 'rgba(9,11,16,0.85)',
           backdropFilter: 'blur(20px)',
@@ -518,65 +328,61 @@ export default function WpAuditResult() {
           borderBottom: '1px solid var(--border)',
         }}
       >
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center gap-4 justify-between">
           {/* Back & Re-Audit Actions */}
-          <div className="flex items-center gap-4 flex-wrap">
-            <button
-              onClick={() => navigate('/hermes/wp-audit')}
-              className="inline-flex items-center gap-2 text-sm text-app-muted hover:text-hermes transition-colors"
-            >
-              <ArrowLeft size={16} />
-              <span>Quay lại danh sách</span>
-            </button>
-
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedModel}
-                onChange={(e) => {
-                  setSelectedModel(e.target.value)
-                  localStorage.setItem('wp_audit_selected_model', e.target.value)
-                }}
-                className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs outline-none"
-                style={{ background: 'rgba(9,11,16,0.6)', border: '1px solid var(--border)' }}
-              >
-                {AUDIT_MODELS.map(m => (
-                  <option key={m.id} value={m.id}>🤖 {m.name}</option>
-                ))}
-              </select>
-
+          <div className="flex flex-col gap-2 min-w-0">
+            <div className="flex items-center gap-4">
               <button
-                onClick={handleReAudit}
-                disabled={reAuditing}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes transition-all text-xs font-semibold"
-                title="Đánh giá lại bài viết (quét mới và lưu đè)"
+                onClick={() => navigate('/hermes/wp-audit')}
+                className="inline-flex items-center gap-2 text-sm text-app-muted hover:text-hermes transition-colors shrink-0"
               >
-                {reAuditing ? (
-                  <>
-                    <Loader className="w-3.5 h-3.5 animate-spin" />
-                    <span>Đang quét lại...</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Đánh giá lại</span>
-                  </>
-                )}
+                <ArrowLeft size={16} />
+                <span>Quay lại</span>
               </button>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <select
+                  value={selectedModel}
+                  onChange={(e) => {
+                    setSelectedModel(e.target.value)
+                    localStorage.setItem('wp_audit_selected_model', e.target.value)
+                  }}
+                  className="px-2 py-1 bg-app-elevated border border-border text-app-primary rounded font-mono-ui text-xs outline-none"
+                  style={{ background: 'rgba(9,11,16,0.6)', border: '1px solid var(--border)' }}
+                >
+                  {AUDIT_MODELS.map(m => (
+                    <option key={m.id} value={m.id}>🤖 {m.name}</option>
+                  ))}
+                </select>
+
+                <button
+                  onClick={handleReAudit}
+                  disabled={reAuditing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes transition-all text-xs font-semibold"
+                >
+                  {reAuditing ? (
+                    <>
+                      <Loader className="w-3.5 h-3.5 animate-spin" />
+                      <span>Đang quét...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Quét lại</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
-          </div>
 
-
-          <div className="sm:ml-4 flex-1 min-w-0">
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Post title */}
+            <div className="flex items-center gap-3 mt-1 flex-wrap min-w-0">
               <h1
-                className="text-lg font-semibold text-app-primary truncate max-w-xl"
+                className="text-base font-semibold text-app-primary truncate max-w-lg"
                 title={postTitle}
                 dangerouslySetInnerHTML={{ __html: postTitle }}
               />
-              {/* Badges */}
               <span
-                className="px-2 py-0.5 rounded text-[10px] font-mono-ui font-bold uppercase tracking-wider"
+                className="px-2 py-0.5 rounded text-[9px] font-mono-ui font-bold uppercase tracking-wider"
                 style={{
                   background: audit.post_type === 'pillar' ? 'rgba(139,92,246,0.2)' : 'var(--hermes-dim)',
                   color: audit.post_type === 'pillar' ? '#8b5cf6' : 'var(--hermes)',
@@ -585,496 +391,685 @@ export default function WpAuditResult() {
               >
                 {audit.post_type === 'pillar' ? '🏛 PILLAR' : '🔗 CLUSTER'}
               </span>
-              <span
-                className="px-2 py-0.5 rounded text-[10px] font-mono-ui text-app-dim"
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-              >
-                ID: {post?.id || postId}
-              </span>
-            </div>
-            <div className="flex items-center gap-3 mt-1 flex-wrap">
-              {postLink && (
-                <a
-                  href={postLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-hermes hover:underline truncate max-w-md"
-                >
-                  <ExternalLink size={11} />
-                  {postLink}
-                </a>
-              )}
-              {postDate && <span className="text-[10px] text-app-dim font-mono-ui">{postDate}</span>}
               {audit.pillar_topic && (
                 <span className="text-[10px] text-app-muted">
-                  <Bookmark size={10} className="inline mr-1" />
-                  Pillar: {audit.pillar_topic}
+                  Topic: <strong>{audit.pillar_topic}</strong>
                 </span>
               )}
+            </div>
+          </div>
+
+          {/* Links & metadata */}
+          <div className="text-right shrink-0 flex flex-col items-end gap-1">
+            {postLink && (
+              <a
+                href={postLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-hermes hover:underline max-w-xs truncate"
+              >
+                <ExternalLink size={11} />
+                <span>Xem bài viết thực tế</span>
+              </a>
+            )}
+            <div className="text-[10px] text-app-dim font-mono-ui">
+              ID: {post?.id || postId} {postDate && `· Ngày đăng: ${postDate}`}
             </div>
           </div>
         </div>
       </header>
 
-      {/* ═══ BODY ═══ */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 flex gap-6" ref={mainRef}>
-        {/* TOC sidebar */}
-        <TableOfContents activeSection={activeSection} />
+      {/* ═══ TAB BAR ═══ */}
+      <div className="bg-app-surface border-b border-border sticky top-[61px] z-40 shrink-0">
+        <div className="max-w-7xl mx-auto px-6 flex gap-4 overflow-x-auto">
+          {[
+            { id: 'overview', label: 'Overview', icon: Star },
+            { id: 'checklist', label: 'Checklist chi tiết', icon: Info },
+            { id: 'suggestions', label: 'Đề xuất sửa', icon: PenTool },
+            { id: 'semantic', label: 'Semantic SEO', icon: Search }
+          ].map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`flex items-center gap-2 py-3 px-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
+                activeTab === t.id
+                  ? 'border-hermes text-hermes'
+                  : 'border-transparent text-app-muted hover:text-app-primary'
+              }`}
+            >
+              <t.icon size={15} />
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
-        {/* Main content */}
-        <main className="flex-1 min-w-0 space-y-8">
-          {/* ─── 1. SCORE OVERVIEW ─── */}
-          <section id="scores" className="scroll-mt-24">
+      {/* ═══ MAIN CONTENT ═══ */}
+      <div className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6 min-h-0">
+        {activeTab === 'overview' && (
+          <div className="space-y-6">
+            {/* Score block */}
             <div
-              className="rounded-2xl p-6 sm:p-8"
+              className="rounded-2xl p-6"
               style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', backdropFilter: 'blur(16px)' }}
             >
               <div className="flex flex-col md:flex-row items-center gap-8">
-                {/* Main score ring */}
-                <ScoreRing score={audit.audit_score ?? 0} max={100} size={140} strokeWidth={10} label="Điểm tổng" />
+                {/* Circular Gauge */}
+                <div className="flex flex-col items-center gap-2 shrink-0">
+                  <div style={{ position: 'relative', width: 140, height: 140 }}>
+                    <svg width={140} height={140} style={{ transform: 'rotate(-90deg)' }}>
+                      <circle
+                        cx={70} cy={70} r={62}
+                        fill="none" stroke="var(--border)" strokeWidth={10}
+                      />
+                      <circle
+                        cx={70} cy={70} r={62}
+                        fill="none" stroke={scoreColor(audit.audit_score ?? 0, 100)} strokeWidth={10}
+                        strokeDasharray={2 * Math.PI * 62}
+                        strokeDashoffset={2 * Math.PI * 62 * (1 - Math.min((audit.audit_score ?? 0) / 100, 1))}
+                        strokeLinecap="round"
+                        style={{ transition: 'stroke-dashoffset 1s cubic-bezier(.4,0,.2,1), stroke .3s' }}
+                      />
+                    </svg>
+                    <div
+                      className="absolute inset-0 flex flex-col items-center justify-center"
+                      style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <span className="font-mono-ui text-3xl font-bold font-mono" style={{ color: scoreColor(audit.audit_score ?? 0, 100) }}>
+                        {audit.audit_score ?? 0}
+                      </span>
+                      <span className="text-[10px] text-app-dim font-mono-ui">/100</span>
+                    </div>
+                  </div>
+                  <span className="text-xs text-app-muted uppercase tracking-wider font-semibold">Điểm tổng</span>
+                </div>
 
-                {/* Sub-score cards */}
-                <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <SubScoreCard label="SEO" score={sb.seo_score ?? 0} icon={Search} />
-                  <SubScoreCard label="GEO" score={sb.geo_score ?? 0} icon={Globe} />
-                  <SubScoreCard label="Pillar / Cluster" score={sb.pillar_cluster ?? 0} icon={Link2} />
-                  <SubScoreCard label="Semantic" score={sb.semantic_score ?? 0} icon={Layers} />
+                {/* 4 horizontal bars */}
+                <div className="flex-1 w-full space-y-4">
+                  {[
+                    { key: 'seo', label: 'SEO Fundamentals', score: seoScore },
+                    { key: 'geo', label: 'GEO (Generative Engine)', score: geoScore },
+                    { key: 'pillar_cluster', label: 'Pillar / Cluster', score: pillarClusterScore },
+                    { key: 'semantic', label: 'Semantic SEO', score: semanticScore }
+                  ].map(bar => {
+                    const color = scoreColor(bar.score, 25)
+                    const pct = Math.round((bar.score / 25) * 100)
+                    return (
+                      <div key={bar.key} className="space-y-1">
+                        <div className="flex justify-between text-xs font-semibold">
+                          <span className="text-app-muted">{bar.label}</span>
+                          <span className="font-mono" style={{ color }}>{bar.score}/25 · {pct}%</span>
+                        </div>
+                        <div className="w-full h-3 rounded-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
+                          <div
+                            className="h-full rounded-full transition-all duration-1000"
+                            style={{
+                              width: `${pct}%`,
+                              background: `linear-gradient(90deg, ${color}88, ${color})`
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
-
-              {/* Quick summary */}
-              <div className="mt-6 pt-4 flex flex-wrap gap-6 text-xs text-app-muted font-mono-ui" style={{ borderTop: '1px solid var(--border)' }}>
-                <span>
-                  <span className="text-app-dim">Vấn đề:</span>{' '}
-                  <span className="text-app-primary font-semibold">{issues.length}</span>
-                </span>
-                <span>
-                  <span className="text-app-dim">Critical:</span>{' '}
-                  <span style={{ color: '#f87171' }}>{issuesBySeverity.critical?.length || 0}</span>
-                </span>
-                <span>
-                  <span className="text-app-dim">High:</span>{' '}
-                  <span style={{ color: '#fb923c' }}>{issuesBySeverity.high?.length || 0}</span>
-                </span>
-                <span>
-                  <span className="text-app-dim">Quick wins:</span>{' '}
-                  <span className="text-hermes">{geoWins.length}</span>
-                </span>
-              </div>
             </div>
-          </section>
 
-          {/* ─── 1.5. DETAILED AUDIT CHECKLIST ─── */}
-          <section id="checklist" className="scroll-mt-24">
-            <Section id="checklist-section" icon={List} title="📋 Chi tiết tiêu chí kiểm tra (Audit Checklist)">
-              {audit.checklist_results ? (
-                <div className="space-y-4">
-                  {/* Category Tabs */}
-                  <div className="flex flex-wrap gap-2 border-b border-border pb-3">
-                    {Object.entries({
-                      seo: { label: 'SEO Fundamentals', score: sb.seo_score ?? sb.seo ?? 0 },
-                      geo: { label: 'Generative Engine (GEO)', score: sb.geo_score ?? sb.geo ?? 0 },
-                      pillar_cluster: { label: 'Pillar / Topic Cluster', score: sb.pillar_cluster ?? 0 },
-                      semantic: { label: 'Semantic Content', score: sb.semantic_score ?? sb.semantic ?? 0 }
-                    }).map(([key, cat]) => {
-                      const active = checklistTab === key
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => setChecklistTab(key)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${
-                            active
-                              ? 'bg-hermes/15 border-hermes text-hermes'
-                              : 'bg-app-elevated border-border text-app-muted hover:text-app-primary'
-                          }`}
-                        >
-                          {cat.label} ({cat.score}/25)
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  {/* Checklist Items list */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                    {(audit.checklist_results[checklistTab] || []).map((item, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 hover-row"
-                        style={{
-                          background: 'var(--bg-elevated)',
-                          borderColor: item.passed ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                        }}
-                      >
-                        <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-app-base border border-border">
-                          {item.passed ? (
-                            <CheckCircle2 size={14} className="text-green-500" />
-                          ) : (
-                            <XCircle size={14} className="text-red-500" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-xs ${item.passed ? 'text-app-primary font-medium' : 'text-app-dim'}`}>
-                            {item.label}
-                          </p>
-                        </div>
-                        <span
-                          className={`text-xs font-mono-ui font-bold px-2 py-0.5 rounded ${
-                            item.passed
-                              ? 'bg-green-500/10 text-green-500 border border-green-500/20'
-                              : 'bg-app-base text-app-dim border border-border'
-                          }`}
-                        >
-                          +{item.points}đ
-                        </span>
+            {/* Priority Banner */}
+            {priorityIssues.length > 0 && (
+              <div className="p-5 rounded-2xl bg-red-950/20 border border-red-900/30">
+                <div className="flex items-center gap-2 mb-3 text-red-400 font-bold text-xs uppercase tracking-wider">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                  🚨 Làm ngay để tăng điểm nhanh nhất:
+                </div>
+                <div className="flex flex-wrap items-center gap-y-2 gap-x-4 text-xs font-mono-ui">
+                  {priorityIssues.map((issue, idx) => {
+                    const isCritical = issue.severity?.toLowerCase() === 'critical'
+                    const isHigh = issue.severity?.toLowerCase() === 'high'
+                    const color = isCritical ? '#f87171' : isHigh ? '#fb923c' : '#facc15'
+                    const dot = isCritical ? '🔴' : isHigh ? '🟠' : '🟡'
+                    return (
+                      <div key={idx} className="flex items-center gap-2">
+                        <span>{dot}</span>
+                        <span style={{ color }}>{issue.issue}</span>
+                        {idx < priorityIssues.length - 1 && <span className="text-app-dim font-bold ml-2 select-none">·</span>}
                       </div>
-                    ))}
-                  </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Strengths */}
+            {strengths && strengths.length > 0 && (
+              <div className="p-5 rounded-2xl bg-green-950/10 border border-green-900/20">
+                <div className="flex items-center gap-2 mb-3 text-green-400 font-bold text-xs uppercase tracking-wider">
+                  <Star size={14} className="fill-green-400" />
+                  ✅ Điểm mạnh hiện tại
+                </div>
+                <ul className="space-y-2 text-sm text-app-primary">
+                  {strengths.map((str, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="text-green-500 font-bold">•</span>
+                      <span>{str}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Issues */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-bold text-app-primary uppercase tracking-wider flex items-center gap-2">
+                <AlertTriangle size={16} className="text-warn" />
+                ⚠️ Chi tiết vấn đề cần sửa đổi ({issues.length})
+              </h3>
+              {issues.length === 0 ? (
+                <div className="p-4 rounded-xl bg-app-elevated border border-border text-sm text-app-muted">
+                  🎉 Không phát hiện vấn đề nào. Bài viết đạt điểm tối ưu!
                 </div>
               ) : (
-                <div className="p-4 bg-app-elevated border border-border rounded-xl flex flex-col items-center justify-center gap-3 text-center">
-                  <Info className="w-8 h-8 text-hermes" />
-                  <p className="text-xs text-app-muted max-w-md leading-relaxed">
-                    Dữ liệu checklist chi tiết chưa khả dụng cho bản quét cũ này.
-                    Vui lòng bấm <strong className="text-hermes">Đánh giá lại</strong> ở góc trên bên phải để quét mới và hiển thị đầy đủ checklist chi tiết.
-                  </p>
-                </div>
-              )}
-            </Section>
-          </section>
-
-          {/* ─── 2. STRENGTHS ─── */}
-          <Section id="strengths" icon={CheckCircle2} title="✅ Điểm mạnh" border="rgba(34,197,94,0.3)">
-            {strengths && strengths.length > 0 ? (
-              <ul className="space-y-2">
-                {strengths.map((s, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm">
-                    <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" style={{ color: '#22c55e' }} />
-                    <span className="text-app-primary">{s}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="flex items-center gap-3 py-3 text-sm text-app-muted">
-                <Info size={16} className="text-hermes flex-shrink-0" />
-                <span>Chức năng phân tích điểm mạnh sẽ được cập nhật sớm. Hệ thống đang thu thập dữ liệu.</span>
-              </div>
-            )}
-          </Section>
-
-          {/* ─── 3. ISSUES ─── */}
-          <Section id="issues" icon={AlertTriangle} title="⚠️ Vấn đề cần sửa">
-            {issues.length === 0 ? (
-              <div className="text-sm text-app-muted flex items-center gap-2">
-                <CheckCircle2 size={16} style={{ color: '#22c55e' }} />
-                Không phát hiện vấn đề nghiêm trọng nào — bài viết đã khá tốt!
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {SEVERITY_ORDER.map(sev => {
-                  const group = issuesBySeverity[sev]
-                  if (!group || group.length === 0) return null
-                  const cfg = SEVERITY_CONFIG[sev]
-                  const SevIcon = cfg.icon
-                  return (
-                    <div key={sev} className="space-y-3">
-                      {/* Group header */}
-                      <div className="flex items-center gap-2 text-xs uppercase tracking-wider font-semibold" style={{ color: cfg.color }}>
-                        <SevIcon size={14} />
-                        {cfg.label} ({group.length})
-                      </div>
-
-                      {/* Issue cards */}
-                      {group.map((iss, idx) => {
-                        const catCfg = CATEGORY_COLORS[iss.category] || { bg: 'var(--bg-hover)', color: 'var(--text-muted)' }
-                        return (
-                          <div
-                            key={idx}
-                            className="rounded-xl p-4 space-y-3 transition-all duration-200 hover:translate-x-0.5"
-                            style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
-                          >
-                            {/* Badge row */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span
-                                className="px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono-ui"
-                                style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}
-                              >
-                                {cfg.label}
-                              </span>
-                              <span
-                                className="px-2 py-0.5 rounded text-[10px] font-medium font-mono-ui"
-                                style={{ background: catCfg.bg, color: catCfg.color }}
-                              >
-                                {iss.category}
-                              </span>
-                              {iss.location && (
-                                <span
-                                  className="px-2 py-0.5 rounded text-[10px] font-mono-ui text-app-dim"
-                                  style={{ background: 'var(--bg-base)', border: '1px solid var(--border)' }}
-                                >
-                                  📍 {iss.location}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Issue text */}
-                            <p className="text-sm font-semibold text-app-primary leading-relaxed">
-                              {iss.issue}
-                            </p>
-
-                            {/* Fix recommendation */}
-                            {iss.fix && (
-                              <div className="flex items-start gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                                <span className="flex-shrink-0">👉</span>
-                                <span>{iss.fix}</span>
-                              </div>
-                            )}
-
-                            {/* Copywriter note */}
+                <div className="space-y-4">
+                  {SEVERITY_ORDER.map(sev => {
+                    const group = issuesBySeverity[sev] || []
+                    if (group.length === 0) return null
+                    const sevCfg = SEVERITY_CONFIG[sev]
+                    return (
+                      <div key={sev} className="space-y-2">
+                        <div className="text-[10px] font-bold uppercase tracking-wider pl-1" style={{ color: sevCfg.color }}>
+                          {sevCfg.label} ({group.length})
+                        </div>
+                        {group.map((issue, idx) => {
+                          const noteKey = `${sev}-${idx}`
+                          const isNoteOpen = !!openNotes[noteKey]
+                          const catCfg = CATEGORY_COLORS[issue.category] || { bg: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)' }
+                          return (
                             <div
-                              className="rounded-lg p-3 space-y-1"
-                              style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)' }}
+                              key={idx}
+                              className="rounded-xl p-4 space-y-3 transition-all duration-200"
+                              style={{ background: 'var(--bg-elevated)', border: `1px solid ${sevCfg.border}` }}
                             >
-                              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-hermes uppercase tracking-wider">
-                                <PenTool size={12} />
-                                Ghi chú cho Copywriter
+                              {/* Badges */}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className="px-2 py-0.5 rounded text-[9px] font-bold font-mono-ui border"
+                                  style={{ background: sevCfg.bg, color: sevCfg.color, borderColor: sevCfg.border }}
+                                >
+                                  {sevCfg.label}
+                                </span>
+                                <span
+                                  className="px-2 py-0.5 rounded text-[9px] font-bold font-mono-ui"
+                                  style={{ background: catCfg.bg, color: catCfg.color }}
+                                >
+                                  {issue.category}
+                                </span>
+                                {issue.location && (
+                                  <span className="px-2 py-0.5 rounded text-[9px] font-mono-ui bg-app-base border border-border text-app-muted">
+                                    📍 {issue.location}
+                                  </span>
+                                )}
                               </div>
-                              <p className="text-xs text-app-muted leading-relaxed whitespace-pre-line">
-                                {getCopywriterNote(iss)}
-                              </p>
+
+                              {/* Description */}
+                              <p className="text-sm font-bold text-app-primary leading-relaxed">{issue.issue}</p>
+
+                              {/* Fix */}
+                              {issue.fix && (
+                                <p className="text-xs text-app-muted leading-relaxed">
+                                  <span className="text-hermes font-bold">👉 Hướng dẫn sửa:</span> {issue.fix}
+                                </p>
+                              )}
+
+                              {/* Collapsed copywriter notes */}
+                              <div className="border-t border-border/50 pt-2.5">
+                                <button
+                                  onClick={() => setOpenNotes(prev => ({ ...prev, [noteKey]: !prev[noteKey] }))}
+                                  className="flex items-center gap-1 text-[11px] font-semibold text-hermes uppercase tracking-wider hover:underline"
+                                >
+                                  <PenTool size={11} />
+                                  <span>Ghi chú cho Copywriter</span>
+                                  {isNoteOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                </button>
+                                {isNoteOpen && (
+                                  <div
+                                    className="mt-2 rounded-lg p-3 text-xs text-app-muted leading-relaxed whitespace-pre-line"
+                                    style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.1)' }}
+                                  >
+                                    {getCopywriterNote(issue)}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </Section>
-
-          {/* ─── 4. SUGGESTIONS ─── */}
-          <Section id="suggestions" icon={PenTool} title="✏️ Đề xuất chỉnh sửa">
-            <div className="space-y-4">
-              <SuggestionCard label="📌 Title mới" content={suggestions.title} />
-              <SuggestionCard label="🏷️ Meta Title" content={suggestions.meta_title} />
-              <SuggestionCard label="📝 Meta Description" content={suggestions.meta_description} />
-              <SuggestionCard label="💡 Đoạn mở bài GEO (Direct Answer)" content={suggestions.intro_paragraph} mono={false} />
-
-              {/* H2 Structure */}
-              {h2s.length > 0 && (
-                <div
-                  className="rounded-xl p-4 space-y-3"
-                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-app-primary">📋 Cấu trúc H2 đề xuất</span>
-                    <CopyBtn text={h2s.map((h, i) => `${i + 1}. ${h}`).join('\n')} label="H2 structure" />
-                  </div>
-                  <ol className="space-y-2 pl-1">
-                    {h2s.map((h, i) => (
-                      <li key={i} className="flex items-start gap-3 text-sm">
-                        <span
-                          className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-bold font-mono-ui"
-                          style={{ background: 'var(--hermes-dim)', color: 'var(--hermes)', border: '1px solid var(--hermes-fade)' }}
-                        >
-                          {i + 1}
-                        </span>
-                        <span className="text-app-primary font-mono-ui pt-0.5">{h}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-
-              {/* FAQ Block */}
-              {faqs.length > 0 && (
-                <div
-                  className="rounded-xl p-4 space-y-4"
-                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-app-primary">❓ FAQ Block đề xuất</span>
-                    <CopyBtn
-                      text={faqs.map(f => `Q: ${f.q}\nA: ${f.a}`).join('\n\n')}
-                      label="FAQ Block"
-                    />
-                  </div>
-                  <div className="space-y-3">
-                    {faqs.map((faq, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg p-3 space-y-2"
-                        style={{ background: 'var(--bg-base)', border: '1px solid var(--border)' }}
-                      >
-                        <div className="flex items-start gap-2">
-                          <span className="text-hermes font-bold text-sm flex-shrink-0">Q:</span>
-                          <span className="text-sm text-app-primary font-semibold">{faq.q}</span>
-                        </div>
-                        <div className="flex items-start gap-2">
-                          <span className="text-app-dim font-bold text-sm flex-shrink-0">A:</span>
-                          <span className="text-sm text-app-muted">{faq.a}</span>
-                        </div>
-                        <div className="flex justify-end">
-                          <CopyBtn text={`Q: ${faq.q}\nA: ${faq.a}`} label={`FAQ #${i + 1}`} />
-                        </div>
+                          )
+                        })}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Internal links */}
-              {internalLinks.length > 0 && (
-                <div
-                  className="rounded-xl p-4 space-y-3"
-                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-app-primary">🔗 Internal links cần thêm</span>
-                    <CopyBtn
-                      text={internalLinks.map(l => `${l.anchor} → ${l.note || ''}`).join('\n')}
-                      label="Internal links"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    {internalLinks.map((link, i) => (
-                      <div
-                        key={i}
-                        className="flex items-center gap-3 p-2.5 rounded-lg transition-colors"
-                        style={{ background: 'var(--bg-base)', border: '1px solid var(--border)' }}
-                      >
-                        <Link2 size={14} className="text-hermes flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-mono-ui text-hermes">{link.anchor}</span>
-                          {link.note && (
-                            <span className="text-xs text-app-dim ml-2">
-                              <ChevronRight size={10} className="inline" /> {link.note}
-                            </span>
-                          )}
-                        </div>
-                        <CopyBtn text={link.anchor} label="Anchor" />
-                      </div>
-                    ))}
-                  </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
-          </Section>
 
-          {/* ─── 5. SEMANTIC GAP ANALYSIS ─── */}
-          {(missingEntities.length > 0 || missingLsi.length > 0) && (
-            <Section id="semantic" icon={Search} title="🔍 Semantic Gap Analysis">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Missing Entities */}
-                {missingEntities.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Hash size={14} className="text-hermes" />
-                      <span className="text-sm font-semibold text-app-primary">Missing Entities</span>
-                      <span className="text-[10px] text-app-dim font-mono-ui">({missingEntities.length})</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {missingEntities.map((e, i) => <SemanticChip key={i} text={e} />)}
-                    </div>
-                  </div>
-                )}
-
-                {/* Missing LSI */}
-                {missingLsi.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Tag size={14} style={{ color: '#8b5cf6' }} />
-                      <span className="text-sm font-semibold text-app-primary">Missing LSI Keywords</span>
-                      <span className="text-[10px] text-app-dim font-mono-ui">({missingLsi.length})</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {missingLsi.map((k, i) => (
-                        <button
-                          key={i}
-                          onClick={() => copyToClipboard(k, k)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all duration-200 hover:scale-105 cursor-pointer"
-                          style={{
-                            background: 'rgba(139,92,246,0.12)',
-                            color: '#8b5cf6',
-                            border: '1px solid rgba(139,92,246,0.3)',
-                          }}
-                          title="Click để copy"
-                        >
-                          <Tag size={10} />
-                          {k}
+            {/* GEO Quick Wins */}
+            {geoWins.length > 0 && (
+              <div className="p-6 rounded-2xl bg-app-surface border border-border space-y-4">
+                <h3 className="text-sm font-bold text-app-primary uppercase tracking-wider flex items-center gap-2">
+                  <RefreshCw size={16} className="text-hermes" />
+                  ⚡ GEO Quick Wins (Tick khi hoàn thành)
+                </h3>
+                <div className="space-y-2">
+                  {geoWins.map((win, idx) => {
+                    const isChecked = !!checkedWins[idx]
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => setCheckedWins(prev => ({ ...prev, [idx]: !prev[idx] }))}
+                        className="flex items-start gap-3 p-3 rounded-lg border transition-all duration-150 cursor-pointer hover:bg-app-hover"
+                        style={{
+                          background: isChecked ? 'rgba(34,197,94,0.04)' : 'var(--bg-elevated)',
+                          borderColor: isChecked ? 'rgba(34,197,94,0.2)' : 'var(--border)'
+                        }}
+                      >
+                        <button className="mt-0.5 flex-shrink-0">
+                          {isChecked ? (
+                            <CheckCircle2 size={16} className="text-green-500 fill-green-500/10" />
+                          ) : (
+                            <div className="w-4 h-4 rounded border border-app-dim hover:border-hermes transition-colors" />
+                          )}
                         </button>
-                      ))}
+                        <span className={`text-xs leading-relaxed ${isChecked ? 'text-app-muted line-through' : 'text-app-primary'}`}>
+                          {win}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'checklist' && (
+          <div className="space-y-6">
+            {/* Checklist sub-tabs */}
+            <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+              {visibleChecklistTabs.map(t => {
+                const active = checklistTab === t.id
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setChecklistTab(t.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${
+                      active
+                        ? 'bg-hermes/15 border-hermes text-hermes'
+                        : 'bg-app-elevated border-border text-app-muted hover:text-app-primary'
+                    }`}
+                  >
+                    {t.label} ({getChecklistTabTotalScore(t.id)}/25)
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Checklist list */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(checklist[checklistTab] || []).map((item, idx) => {
+                const isPassed = item.pass ?? item.passed ?? false
+                return (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-3 p-3 rounded-lg border transition-all duration-200"
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderColor: isPassed ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                      opacity: isPassed ? 1 : 0.6
+                    }}
+                  >
+                    <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-app-base border border-border">
+                      {isPassed ? (
+                        <CheckCircle2 size={14} className="text-green-500" />
+                      ) : (
+                        <XCircle size={14} className="text-red-500" />
+                      )}
                     </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs ${isPassed ? 'text-app-primary font-medium' : 'text-app-dim'}`}>
+                        {item.label}
+                      </p>
+                    </div>
+                    <span
+                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                        isPassed
+                          ? 'bg-green-500/10 text-green-500 border border-green-500/20'
+                          : 'bg-app-base text-app-dim border border-border'
+                      }`}
+                    >
+                      {item.points >= 0 ? `+${item.points}` : item.points}đ
+                    </span>
                   </div>
-                )}
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'suggestions' && (
+          <div className="space-y-6">
+            {/* Meta Title */}
+            <div className="p-4 rounded-xl bg-app-surface border border-border space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs uppercase tracking-wider text-app-muted font-bold">Meta Title đề xuất</span>
+                <button
+                  onClick={() => copy(suggestions.meta_title || '', 'meta_title')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all duration-150 ${
+                    copiedKey === 'meta_title'
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                      : 'bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes'
+                  }`}
+                >
+                  {copiedKey === 'meta_title' ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                  <span>{copiedKey === 'meta_title' ? 'Copied!' : 'Copy'}</span>
+                </button>
               </div>
-
-              <div className="mt-4 pt-3 flex gap-3" style={{ borderTop: '1px solid var(--border)' }}>
-                <CopyBtn
-                  text={[...missingEntities, ...missingLsi].join(', ')}
-                  label="Tất cả keywords"
-                />
+              <input
+                type="text"
+                readOnly
+                value={suggestions.meta_title || ''}
+                className="w-full bg-app-elevated border border-border rounded-lg px-3 py-2 text-xs font-mono-ui text-app-primary"
+              />
+              <div className="flex justify-end">
+                <span className={`text-[10px] font-mono-ui font-semibold ${ (suggestions.meta_title || '').length > 60 ? 'text-red-400 font-bold' : 'text-app-dim' }`}>
+                  {(suggestions.meta_title || '').length}/60 ký tự
+                </span>
               </div>
-            </Section>
-          )}
+            </div>
 
-          {/* ─── 6. NEW CLUSTER POSTS NEEDED ─── */}
-          {clusterPosts.length > 0 && (
-            <Section id="clusters" icon={Layers} title="📝 Bài viết Cluster cần tạo thêm">
-              <ul className="space-y-2">
-                {clusterPosts.map((topic, i) => (
-                  <li
-                    key={i}
-                    className="flex items-center gap-3 p-3 rounded-lg transition-colors hover-row"
-                    style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+            {/* Meta Description */}
+            <div className="p-4 rounded-xl bg-app-surface border border-border space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs uppercase tracking-wider text-app-muted font-bold">Meta Description đề xuất</span>
+                <button
+                  onClick={() => copy(suggestions.meta_description || '', 'meta_description')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all duration-150 ${
+                    copiedKey === 'meta_description'
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                      : 'bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes'
+                  }`}
+                >
+                  {copiedKey === 'meta_description' ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                  <span>{copiedKey === 'meta_description' ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
+              <textarea
+                readOnly
+                rows={3}
+                value={suggestions.meta_description || ''}
+                className="w-full bg-app-elevated border border-border rounded-lg px-3 py-2 text-xs font-mono-ui text-app-primary resize-none"
+              />
+              <div className="flex justify-end">
+                <span className={`text-[10px] font-mono-ui font-semibold ${ (suggestions.meta_description || '').length > 160 ? 'text-red-400 font-bold' : 'text-app-dim' }`}>
+                  {(suggestions.meta_description || '').length}/160 ký tự
+                </span>
+              </div>
+            </div>
+
+            {/* GEO Opening paragraph */}
+            <div className="p-4 rounded-xl bg-app-surface border border-border space-y-2">
+              <div className="flex justify-between items-center">
+                <div>
+                  <span className="text-xs uppercase tracking-wider text-app-muted font-bold block">Đoạn mở bài (GEO-optimized)</span>
+                  <span className="text-[10px] text-app-dim font-medium">Thay thế toàn bộ đoạn mở bài hiện tại</span>
+                </div>
+                <button
+                  onClick={() => copy(draftIntro, 'intro_paragraph')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all duration-150 ${
+                    copiedKey === 'intro_paragraph'
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                      : 'bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes'
+                  }`}
+                >
+                  {copiedKey === 'intro_paragraph' ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                  <span>{copiedKey === 'intro_paragraph' ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
+              <textarea
+                rows={4}
+                value={draftIntro}
+                onChange={(e) => setDraftIntro(e.target.value)}
+                className="w-full bg-app-elevated border border-border rounded-lg px-3 py-2 text-xs text-app-primary resize-y"
+                placeholder="Chưa có nội dung đề xuất mở bài..."
+              />
+            </div>
+
+            {/* H2 Structure */}
+            {h2s.length > 0 && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs uppercase tracking-wider text-app-muted font-bold">Cấu trúc H2 đề xuất</span>
+                  <button
+                    onClick={() => copy(h2s.map((h, i) => `${i + 1}. ${h}`).join('\n'), 'h2_structure')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all duration-150 ${
+                      copiedKey === 'h2_structure'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                        : 'bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes'
+                    }`}
                   >
-                    <span
-                      className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-bold font-mono-ui"
-                      style={{ background: 'var(--hermes-dim)', color: 'var(--hermes)' }}
-                    >
-                      {i + 1}
-                    </span>
-                    <span className="flex-1 text-sm text-app-primary">{topic}</span>
-                    <CopyBtn text={topic} label="Topic" />
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )}
+                    {copiedKey === 'h2_structure' ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                    <span>{copiedKey === 'h2_structure' ? 'Copied!' : 'Copy all H2'}</span>
+                  </button>
+                </div>
+                <ol className="space-y-2">
+                  {h2s.map((h, i) => (
+                    <li key={i} className="flex items-start gap-2.5 text-xs text-app-primary leading-relaxed font-mono-ui">
+                      <span className="w-5 h-5 rounded flex items-center justify-center bg-app-base border border-border font-bold text-hermes">
+                        {i + 1}
+                      </span>
+                      <span className="pt-0.5">{h}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
 
-          {/* ─── 7. GEO QUICK WINS ─── */}
-          {geoWins.length > 0 && (
-            <Section id="geo-wins" icon={Zap} title="🌟 GEO Quick Wins" border="var(--hermes-fade)">
-              <ul className="space-y-3">
-                {geoWins.map((win, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-3 p-3 rounded-lg transition-all duration-200 hover-row"
-                    style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+            {/* FAQ Block */}
+            {faqs.length > 0 && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs uppercase tracking-wider text-app-muted font-bold">FAQ Block đề xuất</span>
+                  <button
+                    onClick={() => copy(faqs.map(f => `Q: ${f.q}\nA: ${f.a}`).join('\n\n'), 'faq_all')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg transition-all duration-150 ${
+                      copiedKey === 'faq_all'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                        : 'bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes'
+                    }`}
                   >
-                    <span
-                      className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold font-mono-ui"
-                      style={{
-                        background: 'var(--hermes-dim)',
-                        color: 'var(--hermes)',
-                        border: '1px solid var(--hermes-fade)',
-                      }}
-                    >
-                      {i + 1}
-                    </span>
-                    <div className="flex-1 pt-0.5">
-                      <span className="text-sm text-app-primary leading-relaxed">{win}</span>
-                    </div>
-                    <CheckSquare size={16} className="text-app-dim flex-shrink-0 mt-1 hover:text-hermes transition-colors cursor-pointer" />
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )}
+                    {copiedKey === 'faq_all' ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                    <span>{copiedKey === 'faq_all' ? 'Copied!' : 'Copy all FAQ'}</span>
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {faqs.map((f, i) => {
+                    const faqKey = `faq-${i}`
+                    return (
+                      <div key={i} className="p-3 rounded-lg bg-app-elevated border border-border space-y-2">
+                        <div className="flex items-start gap-2 text-xs font-medium text-app-primary">
+                          <span className="text-hermes font-bold">Q:</span>
+                          <span>{f.q}</span>
+                        </div>
+                        <div className="flex items-start gap-2 text-xs text-app-muted">
+                          <span className="text-app-dim font-bold">A:</span>
+                          <span>{f.a}</span>
+                        </div>
+                        <div className="flex justify-end pt-1">
+                          <button
+                            onClick={() => copy(`Q: ${f.q}\nA: ${f.a}`, faqKey)}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded transition-all duration-150 ${
+                              copiedKey === faqKey
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                            }`}
+                          >
+                            {copiedKey === faqKey ? <CheckCircle2 size={10} /> : <Copy size={10} />}
+                            <span>{copiedKey === faqKey ? 'Copied!' : 'Copy'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
-          {/* Bottom spacer */}
-          <div className="h-16" />
-        </main>
+            {/* Internal Links */}
+            {internalLinks.length > 0 && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-3">
+                <span className="text-xs uppercase tracking-wider text-app-muted font-bold block">Internal Links cần thêm</span>
+                <div className="space-y-2">
+                  {internalLinks.map((link, i) => {
+                    const linkKey = `link-${i}`
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between gap-4 p-3 rounded-lg bg-app-elevated border border-border"
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <Link2 size={14} className="text-hermes mt-0.5 flex-shrink-0" />
+                          <div className="text-xs leading-relaxed min-w-0">
+                            <span className="font-semibold font-mono text-hermes block truncate">"{link.anchor}"</span>
+                            {link.note && <span className="text-app-muted text-[11px]">{link.note}</span>}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => copy(link.anchor, linkKey)}
+                          className={`inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded transition-all duration-150 flex-shrink-0 ${
+                            copiedKey === linkKey
+                              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                              : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                          }`}
+                        >
+                          {copiedKey === linkKey ? <CheckCircle2 size={10} /> : <Copy size={10} />}
+                          <span>{copiedKey === linkKey ? 'Copied!' : 'Copy Anchor'}</span>
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'semantic' && (
+          <div className="space-y-6">
+            {/* Missing Entities */}
+            {missingEntities.length > 0 && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs uppercase tracking-wider text-app-muted font-bold">Missing Entities</span>
+                  <button
+                    onClick={() => copy(missingEntities.join(', '), 'all_entities')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-all duration-150 ${
+                      copiedKey === 'all_entities'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                        : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                    }`}
+                  >
+                    {copiedKey === 'all_entities' ? 'Copied!' : 'Copy All'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {missingEntities.map((e, idx) => {
+                    const entityKey = `entity-${idx}`
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => copy(e, entityKey)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all duration-150 cursor-pointer ${
+                          copiedKey === entityKey
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                            : 'bg-hermes-dim hover:bg-hermes/20 border border-hermes-fade text-hermes'
+                        }`}
+                      >
+                        <Tag size={10} />
+                        <span>{copiedKey === entityKey ? 'Copied!' : e}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Missing LSI */}
+            {missingLsi.length > 0 && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs uppercase tracking-wider text-app-muted font-bold">Missing LSI Keywords</span>
+                  <button
+                    onClick={() => copy(missingLsi.join(', '), 'all_lsi')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-all duration-150 ${
+                      copiedKey === 'all_lsi'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                        : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                    }`}
+                  >
+                    {copiedKey === 'all_lsi' ? 'Copied!' : 'Copy All'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {missingLsi.map((lsi, idx) => {
+                    const lsiKey = `lsi-${idx}`
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => copy(lsi, lsiKey)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all duration-150 cursor-pointer ${
+                          copiedKey === lsiKey
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                            : 'bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-400'
+                        }`}
+                      >
+                        <Tag size={10} />
+                        <span>{copiedKey === lsiKey ? 'Copied!' : lsi}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Cluster Gaps */}
+            {clusterPosts.length > 0 && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-3">
+                <span className="text-xs uppercase tracking-wider text-app-muted font-bold block">Cluster bài viết cần tạo thêm</span>
+                <div className="space-y-2">
+                  {clusterPosts.map((postName, idx) => {
+                    const gapKey = `gap-${idx}`
+                    return (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between p-3 rounded-lg bg-app-elevated border border-border"
+                      >
+                        <span className="text-xs font-semibold text-app-primary">{postName}</span>
+                        <button
+                          onClick={() => copy(postName, gapKey)}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-semibold rounded transition-all duration-150 ${
+                            copiedKey === gapKey
+                              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                              : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                          }`}
+                        >
+                          {copiedKey === gapKey ? <CheckCircle2 size={10} /> : <Copy size={10} />}
+                          <span>{copiedKey === gapKey ? 'Copied!' : 'Copy Topic'}</span>
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ═══ PROGRESS MODAL ═══ */}
@@ -1083,7 +1078,7 @@ export default function WpAuditResult() {
           <div className="w-full max-w-md p-6 bg-app-elevated border border-border rounded-xl space-y-5 shadow-2xl animate-in fade-in zoom-in duration-200" style={{ background: 'var(--bg-surface)' }}>
             <div className="flex items-center gap-2.5">
               <RefreshCw className="w-5 h-5 text-hermes animate-spin" />
-              <h3 className="text-sm font-bold text-app-primary uppercase tracking-wider">🔄 Đang đánh giá lại bài viết...</h3>
+              <h3 className="text-sm font-bold text-app-primary uppercase tracking-wider">🔄 Đang quét lại bài viết...</h3>
             </div>
 
             <div className="space-y-3.5 pt-2">
