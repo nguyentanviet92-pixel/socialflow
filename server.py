@@ -2139,14 +2139,112 @@ TOPIC_ENTITY_MAP = {
         "pillar_or_cluster": "pillar",
         "min_word_count": 2000,
     },
+    "chatgpt-canva": {
+        "topic_label": "Chỉnh sửa ảnh ChatGPT trên Canva",
+        "expected_entities": [
+            "DALL-E 3", "GPT-4o", "Canva Pro", "Canva Free",
+            "ChatGPT Plus", "Adobe Express", "Adobe Firefly",
+            "Figma", "Midjourney", "Stable Diffusion",
+            "Remove.bg", "Clipchamp",
+        ],
+        "expected_lsi": [
+            "chèn chữ", "thêm logo", "resize ảnh", "tải ảnh về",
+            "export PNG", "export JPG", "template Canva",
+            "tách nền", "background removal", "chỉnh màu",
+            "font chữ", "bố cục", "layer", "social media post",
+            "banner", "poster", "kích thước ảnh",
+            "ảnh AI", "tạo ảnh AI", "chỉnh sửa AI",
+        ],
+        "pillar_or_cluster": "cluster",
+        "min_word_count": 1000,
+        "post_intent": "how_to",
+    },
+    "chinh-sua-anh": {
+        "topic_label": "Chỉnh sửa ảnh AI",
+        "expected_entities": [
+            "Canva", "Adobe Express", "Figma", "GIMP",
+            "Photoshop", "ChatGPT", "Gemini", "Midjourney",
+            "Remove.bg", "Clipdrop",
+        ],
+        "expected_lsi": [
+            "chỉnh sửa ảnh online", "chỉnh sửa ảnh miễn phí",
+            "tách nền ảnh", "thêm chữ vào ảnh", "resize ảnh",
+            "công cụ thiết kế", "ảnh AI", "tạo ảnh AI",
+        ],
+        "pillar_or_cluster": "cluster",
+        "min_word_count": 800,
+        "post_intent": "how_to",
+    },
 }
 
-def detect_topic_entities(slug: str) -> dict:
+def detect_topic_entities(slug: str, title: str = "") -> dict:
     slug_lower = (slug or "").lower()
+    title_lower = (title or "").lower()
+
+    # Thử match nhiều từ trong slug hoặc title, không chỉ full key
     for key, data in TOPIC_ENTITY_MAP.items():
-        if key in slug_lower or slug_lower in key:
+        key_parts = key.split("-")
+        # Match nếu ≥60% các phần của key xuất hiện trong slug hoặc title
+        matches = sum(1 for p in key_parts if p in slug_lower or p in title_lower)
+        if len(key_parts) > 0 and (matches / len(key_parts)) >= 0.6:
             return data
     return {}
+
+def detect_post_intent(slug: str, headings: list) -> str:
+    """
+    Phân loại intent bài viết để áp đúng GEO criteria.
+    """
+    how_to_signals = ["cach", "huong-dan", "bat-mi", "meo", "thu-thuat", "lam-the-nao"]
+    what_is_signals = ["la-gi", "khai-niem", "dinh-nghia", "tim-hieu"]
+    compare_signals = ["so-sanh", "vs", "hay", "tot-nhat", "tot-hon"]
+
+    slug_lower = (slug or "").lower()
+    if any(s in slug_lower for s in how_to_signals):
+        return "how_to"
+    if any(s in slug_lower for s in what_is_signals):
+        return "what_is"
+    if any(s in slug_lower for s in compare_signals):
+        return "comparison"
+    
+    # Fallback: đọc H2
+    h2_texts = [h.get("text", "").lower() for h in headings if h.get("level") == "h2"]
+    h2_text = " ".join(h2_texts)
+    if "bước" in h2_text or "hướng dẫn" in h2_text or "cách" in h2_text:
+        return "how_to"
+    return "general"
+
+def generate_auto_faq(post_intent: str, main_keyword: str, existing_faq_count: int) -> list:
+    """Tạo FAQ bổ sung dựa vào intent và keyword."""
+    needed = 5 - existing_faq_count
+    if needed <= 0:
+        return []
+    
+    kw = main_keyword or "chủ đề này"
+    
+    templates = [
+        {
+            "q": f"Có thể thực hiện {kw} trên điện thoại không?",
+            "a": f"Có thể. Hầu hết các ứng dụng và công cụ hỗ trợ {kw} đều có phiên bản dành cho di động hoặc giao diện responsive giúp bạn thao tác dễ dàng."
+        },
+        {
+            "q": f"Việc {kw} có mất phí bản quyền không?",
+            "a": f"Các công cụ hỗ trợ {kw} thường có gói miễn phí cơ bản. Nếu muốn nâng cấp hoặc dùng tính năng chuyên sâu hơn, bạn có thể đăng ký gói trả phí."
+        },
+        {
+            "q": f"Lưu ý quan trọng nhất khi tiến hành {kw} là gì?",
+            "a": f"Lưu ý quan trọng nhất là bạn cần tuân thủ đúng quy trình kỹ thuật, đảm bảo độ nét và bố cục nội dung hài hòa để đạt hiệu quả tối ưu nhất."
+        },
+        {
+            "q": f"Có hướng dẫn tự học {kw} miễn phí không?",
+            "a": f"Có rất nhiều tài liệu tự học {kw} miễn phí trên internet, bao gồm các bài viết hướng dẫn chi tiết và video trên YouTube để bạn làm theo."
+        },
+        {
+            "q": f"Yêu cầu cấu hình máy tính thế nào để làm {kw}?",
+            "a": f"Phần lớn các công cụ hiện nay chạy trực tiếp trên trình duyệt web nên chỉ cần máy tính có kết nối mạng ổn định là bạn có thể thực hiện được."
+        }
+    ]
+    
+    return templates[:needed]
 
 AUDIT_SYSTEM_PROMPT = """
 Bạn là chuyên gia audit SEO/GEO nội dung tiếng Việt. Nhiệm vụ duy nhất: đọc bài viết được cung cấp, chạy audit theo 4 tiêu chí, trả về JSON.
@@ -2160,20 +2258,37 @@ GEO là tối ưu để AI (ChatGPT, Perplexity, Google AI Overview) trích dẫ
 Năm 2026, ~40% search query có AI Overview box. Bài không tối ưu GEO mất visibility dù rank #1.
 
 GEO tốt cần:
-- DIRECT ANSWER: 200 từ đầu phải có câu định nghĩa dạng "[Chủ đề] là [mô tả ngắn gọn]". AI đọc đoạn đầu trước — nếu không thấy answer rõ, bỏ qua bài.
-- DEFINITION CLARITY: Cắt 3 câu đầu ra đọc độc lập — nếu vẫn trả lời được "X là gì?" thì đạt. Nếu dùng "nó", "điều này", "các loại trên" → chưa đạt.
-- FAQ BLOCK: ≥5 cặp Q&A cuối bài. Câu hỏi phải là dạng người thực hỏi ("Nên dùng X hay Y?", "X mất phí không?"), không phải câu hỏi học thuật. Câu trả lời tự đứng được (2–4 câu), không cần đọc phần khác bài.
-- STRUCTURED CONTENT: Bảng so sánh > Numbered list > Bullet list > Prose. Bài "Top X" bắt buộc có bảng so sánh.
-- ENTITY + SỐ LIỆU: Entity phải có context đi kèm ("Groq (280 token/giây)" không phải "Groq là nền tảng AI"). Có số liệu cụ thể: %, $, năm, số lượng.
-- FRESHNESS: Có năm hiện tại trong title/H1/content. "Cập nhật 06/2026" tốt hơn "mới nhất".
+- DIRECT ANSWER: Đối với bài general/what_is, 200 từ đầu phải có câu định nghĩa dạng "[Chủ đề] là [mô tả ngắn gọn]". AI đọc đoạn đầu trước — nếu không thấy định nghĩa rõ, bỏ qua bài. Đối với bài how_to, 200 từ đầu nêu rõ mục tiêu bài viết sẽ hướng dẫn làm gì.
+- DEFINITION CLARITY: Cắt 3 câu đầu ra đọc độc lập — nếu vẫn trả lời được "X là gì?" (hoặc bài hướng dẫn về cái gì) thì đạt. Không dùng đại từ mơ hồ "nó", "điều này", "các loại trên".
+- FAQ BLOCK: ≥5 cặp Q&A cuối bài. Câu hỏi dạng người thực hỏi ("Nên dùng X hay Y?", "X mất phí không?"), câu trả lời tự đứng độc lập được (2–4 câu).
+- STRUCTURED CONTENT: Bảng so sánh > Numbered list > Bullet list > Prose. Bài so sánh/Top X bắt buộc có bảng so sánh. Bài how_to bắt buộc có danh sách các bước đánh số.
+- ENTITY + SỐ LIỆU: Entity phải có context đi kèm ("Groq (LPU đạt 280 token/giây)" thay vì "Groq là AI"). Có số liệu cụ thể: %, $, năm, số lượng.
+- FRESHNESS: Có năm hiện tại (2025/2026) trong title/H1/content.
 
-Mở bài SAI: "Trong thời đại AI phát triển vũ bão, chúng ta cùng khám phá..."
-Mở bài ĐÚNG: "[X] là [định nghĩa 1–2 câu]. Năm 2026, [số liệu/context cụ thể]."
+### GEO scoring & checklist mapping theo Post Intent:
+Dựa trên giá trị `Post Intent` được cung cấp trong prompt, hãy tính điểm và điền các checklist keys của GEO ("checklist.geo") theo quy tắc sau:
+
+1. Nếu Post Intent = "how_to":
+   - "opening_definition": Đạt (True) nếu 200 từ đầu nêu rõ bài sẽ hướng dẫn làm gì (KHÔNG yêu cầu định nghĩa lý thuyết "X là gì", không trừ điểm vì thiếu định nghĩa).
+   - "definition_independent": Đạt (True) nếu phần mục tiêu hướng dẫn ở mở bài đọc độc lập dễ hiểu, không dùng đại từ mơ hồ.
+   - "step_by_step": Đạt (True) nếu bài có các bước/step hướng dẫn được đánh số rõ ràng (Numbered list).
+   - "entity_context": Đạt (True) nếu bài có mục "Chuẩn bị" / "Yêu cầu trước" trước khi bắt đầu hướng dẫn.
+   - "comparison_table": Đạt (True) nếu bài có mục "Lỗi thường gặp" hoặc "Mẹo thêm" ở cuối bài.
+   - Các key khác tính điểm bình thường theo nội dung bài.
+
+2. Nếu Post Intent = "comparison":
+   - "comparison_table": Đạt (True) nếu bài có bảng so sánh trực quan (bắt buộc).
+   - "definition_independent": Tự động Đạt (True) nếu bài có verdict/kết luận rõ ràng dạng "Nên chọn X nếu..., nên chọn Y nếu...".
+   - "opening_definition": Đạt (True) nếu bài có câu nêu rõ các đối tượng so sánh ở phần mở đầu (KHÔNG yêu cầu định nghĩa lý thuyết đầu bài).
+
+3. Nếu Post Intent = "what_is" hoặc "general":
+   - Áp dụng các quy tắc GEO truyền thống (cần câu định nghĩa "[X] là..." ở mở bài).
 
 ### SEO Fundamentals
-- META TITLE: 50–60 ký tự (đếm ký tự, không phải từ). Keyword gần đầu. Phải kích click.
+- META TITLE: 50–60 ký tự (đếm ký tự, không phải từ). Phải chứa main keyword.
+  * QUY TẮC CHECK KEYWORD: Tìm kiếm TỪNG TỪ riêng lẻ của main_keyword trong title/H1 (không phân biệt dấu hay không dấu), không bắt buộc phải xuất hiện liền nhau theo thứ tự (không yêu cầu exact phrase match). Nếu ≥70% số từ đơn lẻ của main_keyword xuất hiện trong title/H1 → được tính là "có keyword". Tuyệt đối KHÔNG được báo lỗi "không có keyword" khi title chứa đủ các từ khóa chính.
 - META DESCRIPTION: 140–160 ký tự. Có keyword. Có call-to-action cuối câu.
-- H1: đúng 1 cái. Có main keyword.
+- H1: đúng 1 cái. Phải chứa main keyword (áp dụng cùng quy tắc check keyword ≥70% ở trên).
 - H2: ≥3 cái. Mỗi H2 là 1 chủ đề lớn. Có keyword variant.
 - WORD COUNT: Pillar/Top-X ≥1.500 từ. Cluster ≥800 từ. <500 từ = thin content nghiêm trọng.
 - KEYWORD DENSITY: 0.5%–2%. Dưới 0.3% = thiếu. Trên 3% = nhồi nhét.
@@ -2276,6 +2391,7 @@ URL: {url}
 Slug: {slug}
 Loại bài (từ pillar map): {post_type_hint}
 Pillar topic: {pillar_topic_hint}
+Post Intent: {post_intent}
 
 ## METRICS ĐÃ ĐO (dùng để tính điểm — không ước lượng lại)
 - Word count: {word_count} từ
@@ -2548,7 +2664,10 @@ async def run_audit_llm(
     meta_desc_len = len(meta_desc) if meta_desc else 0
 
     # 5. Keyword metrics
-    main_keyword_guess = slug.replace("-", " ")
+    slug_words = slug.split("-")
+    VN_STOPWORDS = {"cach", "huong-dan", "la-gi", "tot-nhat", "meo", "bat-mi", "tren"}
+    filtered = [w for w in slug_words if w not in VN_STOPWORDS]
+    main_keyword_guess = " ".join(filtered) if filtered else slug.replace("-", " ")
     word_count = len(content.split())
 
     try:
@@ -2572,7 +2691,11 @@ async def run_audit_llm(
                 break
 
     # 8. Expected LSI and Entities
-    topic_data = detect_topic_entities(slug)
+    topic_data = detect_topic_entities(slug, title)
+    post_intent = topic_data.get("post_intent") if topic_data else None
+    if not post_intent:
+        post_intent = detect_post_intent(slug, headings)
+
     if topic_data:
         expected_entities = ", ".join(topic_data["expected_entities"])
         expected_lsi = ", ".join(topic_data["expected_lsi"])
@@ -2606,6 +2729,7 @@ async def run_audit_llm(
 
     user_prompt = AUDIT_USER_PROMPT.format(
         url=url, slug=slug, post_type_hint=post_type_hint, pillar_topic_hint=pillar_topic_hint,
+        post_intent=post_intent,
         word_count=word_count, h1_count=h1_count, h2_count=h2_count, h3_count=h3_count,
         internal_link_count=internal_link_count, external_link_count=external_link_count,
         image_count=image_count, images_without_alt=images_without_alt,
@@ -2700,9 +2824,16 @@ async def run_audit_llm(
         if not isinstance(faq, list):
             faq = []
         if len(faq) < 5:
+            auto_faq = generate_auto_faq(
+                post_intent=post_intent,
+                main_keyword=result.get("main_keyword", main_keyword_guess),
+                existing_faq_count=len(faq)
+            )
+            faq.extend(auto_faq)
+            result["suggestions"]["faq_block"] = faq
             result["audit_warnings"] = result.get("audit_warnings", [])
             result["audit_warnings"].append(
-                f"FAQ chỉ có {len(faq)} câu — yêu cầu tối thiểu 5. Cần bổ sung thêm FAQ."
+                f"FAQ tự động bổ sung {len(auto_faq)} câu để đạt minimum 5"
             )
 
         # Force missing_entities minimum
