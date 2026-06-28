@@ -2810,6 +2810,10 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
         except Exception as e:
             logger.warning(f"[WP Audit] Failed to read from cache: {e}")
 
+    # Assign default model if not specified
+    if not model:
+        model = "kimi:kimi-k2-thinking"
+
     # Fetch bài viết if not cached or forced
     post = await client.get_post(post_id)
     title   = post.get("title", {}).get("rendered", "")
