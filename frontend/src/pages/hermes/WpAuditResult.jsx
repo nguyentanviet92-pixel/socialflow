@@ -371,16 +371,21 @@ export default function WpAuditResult() {
                 <button
                   onClick={handleReAudit}
                   disabled={reAuditing}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-hermes/10 hover:bg-hermes/20 border border-hermes/30 hover:border-hermes/60 text-hermes transition-all text-xs font-semibold"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-all active:scale-95 shadow-lg shrink-0"
+                  style={{
+                    background: 'linear-gradient(135deg, var(--hermes) 0%, #06b6d4 100%)',
+                    boxShadow: '0 0 12px rgba(6, 182, 212, 0.4)',
+                    border: 'none',
+                  }}
                 >
                   {reAuditing ? (
                     <>
-                      <Loader className="w-3.5 h-3.5 animate-spin" />
+                      <Loader className="w-3.5 h-3.5 animate-spin text-white" />
                       <span>Đang quét...</span>
                     </>
                   ) : (
                     <>
-                      <RefreshCw className="w-3.5 h-3.5" />
+                      <RefreshCw className="w-3.5 h-3.5 text-white" />
                       <span>Quét lại</span>
                     </>
                   )}
