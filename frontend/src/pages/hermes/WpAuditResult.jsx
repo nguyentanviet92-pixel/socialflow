@@ -975,6 +975,87 @@ export default function WpAuditResult() {
                 </div>
               </div>
             )}
+
+            {/* Semantic SEO Keywords to add */}
+            {(missingEntities.length > 0 || missingLsi.length > 0) && (
+              <div className="p-4 rounded-xl bg-app-surface border border-border space-y-4">
+                <span className="text-xs uppercase tracking-wider text-app-muted font-bold block">Từ khóa & Thực thể Semantic còn thiếu cần bổ sung</span>
+                
+                {missingEntities.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] font-bold text-app-muted uppercase tracking-wider">Missing Entities ({missingEntities.length})</span>
+                      <button
+                        onClick={() => copy(missingEntities.join(', '), 'suggest_all_entities')}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all duration-150 ${
+                          copiedKey === 'suggest_all_entities'
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                            : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                        }`}
+                      >
+                        {copiedKey === 'suggest_all_entities' ? 'Copied!' : 'Copy All Entities'}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {missingEntities.map((e, idx) => {
+                        const entityKey = `suggest-entity-${idx}`
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => copy(e, entityKey)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded transition-all duration-150 cursor-pointer ${
+                              copiedKey === entityKey
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-hermes-dim hover:bg-hermes/20 border border-hermes-fade text-hermes'
+                            }`}
+                          >
+                            <Tag size={9} />
+                            <span>{copiedKey === entityKey ? 'Copied!' : e}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {missingLsi.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-border/50">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] font-bold text-app-muted uppercase tracking-wider">Missing LSI Keywords ({missingLsi.length})</span>
+                      <button
+                        onClick={() => copy(missingLsi.join(', '), 'suggest_all_lsi')}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all duration-150 ${
+                          copiedKey === 'suggest_all_lsi'
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                            : 'bg-app-base hover:bg-app-hover border border-border text-app-muted'
+                        }`}
+                      >
+                        {copiedKey === 'suggest_all_lsi' ? 'Copied!' : 'Copy All LSI'}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {missingLsi.map((lsi, idx) => {
+                        const lsiKey = `suggest-lsi-${idx}`
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => copy(lsi, lsiKey)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded transition-all duration-150 cursor-pointer ${
+                              copiedKey === lsiKey
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-400'
+                            }`}
+                          >
+                            <Tag size={9} />
+                            <span>{copiedKey === lsiKey ? 'Copied!' : lsi}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
