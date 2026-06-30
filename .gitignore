@@ -18,3 +18,5 @@ scratch_db_test.js
 frontend/run-dev-logged.cmd
 socialflow-agent/*.bak
 socialflow-agent/*.cmd
+*.exe
+frontend/public/*.exe
