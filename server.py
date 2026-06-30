@@ -39,7 +39,7 @@ from dotenv import load_dotenv
 load_dotenv(HERMES_HOME / '.env')
 load_dotenv(HERMES_AGENT / '.env')
 
-from fastapi import FastAPI, HTTPException, Header, Body
+from fastapi import FastAPI, HTTPException, Header, Body, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -313,10 +313,43 @@ async def lifespan(app: FastAPI):
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (site_idx, post_id)
             );
+
+            CREATE TABLE IF NOT EXISTS page_analytics_cache (
+                url TEXT PRIMARY KEY,
+                post_id INTEGER,
+                page_title TEXT,
+                gsc_clicks INTEGER DEFAULT 0,
+                gsc_impressions INTEGER DEFAULT 0,
+                gsc_ctr FLOAT DEFAULT 0,
+                gsc_position FLOAT DEFAULT 0,
+                gsc_top_queries JSONB,
+                ga4_sessions INTEGER DEFAULT 0,
+                ga4_avg_time_sec INTEGER DEFAULT 0,
+                ga4_bounce_rate FLOAT DEFAULT 0,
+                ga4_pageviews INTEGER DEFAULT 0,
+                fetched_at TIMESTAMP DEFAULT NOW(),
+                date_range_days INTEGER DEFAULT 28
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_score_history (
+                id SERIAL PRIMARY KEY,
+                url TEXT NOT NULL,
+                post_id INTEGER,
+                audit_score INTEGER,
+                score_seo INTEGER,
+                score_geo INTEGER,
+                score_pillar INTEGER,
+                score_semantic INTEGER,
+                audit_data JSONB,
+                audited_at TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_history_url ON audit_score_history(url);
+            CREATE INDEX IF NOT EXISTS idx_audit_history_date ON audit_score_history(audited_at DESC);
         """)
-        logger.info('wp_audit_results table verified')
+        logger.info('wp_audit_results, page_analytics_cache, and audit_score_history tables verified')
     except Exception as e:
-        logger.error('Failed to create wp_audit_results table: %s', e)
+        logger.error('Failed to create DB tables: %s', e)
     yield
     if _db_pool:
         await _db_pool.close()
@@ -1735,6 +1768,12 @@ class ConfigUpdateRequest(BaseModel):
     wp_sites: Optional[list] = None  # [{name, url, token}, ...] multi-site support
     wp_rest_base: Optional[str] = None
     pillar_map: Optional[Dict[str, dict]] = None
+    # Google Analytics & Search Console config fields
+    gsc_site_url: Optional[str] = None
+    gsc_credentials_json: Optional[str] = None
+    ga4_property_id: Optional[str] = None
+    ga4_credentials_json: Optional[str] = None
+    analytics_cache_hours: Optional[int] = None
 
 @app.get('/config')
 async def get_config(x_agent_key: str = Header(None)):
@@ -1752,6 +1791,10 @@ async def get_config(x_agent_key: str = Header(None)):
         safe['wp_app_password'] = mask_api_key(safe['wp_app_password'])
     if safe.get('wp_token'):
         safe['wp_token'] = mask_api_key(safe['wp_token'])
+    if safe.get('gsc_credentials_json'):
+        safe['gsc_credentials_json'] = mask_api_key(safe['gsc_credentials_json'])
+    if safe.get('ga4_credentials_json'):
+        safe['ga4_credentials_json'] = mask_api_key(safe['ga4_credentials_json'])
     if safe.get('wp_sites') and isinstance(safe['wp_sites'], list):
         safe['wp_sites'] = [
             {**s, 'token': mask_api_key(s.get('token', ''))} if s.get('token') else s
@@ -1827,6 +1870,18 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
             updates.pop('wp_token')
         elif tok is not None:
             updates['wp_token'] = tok.strip()
+    if 'gsc_credentials_json' in updates:
+        gsc_cred = updates['gsc_credentials_json']
+        if gsc_cred and is_masked(gsc_cred):
+            updates.pop('gsc_credentials_json')
+        elif gsc_cred is not None:
+            updates['gsc_credentials_json'] = gsc_cred.strip()
+    if 'ga4_credentials_json' in updates:
+        ga4_cred = updates['ga4_credentials_json']
+        if ga4_cred and is_masked(ga4_cred):
+            updates.pop('ga4_credentials_json')
+        elif ga4_cred is not None:
+            updates['ga4_credentials_json'] = ga4_cred.strip()
     if 'wp_sites' in updates:
         sites = updates['wp_sites']
         if isinstance(sites, list):
@@ -3170,6 +3225,21 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
             site_idx, post_id, audit_result
         )
         logger.info(f"[WP Audit] Saved audit result for site={site_idx} post={post_id} to DB")
+        
+        # Record to history for tracking trends
+        try:
+            audit_score = audit_result.get("audit_score")
+            sb = audit_result.get("score_breakdown") or {}
+            await pool.execute(
+                """
+                INSERT INTO audit_score_history (url, post_id, audit_score, score_seo, score_geo, score_pillar, score_semantic, audit_data)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                url, post_id, audit_score, sb.get("seo"), sb.get("geo"), sb.get("pillar_cluster") or sb.get("pillar"), sb.get("semantic"), json.dumps(audit_result)
+            )
+            logger.info(f"[WP Audit] Recorded score history for post={post_id} score={audit_score}")
+        except Exception as e_hist:
+            logger.warning(f"[WP Audit] Failed to save audit history: {e_hist}")
     except Exception as e:
         logger.error(f"[WP Audit] Failed to save result to DB: {e}")
 
@@ -3218,6 +3288,525 @@ async def delete_feedback(confirm: str = '', x_agent_key: str = Header(None)):
 async def agent_chat(req: Dict[str, Any] = Body(...), x_agent_key: str = Header(None)):
     verify_key(x_agent_key)
     raise HTTPException(501, 'agent-chat disabled in v2 — use /generate instead')
+
+# ── Google Analytics 4 & Search Console Dashboard APIs ───────
+import uuid
+import urllib.parse
+from datetime import datetime, timedelta
+
+_sync_jobs = {}
+
+def get_google_access_token(creds_json: str, scopes: list) -> str:
+    from google.oauth2 import service_account
+    import google.auth.transport.requests
+    info = json.loads(creds_json)
+    creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    request = google.auth.transport.requests.Request()
+    creds.refresh(request)
+    return creds.token
+
+async def fetch_gsc_data(site_url: str, creds_json: str, days: int = 28) -> list:
+    access_token = get_google_access_token(creds_json, ["https://www.googleapis.com/auth/webmasters.readonly"])
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    body = {
+        "startDate": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
+        "endDate": datetime.now().strftime("%Y-%m-%d"),
+        "dimensions": ["page"],
+        "rowLimit": 500,
+        "dataState": "final",
+    }
+    encoded_site_url = urllib.parse.quote_plus(site_url)
+    url = f"https://www.googleapis.com/webmasters/v3/sites/{encoded_site_url}/searchAnalytics/query"
+    async with httpx.AsyncClient() as client:
+        r = await client.post(url, headers=headers, json=body, timeout=30)
+        r.raise_for_status()
+        return r.json().get("rows", [])
+
+async def fetch_gsc_queries_for_page(page_url: str, site_url: str, creds_json: str) -> list:
+    access_token = get_google_access_token(creds_json, ["https://www.googleapis.com/auth/webmasters.readonly"])
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    body = {
+        "startDate": (datetime.now() - timedelta(days=28)).strftime("%Y-%m-%d"),
+        "endDate": datetime.now().strftime("%Y-%m-%d"),
+        "dimensions": ["query"],
+        "dimensionFilterGroups": [
+            {
+                "filters": [
+                    {
+                        "dimension": "page",
+                        "operator": "equals",
+                        "expression": page_url
+                    }
+                ]
+            }
+        ],
+        "rowLimit": 20,
+        "dataState": "final"
+    }
+    encoded_site_url = urllib.parse.quote_plus(site_url)
+    url = f"https://www.googleapis.com/webmasters/v3/sites/{encoded_site_url}/searchAnalytics/query"
+    async with httpx.AsyncClient() as client:
+        r = await client.post(url, headers=headers, json=body, timeout=20)
+        r.raise_for_status()
+        return r.json().get("rows", [])
+
+async def fetch_ga4_data(property_id: str, creds_json: str, days: int = 28) -> list:
+    access_token = get_google_access_token(creds_json, ["https://www.googleapis.com/auth/analytics.readonly"])
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    clean_property_id = property_id.replace("properties/", "")
+    url = f"https://analyticsdata.googleapis.com/v1beta/properties/{clean_property_id}:runReport"
+    body = {
+        "dateRanges": [{"startDate": f"{days}daysAgo", "endDate": "today"}],
+        "dimensions": [{"name": "pagePath"}],
+        "metrics": [
+            {"name": "sessions"},
+            {"name": "averageSessionDuration"},
+            {"name": "bounceRate"},
+            {"name": "screenPageViews"}
+        ],
+        "limit": 500
+    }
+    async with httpx.AsyncClient() as client:
+        r = await client.post(url, headers=headers, json=body, timeout=30)
+        r.raise_for_status()
+        
+        ga4_rows = []
+        res_data = r.json()
+        for row in res_data.get("rows", []):
+            path = row["dimensionValues"][0]["value"]
+            ga4_rows.append({
+                "pagePath": path,
+                "sessions": int(row["metricValues"][0]["value"] or 0),
+                "averageSessionDuration": float(row["metricValues"][1]["value"] or 0.0),
+                "bounceRate": float(row["metricValues"][2]["value"] or 0.0),
+                "screenPageViews": int(row["metricValues"][3]["value"] or 0),
+            })
+        return ga4_rows
+
+def normalize_path(path: str) -> str:
+    p = (path or "").strip().lower()
+    if p.startswith("http://") or p.startswith("https://"):
+        parts = p.split("/", 3)
+        p = "/" + parts[3] if len(parts) > 3 else "/"
+    p = p.split("?")[0]
+    if p != "/" and p.endswith("/"):
+        p = p[:-1]
+    return p
+
+async def find_post_id_by_url_or_slug(pool, url: str, slug: str):
+    try:
+        row = await pool.fetchrow(
+            "SELECT post_id FROM wp_audit_results WHERE audit_data->>'url' = $1 OR audit_data->'post'->>'link' = $1",
+            url
+        )
+        if row:
+            return row["post_id"]
+        row = await pool.fetchrow(
+            "SELECT post_id FROM wp_audit_results WHERE audit_data->'post'->>'slug' = $1",
+            slug
+        )
+        if row:
+            return row["post_id"]
+    except Exception as e:
+        logger.warning(f"Error resolving post_id for {url}: {e}")
+    return None
+
+async def run_sync_background_job(job_id: str, config: dict):
+    _sync_jobs[job_id] = {"status": "running", "progress": 10, "error": None}
+    try:
+        pool = await get_pool()
+        site_url = config.get("gsc_site_url")
+        gsc_creds = config.get("gsc_credentials_json")
+        if not site_url or not gsc_creds:
+            raise ValueError("Google Search Console credentials/site_url not configured")
+
+        _sync_jobs[job_id]["progress"] = 30
+        gsc_rows = await fetch_gsc_data(site_url, gsc_creds, days=28)
+
+        ga4_property = config.get("ga4_property_id")
+        ga4_creds = config.get("ga4_credentials_json")
+        ga4_rows = []
+        if ga4_property and ga4_creds:
+            _sync_jobs[job_id]["progress"] = 60
+            try:
+                ga4_rows = await fetch_ga4_data(ga4_property, ga4_creds, days=28)
+            except Exception as ga4_err:
+                logger.warning(f"Failed to fetch GA4 data: {ga4_err}")
+                
+        _sync_jobs[job_id]["progress"] = 80
+        ga4_map = {normalize_path(row["pagePath"]): row for row in ga4_rows}
+
+        for row in gsc_rows:
+            url = row["keys"][0]
+            path = normalize_path(url.replace(site_url.rstrip("/"), ""))
+            ga4 = ga4_map.get(path, {})
+
+            slug = url.rstrip("/").split("/")[-1]
+            post_id = await find_post_id_by_url_or_slug(pool, url, slug)
+            page_title = slug.replace("-", " ").title()
+
+            await pool.execute(
+                """
+                INSERT INTO page_analytics_cache (
+                    url, post_id, page_title, gsc_clicks, gsc_impressions, gsc_ctr, gsc_position,
+                    ga4_sessions, ga4_avg_time_sec, ga4_bounce_rate, ga4_pageviews, fetched_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+                ON CONFLICT (url) DO UPDATE SET
+                    post_id = EXCLUDED.post_id,
+                    gsc_clicks = EXCLUDED.gsc_clicks,
+                    gsc_impressions = EXCLUDED.gsc_impressions,
+                    gsc_ctr = EXCLUDED.gsc_ctr,
+                    gsc_position = EXCLUDED.gsc_position,
+                    ga4_sessions = EXCLUDED.ga4_sessions,
+                    ga4_avg_time_sec = EXCLUDED.ga4_avg_time_sec,
+                    ga4_bounce_rate = EXCLUDED.ga4_bounce_rate,
+                    ga4_pageviews = EXCLUDED.ga4_pageviews,
+                    fetched_at = CURRENT_TIMESTAMP
+                """,
+                url, post_id, page_title,
+                row.get("clicks", 0), row.get("impressions", 0), row.get("ctr", 0.0), row.get("position", 0.0),
+                ga4.get("sessions", 0), int(ga4.get("averageSessionDuration", 0.0)), ga4.get("bounceRate", 0.0), ga4.get("screenPageViews", 0)
+            )
+
+        _sync_jobs[job_id]["status"] = "completed"
+        _sync_jobs[job_id]["progress"] = 100
+        logger.info(f"[WP Audit Sync] Synchronized {len(gsc_rows)} pages")
+    except Exception as e:
+        logger.error(f"[WP Audit Sync] Sync job {job_id} failed: {e}")
+        _sync_jobs[job_id]["status"] = "failed"
+        _sync_jobs[job_id]["error"] = str(e)
+
+def get_ctr_benchmark(position: float) -> float:
+    pos = max(1.0, position)
+    if pos <= 1.5: return 0.30
+    if pos <= 2.5: return 0.15
+    if pos <= 3.5: return 0.10
+    if pos <= 4.5: return 0.07
+    if pos <= 6.0: return 0.05
+    if pos <= 8.0: return 0.03
+    if pos <= 10.0: return 0.02
+    return 0.01
+
+def classify_page_opportunity(impr: int, ctr: float, pos: float, audit_score: Optional[int]) -> str:
+    ctr_bench = get_ctr_benchmark(pos)
+    is_low_ctr = ctr < ctr_bench
+    is_high_impr = impr >= 1000
+    is_low_audit = audit_score is None or audit_score < 70
+    
+    if is_high_impr and is_low_ctr and is_low_audit:
+        return "fix_gap"
+    if is_high_impr and not is_low_ctr and is_low_audit:
+        return "improve_content"
+    if not is_high_impr and audit_score is not None and audit_score >= 70:
+        return "promote"
+    return "ok"
+
+@app.post("/hermes/dashboard/sync")
+async def trigger_analytics_sync(background_tasks: BackgroundTasks, x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    config = await load_config()
+    job_id = str(uuid.uuid4())
+    background_tasks.add_task(run_sync_background_job, job_id, config)
+    return {"job_id": job_id, "status": "running"}
+
+@app.get("/hermes/dashboard/sync/status/{job_id}")
+async def get_sync_status(job_id: str, x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    job = _sync_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
+
+@app.get("/hermes/dashboard/overview")
+async def get_dashboard_overview(sort_by: str = "priority", limit: int = 100, page: int = 1, x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    pool = await get_pool()
+    
+    rows = await pool.fetch("""
+        SELECT 
+            c.url,
+            c.post_id,
+            c.page_title,
+            c.gsc_clicks,
+            c.gsc_impressions,
+            c.gsc_ctr,
+            c.gsc_position,
+            c.gsc_top_queries,
+            c.ga4_sessions,
+            c.ga4_avg_time_sec,
+            c.ga4_bounce_rate,
+            c.ga4_pageviews,
+            c.fetched_at,
+            r.audit_data as last_audit_data
+        FROM page_analytics_cache c
+        LEFT JOIN wp_audit_results r ON 
+            (c.post_id IS NOT NULL AND c.post_id = r.post_id)
+            OR (c.url = r.audit_data->>'url')
+            OR (c.url = r.audit_data->'post'->>'link')
+    """)
+    
+    results = []
+    for row in rows:
+        item = dict(row)
+        audit_data = item.pop("last_audit_data", None)
+        
+        if audit_data and isinstance(audit_data, str):
+            try:
+                audit_data = json.loads(audit_data)
+            except:
+                audit_data = None
+                
+        score = None
+        score_breakdown = {}
+        if audit_data:
+            score = audit_data.get("audit_score")
+            score_breakdown = audit_data.get("score_breakdown") or {}
+            
+        item["audit_score"] = score
+        item["score_seo"] = score_breakdown.get("seo_score") or score_breakdown.get("seo")
+        item["score_geo"] = score_breakdown.get("geo_score") or score_breakdown.get("geo")
+        item["score_pillar"] = score_breakdown.get("pillar_cluster") or score_breakdown.get("pillar")
+        item["score_semantic"] = score_breakdown.get("semantic_score") or score_breakdown.get("semantic")
+        
+        impr = item["gsc_impressions"] or 0
+        ctr = item["gsc_ctr"] or 0.0
+        pos = item["gsc_position"] or 10.0
+        ctr_bench = get_ctr_benchmark(pos)
+        
+        ctr_factor = max(0.0, 1.0 - (ctr / ctr_bench)) if ctr_bench > 0 else 1.0
+        audit_factor = 1.0 - ((score or 0) / 100.0)
+        
+        item["priority_score"] = impr * ctr_factor * audit_factor
+        item["opportunity_group"] = classify_page_opportunity(impr, ctr, pos, score)
+        results.append(item)
+        
+    if sort_by == "priority":
+        results.sort(key=lambda x: x["priority_score"], reverse=True)
+    elif sort_by == "impressions":
+        results.sort(key=lambda x: x["gsc_impressions"] or 0, reverse=True)
+    elif sort_by == "clicks":
+        results.sort(key=lambda x: x["gsc_clicks"] or 0, reverse=True)
+    elif sort_by == "audit_score":
+        results.sort(key=lambda x: x["audit_score"] if x["audit_score"] is not None else -1, reverse=True)
+    elif sort_by == "position":
+        results.sort(key=lambda x: x["gsc_position"] if x["gsc_position"] is not None else 999.0)
+        
+    total_count = len(results)
+    start_idx = (page - 1) * limit
+    paginated_results = results[start_idx : start_idx + limit]
+    
+    group_totals = {"fix_gap": 0, "improve_content": 0, "promote": 0, "ok": 0}
+    for item in results:
+        g = item["opportunity_group"]
+        if g in group_totals:
+            group_totals[g] += 1
+            
+    return {
+        "pages": paginated_results,
+        "total": total_count,
+        "page": page,
+        "per_page": limit,
+        "group_totals": group_totals
+    }
+
+@app.get("/hermes/dashboard/page")
+async def get_dashboard_page(url: str, x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    pool = await get_pool()
+    
+    row = await pool.fetchrow("SELECT * FROM page_analytics_cache WHERE url = $1", url)
+    if not row:
+        raise HTTPException(404, "Page not found in cache")
+        
+    page_data = dict(row)
+    
+    top_queries = page_data.get("gsc_top_queries")
+    if top_queries and isinstance(top_queries, str):
+        try:
+            top_queries = json.loads(top_queries)
+        except:
+            top_queries = None
+            
+    config = await load_config()
+    creds_json = config.get("gsc_credentials_json")
+    site_url = config.get("gsc_site_url")
+    
+    if creds_json and site_url and not top_queries:
+        try:
+            top_queries = await fetch_gsc_queries_for_page(url, site_url, creds_json)
+            await pool.execute(
+                "UPDATE page_analytics_cache SET gsc_top_queries = $1 WHERE url = $2",
+                json.dumps(top_queries), url
+            )
+            page_data["gsc_top_queries"] = top_queries
+        except Exception as e:
+            logger.warning(f"Failed to fetch live queries for {url}: {e}")
+            page_data["gsc_top_queries"] = []
+            
+    history_rows = await pool.fetch(
+        "SELECT audit_score, audited_at FROM audit_score_history WHERE url = $1 ORDER BY audited_at ASC",
+        url
+    )
+    history = [{"score": r["audit_score"], "date": r["audited_at"].strftime("%Y-%m-%d")} for r in history_rows]
+    
+    row_audit = await pool.fetchrow(
+        "SELECT audit_data FROM wp_audit_results WHERE audit_data->>'url' = $1 OR audit_data->'post'->>'link' = $1",
+        url
+    )
+    suggestions = {}
+    audit_score = None
+    if row_audit:
+        audit_data = json.loads(row_audit["audit_data"]) if isinstance(row_audit["audit_data"], str) else row_audit["audit_data"]
+        suggestions = audit_data.get("suggestions") or {}
+        audit_score = audit_data.get("audit_score")
+        
+    return {
+        "page": page_data,
+        "history": history,
+        "suggestions": suggestions,
+        "audit_score": audit_score
+    }
+
+class CompareRequest(BaseModel):
+    urls: List[str]
+
+@app.post("/hermes/dashboard/compare")
+async def compare_pages(req: CompareRequest, x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    pool = await get_pool()
+    
+    results = []
+    for url in req.urls:
+        row_cache = await pool.fetchrow("SELECT * FROM page_analytics_cache WHERE url = $1", url)
+        row_audit = await pool.fetchrow(
+            "SELECT audit_data FROM wp_audit_results WHERE audit_data->>'url' = $1 OR audit_data->'post'->>'link' = $1",
+            url
+        )
+        
+        cache_data = dict(row_cache) if row_cache else {"url": url}
+        audit_data = {}
+        if row_audit:
+            audit_data = json.loads(row_audit["audit_data"]) if isinstance(row_audit["audit_data"], str) else row_audit["audit_data"]
+            
+        if audit_data:
+            audit_data.pop("raw_html", None)
+            
+        results.append({
+            "cache": cache_data,
+            "audit": audit_data
+        })
+    return results
+
+@app.get("/hermes/dashboard/opportunities")
+async def get_dashboard_opportunities(x_agent_key: str = Header(None)):
+    verify_key(x_agent_key)
+    pool = await get_pool()
+    
+    rows = await pool.fetch("""
+        SELECT 
+            c.url,
+            c.post_id,
+            c.page_title,
+            c.gsc_clicks,
+            c.gsc_impressions,
+            c.gsc_ctr,
+            c.gsc_position,
+            c.ga4_sessions,
+            c.ga4_avg_time_sec,
+            c.ga4_bounce_rate,
+            c.ga4_pageviews,
+            r.audit_data as last_audit_data
+        FROM page_analytics_cache c
+        LEFT JOIN wp_audit_results r ON 
+            (c.post_id IS NOT NULL AND c.post_id = r.post_id)
+            OR (c.url = r.audit_data->>'url')
+            OR (c.url = r.audit_data->'post'->>'link')
+    """)
+    
+    results = []
+    for row in rows:
+        item = dict(row)
+        audit_data = item.pop("last_audit_data", None)
+        
+        if audit_data and isinstance(audit_data, str):
+            try:
+                audit_data = json.loads(audit_data)
+            except:
+                audit_data = None
+                
+        score = None
+        suggestions = {}
+        if audit_data:
+            score = audit_data.get("audit_score")
+            suggestions = audit_data.get("suggestions") or {}
+            
+        item["audit_score"] = score
+        item["suggestions"] = suggestions
+        
+        impr = item["gsc_impressions"] or 0
+        ctr = item["gsc_ctr"] or 0.0
+        pos = item["gsc_position"] or 10.0
+        ctr_bench = get_ctr_benchmark(pos)
+        
+        ctr_factor = max(0.0, 1.0 - (ctr / ctr_bench)) if ctr_bench > 0 else 1.0
+        audit_factor = 1.0 - ((score or 0) / 100.0)
+        
+        item["priority_score"] = impr * ctr_factor * audit_factor
+        results.append(item)
+        
+    results.sort(key=lambda x: x["priority_score"], reverse=True)
+    top_20 = results[:20]
+    
+    fix_meta = []
+    improve_content = []
+    add_faq = []
+    internal_links = []
+    
+    for item in top_20:
+        url = item["url"]
+        title = item["page_title"]
+        score = item["audit_score"]
+        pos = item["gsc_position"] or 10.0
+        ctr = item["gsc_ctr"] or 0.0
+        ctr_bench = get_ctr_benchmark(pos)
+        
+        page_summary = {
+            "url": url,
+            "title": title,
+            "priority_score": item["priority_score"],
+            "audit_score": score,
+            "post_id": item["post_id"]
+        }
+        
+        if ctr < ctr_bench:
+            fix_meta.append(page_summary)
+            
+        if item["ga4_sessions"] > 0 and (item["ga4_bounce_rate"] > 0.60 or item["ga4_avg_time_sec"] < 90):
+            improve_content.append(page_summary)
+            
+        faq = item["suggestions"].get("faq_block") or []
+        if not faq or len(faq) < 5:
+            add_faq.append(page_summary)
+            
+        links_to_add = item["suggestions"].get("internal_links_to_add") or []
+        if links_to_add:
+            internal_links.append(page_summary)
+            
+    return {
+        "fix_meta": fix_meta,
+        "improve_content": improve_content,
+        "add_faq": add_faq,
+        "internal_links": internal_links
+    }
 
 if __name__ == '__main__':
     port = int(os.getenv('HERMES_PORT', '8100'))

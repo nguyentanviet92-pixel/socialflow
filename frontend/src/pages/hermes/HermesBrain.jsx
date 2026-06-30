@@ -15,6 +15,7 @@ import DenseStat from '../../components/hermes/DenseStat'
 import SkillsEditor from './SkillsEditor'
 import HermesSettings from './HermesSettings'
 import HermesTerminal from './HermesTerminal'
+import WpAuditDashboard from './WpAuditDashboard'
 import useAuthStore from '../../store/auth.store'
 
 function formatAgo(ts) {
@@ -106,6 +107,7 @@ export default function HermesBrain() {
   const nav = useNavigate()
   
   const getActiveTab = () => {
+    if (pathname === '/hermes/dashboard') return 'dashboard'
     if (pathname === '/hermes/settings') return 'settings'
     if (pathname === '/hermes/learning') return 'learning'
     if (pathname === '/hermes/skills') return 'skills'
@@ -169,6 +171,7 @@ export default function HermesBrain() {
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         {[
+          { id: 'dashboard', label: 'SEO Dashboard', visible: true },
           { id: 'overview', label: 'Tổng quan', visible: !isEditor },
           { id: 'skills', label: 'Kỹ năng (Skills)', visible: !isEditor },
           { id: 'learning', label: 'Học tập (Learning)', visible: !isEditor },
@@ -189,6 +192,9 @@ export default function HermesBrain() {
           </button>
         ))}
       </div>
+
+      {/* Tab: SEO Dashboard */}
+      {tab === 'dashboard' && <div className="flex-1 overflow-y-auto"><WpAuditDashboard /></div>}
 
       {/* Tab: Skills editor */}
       {tab === 'skills' && <SkillsEditor />}

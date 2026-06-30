@@ -123,6 +123,7 @@ export default function App() {
 
                 {/* ── Hub 7: Trí tuệ Hermes (Consolidated) ── */}
                 <Route path="/hermes" element={<HermesBrain />} />
+                <Route path="/hermes/dashboard" element={<HermesBrain />} />
                 <Route path="/hermes/skills" element={<HermesBrain />} />
                 <Route path="/hermes/learning" element={<HermesBrain />} />
                 <Route path="/hermes/settings" element={<HermesBrain />} />

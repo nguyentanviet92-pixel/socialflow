@@ -2126,7 +2126,57 @@ function WpAuditSection() {
     return localStorage.getItem('wp_audit_selected_model') || 'kimi:kimi-k2-thinking'
   })
 
-  // Sync sites from backend
+  // Google Analytics & Search Console states
+  const [gscSiteUrl, setGscSiteUrl] = useState('')
+  const [gscCredsJson, setGscCredsJson] = useState('')
+  const [ga4PropertyId, setGa4PropertyId] = useState('')
+  const [ga4CredsJson, setGa4CredsJson] = useState('')
+  const [cacheHours, setCacheHours] = useState(24)
+
+  const [syncStatus, setSyncStatus] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+  const [jobId, setJobId] = useState(null)
+
+  const triggerSync = async () => {
+    setSyncing(true)
+    setSyncStatus('Khởi chạy đồng bộ…')
+    try {
+      const res = await api.post('/ai-hermes/hermes/dashboard/sync')
+      const jId = res.data.job_id
+      setJobId(jId)
+      pollSyncStatus(jId)
+    } catch (err) {
+      setSyncing(false)
+      toast.error('Lỗi khởi chạy đồng bộ: ' + err.message)
+    }
+  }
+
+  const pollSyncStatus = (jId) => {
+    const timer = setInterval(async () => {
+      try {
+        const res = await api.get(`/ai-hermes/hermes/dashboard/sync/status/${jId}`)
+        const data = res.data
+        if (data.status === 'completed') {
+          clearInterval(timer)
+          setSyncing(false)
+          setSyncStatus(null)
+          toast.success('Đồng bộ Google Search Console & GA4 hoàn tất! 🎉')
+          qc.invalidateQueries({ queryKey: ['hermes', 'dashboard'] })
+        } else if (data.status === 'failed') {
+          clearInterval(timer)
+          setSyncing(false)
+          setSyncStatus('Lỗi: ' + data.error)
+          toast.error('Đồng bộ thất bại: ' + data.error)
+        } else {
+          setSyncStatus(`Đang đồng bộ (${data.progress}%)`)
+        }
+      } catch (err) {
+        // Suppress network errors from breaking poll
+      }
+    }, 2000)
+  }
+
+  // Sync config from backend
   useEffect(() => {
     if (cfg && !isCfgLoading) {
       const existingSites = cfg.wp_sites || []
@@ -2136,6 +2186,11 @@ function WpAuditSection() {
       } else {
         setSites(existingSites.length > 0 ? existingSites : [{ name: '', url: '', token: '' }])
       }
+      setGscSiteUrl(cfg.gsc_site_url || '')
+      setGscCredsJson(cfg.gsc_credentials_json || '')
+      setGa4PropertyId(cfg.ga4_property_id || '')
+      setGa4CredsJson(cfg.ga4_credentials_json || '')
+      setCacheHours(cfg.analytics_cache_hours ?? 24)
     }
   }, [cfgData, isCfgLoading])
 
@@ -2159,10 +2214,25 @@ function WpAuditSection() {
           // Only send token if not masked
           ...(s.token && !s.token.includes('...') && s.token !== '***' ? { token: s.token.trim() } : {}),
         }))
-      await api.put('/ai-hermes/config', { wp_sites: cleanSites })
+
+      const payload = {
+        wp_sites: cleanSites,
+        gsc_site_url: gscSiteUrl.trim(),
+        ga4_property_id: ga4PropertyId.trim(),
+        analytics_cache_hours: Number(cacheHours) || 24
+      }
+
+      if (gscCredsJson && !gscCredsJson.includes('•')) {
+        payload.gsc_credentials_json = gscCredsJson.trim()
+      }
+      if (ga4CredsJson && !ga4CredsJson.includes('•')) {
+        payload.ga4_credentials_json = ga4CredsJson.trim()
+      }
+
+      await api.put('/ai-hermes/config', payload)
     },
     onSuccess: () => {
-      toast.success('Đã lưu cấu hình WordPress')
+      toast.success('Đã lưu cấu hình thành công')
       qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
     },
     onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
@@ -2488,6 +2558,89 @@ function WpAuditSection() {
                 Chưa có WordPress site nào được cấu hình. Hãy click "Quản lý sites" để cấu hình.
               </div>
             )}
+          </div>
+
+          {/* Google Analytics & Search Console Configuration Section */}
+          <div className="p-4 bg-app-elevated border border-border rounded space-y-4 mt-6">
+            <div className="flex items-center justify-between border-b border-border pb-2.5">
+              <h4 className="font-bold text-app-primary text-xs uppercase tracking-wider flex items-center gap-1.5">
+                📊 Cấu hình Google Search Console & GA4
+              </h4>
+              <button
+                onClick={triggerSync}
+                disabled={syncing || saveConfig.isPending}
+                className="btn-hermes px-3 py-1.5 text-xs font-semibold rounded flex items-center gap-1.5"
+              >
+                {syncing ? (
+                  <>
+                    <Loader className="w-3.5 h-3.5 animate-spin" /> {syncStatus}
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5" /> Đồng bộ ngay
+                  </>
+                )}
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[10px] uppercase text-app-dim mb-1 font-bold">GSC Site URL</label>
+                <input
+                  type="text"
+                  value={gscSiteUrl}
+                  onChange={(e) => setGscSiteUrl(e.target.value)}
+                  placeholder="https://tino.vn/"
+                  className="w-full px-3 py-1.5 bg-app-base border border-border text-app-primary rounded font-mono-ui text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase text-app-dim mb-1 font-bold">GA4 Property ID</label>
+                <input
+                  type="text"
+                  value={ga4PropertyId}
+                  onChange={(e) => setGa4PropertyId(e.target.value)}
+                  placeholder="123456789"
+                  className="w-full px-3 py-1.5 bg-app-base border border-border text-app-primary rounded font-mono-ui text-xs"
+                />
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[10px] uppercase text-app-dim mb-1 font-bold">GSC Credentials JSON (Service Account)</label>
+                <textarea
+                  value={gscCredsJson}
+                  onChange={(e) => setGscCredsJson(e.target.value)}
+                  placeholder='{"type": "service_account", ...}'
+                  rows={4}
+                  className="w-full px-3 py-1.5 bg-app-base border border-border text-app-primary rounded font-mono text-xs leading-normal"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase text-app-dim mb-1 font-bold">GA4 Credentials JSON (Service Account)</label>
+                <textarea
+                  value={ga4CredsJson}
+                  onChange={(e) => setGa4CredsJson(e.target.value)}
+                  placeholder='{"type": "service_account", ...}'
+                  rows={4}
+                  className="w-full px-3 py-1.5 bg-app-base border border-border text-app-primary rounded font-mono text-xs leading-normal"
+                />
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-between pt-2 border-t border-border">
+              <button
+                onClick={() => saveConfig.mutate()}
+                disabled={saveConfig.isPending}
+                className="btn-hermes px-4 py-1.5 text-xs font-semibold rounded"
+              >
+                {saveConfig.isPending ? 'Đang lưu…' : 'Lưu cấu hình Google'}
+              </button>
+              <span className="text-[10px] text-app-dim">
+                ℹ️ Phải cấp quyền Service Account Email làm Viewer trong GA4 và Search Console.
+              </span>
+            </div>
           </div>
         </div>
       ) : (
