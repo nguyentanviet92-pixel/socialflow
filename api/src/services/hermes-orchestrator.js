@@ -22,11 +22,11 @@ const AGENT_SECRET = process.env.AGENT_SECRET
 async function callHermes(taskType, userContent, maxTokens = 1500) {
   if (!AGENT_SECRET) throw new Error('AGENT_SECRET not configured')
   const controller = new AbortController()
-  // 120s timeout (was 60s): when Moonshot 429s, fallback chain (DeepSeek →
+  // 240s timeout (was 120s): when Moonshot 429s/401s, fallback chain (DeepSeek →
   // NVIDIA → Gemini) adds 20-40s. Big skills (orchestrator 2000 tokens,
-  // self_reviewer 2500) on DeepSeek-chat regularly take 35-50s. 60s caused
+  // self_reviewer 2500) on DeepSeek-chat regularly take 35-50s. 120s caused
   // false aborts mid-fallback that blocked assign_job emission entirely.
-  const timer = setTimeout(() => controller.abort(), 120000)
+  const timer = setTimeout(() => controller.abort(), 240000)
   try {
     const res = await fetch(`${HERMES_URL}/generate`, {
       method: 'POST',
