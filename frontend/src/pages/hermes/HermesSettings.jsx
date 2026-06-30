@@ -3329,14 +3329,13 @@ const SECTIONS = [
   { key: 'decisions', label: 'Decisions' },
   { key: 'learning',  label: 'Learning' },
   { key: 'reports',   label: 'Reports' },
-  { key: 'wp_audit',  label: 'WP Audit' },
 ]
 
 export default function HermesSettings({ defaultSection }) {
   const [section, setSection] = useState(defaultSection || 'model')
 
   useEffect(() => {
-    if (defaultSection) {
+    if (defaultSection && defaultSection !== 'wp_audit') {
       setSection(defaultSection)
     }
   }, [defaultSection])
@@ -3387,7 +3386,6 @@ export default function HermesSettings({ defaultSection }) {
         {section === 'decisions' && <DecisionsSection />}
         {section === 'learning'  && <LearningSection />}
         {section === 'reports'   && <ReportsSection />}
-        {section === 'wp_audit'  && <WpAuditSection />}
       </div>
     </div>
   )

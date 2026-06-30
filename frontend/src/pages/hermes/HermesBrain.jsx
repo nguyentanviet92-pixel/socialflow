@@ -107,13 +107,12 @@ export default function HermesBrain() {
   const nav = useNavigate()
   
   const getActiveTab = () => {
-    if (pathname === '/hermes/dashboard') return 'dashboard'
+    if (pathname === '/hermes/dashboard' || pathname === '/hermes/wp-audit') return 'dashboard'
     if (pathname === '/hermes/settings') return 'settings'
     if (pathname === '/hermes/learning') return 'learning'
     if (pathname === '/hermes/skills') return 'skills'
     if (pathname === '/hermes/terminal') return 'terminal'
-    if (pathname === '/hermes/wp-audit') return 'wp-audit'
-    return isEditor ? 'wp-audit' : 'overview'
+    return isEditor ? 'dashboard' : 'overview'
   }
   const tab = getActiveTab()
   
@@ -171,13 +170,12 @@ export default function HermesBrain() {
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         {[
-          { id: 'dashboard', label: 'SEO Dashboard', visible: true },
+          { id: 'dashboard', label: 'SEO & WP Audit', visible: true },
           { id: 'overview', label: 'Tổng quan', visible: !isEditor },
           { id: 'skills', label: 'Kỹ năng (Skills)', visible: !isEditor },
           { id: 'learning', label: 'Học tập (Learning)', visible: !isEditor },
           { id: 'terminal', label: '⚡ Terminal (CLI)', visible: !isEditor },
-          { id: 'settings', label: 'Cấu hình', visible: !isEditor },
-          { id: 'wp-audit', label: 'WP Audit', visible: true }
+          { id: 'settings', label: 'Cấu hình', visible: !isEditor }
         ].filter(t => t.visible).map((t) => (
           <button
             key={t.id}
@@ -193,7 +191,7 @@ export default function HermesBrain() {
         ))}
       </div>
 
-      {/* Tab: SEO Dashboard */}
+      {/* Tab: SEO & WP Audit */}
       {tab === 'dashboard' && <div className="flex-1 overflow-y-auto"><WpAuditDashboard /></div>}
 
       {/* Tab: Skills editor */}
@@ -201,9 +199,6 @@ export default function HermesBrain() {
 
       {/* Tab: Settings */}
       {tab === 'settings' && <div className="flex-1 overflow-y-auto"><HermesSettings /></div>}
-
-      {/* Tab: WP Audit */}
-      {tab === 'wp-audit' && <div className="flex-1 overflow-y-auto"><HermesSettings defaultSection="wp_audit" /></div>}
 
       {/* Tab: Learning — self-improvement timeline */}
       {tab === 'learning' && <LearningTimeline />}
