@@ -1,9 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   server: {
     port: 5173,
     open: true
@@ -11,11 +10,10 @@ export default defineConfig({
   preview: {
     port: 3006,
     host: '0.0.0.0',
-    allowedHosts: true // Allow sslip.io or other host headers in Vite 6
+    allowedHosts: true
   },
   build: {
-    // Sourcemap để debug được production minified errors (vd React error #310).
-    // Cost: dist tăng ~30%, deploy chậm hơn vài giây. Worth it.
-    sourcemap: true,
+    sourcemap: false,
   },
 })
+

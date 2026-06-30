@@ -1,6 +1,9 @@
 @import url('/fonts/outfit.css');
 @import url('/fonts/jetbrains-mono.css');
-@import "tailwindcss";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* ============================================================
    Premium Hermes UI — Next-Gen Glassmorphic Dark Theme
