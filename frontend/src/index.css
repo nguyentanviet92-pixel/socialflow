@@ -46,6 +46,24 @@ body {
   margin: 0;
 }
 
+/* Global Form Inputs styling for dark theme compatibility */
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border) !important;
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted) !important;
+  opacity: 0.7;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--hermes) !important;
+  outline: none;
+}
+
+
 /* ─── GLOBAL ADAPTORS: Force normal Tailwind light colors into dark glass ─── */
 .bg-white {
   background-color: var(--bg-surface) !important;
