@@ -1213,11 +1213,11 @@ export default function AgentsRoster() {
           <DenseStat value={todayFailed} label="Failed today" color={todayFailed > 0 ? 'danger' : 'primary'} />
           <button
             onClick={() => setShowAddModal(true)}
-            className="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-info text-white hover:opacity-90 transition-colors"
+            className="btn-hermes ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg"
             title="Thêm nick mới"
           >
             <Plus className="w-3.5 h-3.5" />
-            Thêm nick
+            Thêm Agent / Nick
           </button>
         </div>
 
