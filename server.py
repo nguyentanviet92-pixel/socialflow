@@ -790,20 +790,37 @@ def build_system_prompt(task_type: str, examples: List[Dict[str, Any]],
     return "\n".join(sections)
 
 # ── Config loader (DB-backed with TTL cache) ──────────────
-async def load_config(force: bool = False) -> Dict[str, Any]:
-    """Load hermes_config from DB, cached for 30s."""
+async def load_config(user_id: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    """Load hermes_config from DB. If user_id is provided, check user-specific config first.
+    Cache is only used for global config (user_id is None)."""
     global _config_cache, _config_cache_ts
-    if not force and _config_cache and (time.time() - _config_cache_ts < _CONFIG_CACHE_TTL):
-        return _config_cache
+    if not user_id:
+        if not force and _config_cache and (time.time() - _config_cache_ts < _CONFIG_CACHE_TTL):
+            return _config_cache
     try:
         pool = await get_pool()
+        if user_id:
+            row = await pool.fetchrow('SELECT config FROM hermes_config WHERE user_id = $1', user_id)
+            if row:
+                res = dict(row['config'])
+                res['user_id'] = user_id
+                return res
+            else:
+                row = await pool.fetchrow('SELECT config FROM hermes_config WHERE id = 1')
+                res = dict(row['config']) if row else {}
+                res['api_key'] = None
+                res['fallback_keys'] = {}
+                res['user_id'] = user_id
+                return res
         row = await pool.fetchrow('SELECT config FROM hermes_config WHERE id = 1')
-        _config_cache = dict(row['config']) if row else {}
+        cfg = dict(row['config']) if row else {}
+        if not user_id:
+            _config_cache = cfg
+            _config_cache_ts = time.time()
+        return cfg
     except Exception as e:
         logger.warning('load_config failed, using defaults: %s', e)
-        _config_cache = {}
-    _config_cache_ts = time.time()
-    return _config_cache
+        return {}
 
 def _cfg_get(cfg: Dict, key: str, default: Any) -> Any:
     v = cfg.get(key)
@@ -909,9 +926,9 @@ PROVIDER_CONFIG = {
 }
 
 DEFAULT_FALLBACK_CHAIN = [
-    {"provider": "nvidia",    "model": "meta/llama-3.3-70b-instruct",  "enabled": True},
-    {"provider": "groq",      "model": "llama-3.3-70b-versatile",      "enabled": True},
     {"provider": "deepseek",  "model": "deepseek-chat",                "enabled": True},
+    {"provider": "nvidia",    "model": "meta/llama-3.3-70b-instruct",  "enabled": False},
+    {"provider": "groq",      "model": "llama-3.3-70b-versatile",      "enabled": True},
     {"provider": "openai",    "model": "gpt-4o-mini",                  "enabled": False},
     {"provider": "gemini",    "model": "gemini-2.5-flash",             "enabled": False},
     {"provider": "kimi",      "model": "moonshot-v1-128k",             "enabled": False},
@@ -1026,6 +1043,7 @@ def call_with_fallback(
     active_chain = [p for p in chain if p.get("enabled")]
 
     model_override = kwargs.get("model_override")
+    attempted = 0
     if model_override and ":" in model_override:
         parts = model_override.split(":", 1)
         prov, mdl = parts[0], parts[1]
@@ -1049,12 +1067,15 @@ def call_with_fallback(
             if config.get("provider") == provider:
                 api_key = config.get("api_key")
         if not api_key:
-            api_key = os.getenv(api_key_env)
+            if config.get("user_id") is None:
+                api_key = os.getenv(api_key_env)
 
         api_key = (api_key or "").strip()
         if not api_key:
             logger.warning(f"[Fallback] Skip {provider}: no API key configured")
             continue
+
+        attempted += 1
 
         base_url = pconfig["base_url"]
         compat = pconfig["compat"]
@@ -1115,6 +1136,12 @@ def call_with_fallback(
             else:
                 raise
 
+    if attempted == 0:
+        if config.get("user_id") is not None:
+            raise HTTPException(400, "Chưa cài đặt cấu hình AI. Vào Cài đặt → API Keys để thêm.")
+        else:
+            raise RuntimeError("All providers in fallback_chain failed. No API keys configured.")
+
     raise RuntimeError(
         f"All providers in fallback_chain failed. Last error: {last_error}"
     )
@@ -1160,11 +1187,26 @@ async def record_call(task_type: str, prompt: str, output: str, latency_ms: int,
 # ── Core AI call wrapper (few-shot + memory aware) ────────
 async def ai_call(task_type: str, user_prompt: str, max_tokens: int, temperature: float,
                   account_id: Optional[str] = None, campaign_id: Optional[str] = None,
-                  group_fb_id: Optional[str] = None, extra_system: str = '') -> Dict[str, Any]:
+                  group_fb_id: Optional[str] = None, extra_system: str = '',
+                  user_id: Optional[str] = None) -> Dict[str, Any]:
     """Main entry point used by all task endpoints.
     Injects few-shot examples + per-nick memories before calling DeepSeek.
     Respects runtime config toggles (fewshot_enabled, memory_enabled)."""
-    cfg = await load_config()
+    if not user_id:
+        try:
+            pool = await get_pool()
+            if campaign_id:
+                campaign_row = await pool.fetchrow('SELECT owner_id FROM campaigns WHERE id = $1', campaign_id)
+                if campaign_row:
+                    user_id = campaign_row['owner_id']
+            elif account_id:
+                account_row = await pool.fetchrow('SELECT owner_id FROM accounts WHERE id = $1', account_id)
+                if account_row:
+                    user_id = account_row['owner_id']
+        except Exception as e:
+            logger.warning('Failed to resolve user_id in ai_call: %s', e)
+
+    cfg = await load_config(user_id=user_id)
     fewshot_enabled = cfg.get('fewshot_enabled', True)
     memory_enabled = cfg.get('memory_enabled', True)
     # Update min score from config
@@ -1458,7 +1500,7 @@ async def recent_feedback(limit: int = 50, x_agent_key: str = Header(None)):
 
 # ── Main generation endpoints (with few-shot) ─────────────
 @app.post('/generate')
-async def generate(req: GenerateRequest, x_agent_key: str = Header(None)):
+async def generate(req: GenerateRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
     task_type = req.task_type or req.function_name or 'generic'
     default_max, default_temp = TASK_CONFIG.get(task_type, (500, 0.7))
@@ -1483,6 +1525,7 @@ async def generate(req: GenerateRequest, x_agent_key: str = Header(None)):
         account_id=req.account_id,
         campaign_id=req.campaign_id,
         group_fb_id=req.group_fb_id,
+        user_id=x_user_id,
     )
     return {
         'text': result['text'],
@@ -1495,7 +1538,7 @@ async def generate(req: GenerateRequest, x_agent_key: str = Header(None)):
     }
 
 @app.post('/comment')
-async def generate_comment(req: CommentRequest, x_agent_key: str = Header(None)):
+async def generate_comment(req: CommentRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
 
     extra = ''
@@ -1519,7 +1562,8 @@ async def generate_comment(req: CommentRequest, x_agent_key: str = Header(None))
 
     result = await ai_call('comment_gen', user, 350, 0.85,
                             account_id=req.account_id, campaign_id=req.campaign_id,
-                            group_fb_id=req.group_fb_id, extra_system=extra)
+                            group_fb_id=req.group_fb_id, extra_system=extra,
+                            user_id=x_user_id)
     text = result['text'].strip().strip('"').strip("'").strip()
     if text.startswith('```'):
         inner = text[3:]
@@ -1532,7 +1576,7 @@ async def generate_comment(req: CommentRequest, x_agent_key: str = Header(None))
     }
 
 @app.post('/evaluate')
-async def evaluate_posts(req: EvaluateRequest, x_agent_key: str = Header(None)):
+async def evaluate_posts(req: EvaluateRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
 
     posts_text = ''
@@ -1549,7 +1593,7 @@ async def evaluate_posts(req: EvaluateRequest, x_agent_key: str = Header(None)):
 
     result = await ai_call('post_eval', user, 1500, 0.1,
                             account_id=req.account_id, campaign_id=req.campaign_id,
-                            group_fb_id=req.group_fb_id)
+                            group_fb_id=req.group_fb_id, user_id=x_user_id)
     text = result['text']
 
     try:
@@ -1564,7 +1608,7 @@ async def evaluate_posts(req: EvaluateRequest, x_agent_key: str = Header(None)):
     }
 
 @app.post('/quality-gate')
-async def quality_gate(req: QualityGateRequest, x_agent_key: str = Header(None)):
+async def quality_gate(req: QualityGateRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
 
     user = (
@@ -1575,7 +1619,8 @@ async def quality_gate(req: QualityGateRequest, x_agent_key: str = Header(None))
     )
 
     result = await ai_call('quality_gate', user, 200, 0.1,
-                            account_id=req.account_id, campaign_id=req.campaign_id)
+                            account_id=req.account_id, campaign_id=req.campaign_id,
+                            user_id=x_user_id)
     text = result['text']
 
     try:
@@ -1776,9 +1821,9 @@ class ConfigUpdateRequest(BaseModel):
     analytics_cache_hours: Optional[int] = None
 
 @app.get('/config')
-async def get_config(x_agent_key: str = Header(None)):
+async def get_config(x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
-    cfg = await load_config(force=True)
+    cfg = await load_config(user_id=x_user_id, force=True)
     # Mask API key in response
     safe = dict(cfg)
     if safe.get('api_key'):
@@ -1823,7 +1868,7 @@ async def get_config(x_agent_key: str = Header(None)):
     }
 
 @app.put('/config')
-async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None)):
+async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
     updates = req.dict(exclude_unset=True, exclude_none=True)
     if not updates:
@@ -1902,7 +1947,10 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
     pool = await get_pool()
     try:
         # Merge with existing
-        row = await pool.fetchrow('SELECT config FROM hermes_config WHERE id = 1')
+        if x_user_id:
+            row = await pool.fetchrow('SELECT config FROM hermes_config WHERE user_id = $1', x_user_id)
+        else:
+            row = await pool.fetchrow('SELECT config FROM hermes_config WHERE id = 1')
         existing = dict(row['config']) if row else {}
 
         if 'fallback_keys' in updates:
@@ -1936,10 +1984,22 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
                 if env_var in fb_keys and fb_keys[env_var]:
                     merged['api_key'] = fb_keys[env_var]
 
-        await pool.execute(
-            'UPDATE hermes_config SET config = $1, updated_at = now() WHERE id = 1',
-            merged,
-        )
+        if x_user_id:
+            if row:
+                await pool.execute(
+                    'UPDATE hermes_config SET config = $1, updated_at = now() WHERE user_id = $2',
+                    merged, x_user_id
+                )
+            else:
+                await pool.execute(
+                    'INSERT INTO hermes_config (config, user_id) VALUES ($1, $2)',
+                    merged, x_user_id
+                )
+        else:
+            await pool.execute(
+                'UPDATE hermes_config SET config = $1, updated_at = now() WHERE id = 1',
+                merged,
+            )
         # Invalidate cache
         global _config_cache_ts
         _config_cache_ts = 0
@@ -1954,13 +2014,13 @@ class ConfigTestRequest(BaseModel):
     base_url: Optional[str] = None
 
 @app.post('/config/test')
-async def test_config(req: ConfigTestRequest, x_agent_key: str = Header(None)):
+async def test_config(req: ConfigTestRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
     t0 = time.time()
     try:
         api_key = req.api_key
         if api_key and is_masked(api_key):
-            cfg = await load_config()
+            cfg = await load_config(user_id=x_user_id)
             if cfg.get('provider') == req.provider and mask_api_key(cfg.get('api_key') or '') == api_key:
                 api_key = cfg.get('api_key') or ''
             else:
