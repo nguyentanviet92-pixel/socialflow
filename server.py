@@ -2019,19 +2019,16 @@ async def test_config(req: ConfigTestRequest, x_agent_key: str = Header(None), x
     t0 = time.time()
     try:
         api_key = req.api_key
-        if api_key and is_masked(api_key):
+        is_placeholder = not api_key or is_masked(api_key) or all(c in {'.', '*', '•'} for c in api_key)
+        if is_placeholder:
             cfg = await load_config(user_id=x_user_id)
-            if cfg.get('provider') == req.provider and mask_api_key(cfg.get('api_key') or '') == api_key:
+            if cfg.get('provider') == req.provider:
                 api_key = cfg.get('api_key') or ''
             else:
                 pconfig = PROVIDER_CONFIG.get(req.provider)
                 if pconfig:
                     env_var = pconfig["api_key_env"]
-                    db_val = (cfg.get('fallback_keys') or {}).get(env_var)
-                    if db_val and mask_api_key(db_val) == api_key:
-                        api_key = db_val
-                    else:
-                        api_key = db_val or ""
+                    api_key = (cfg.get('fallback_keys') or {}).get(env_var) or '' 
         
         base_url = req.base_url or PROVIDERS.get(req.provider, {}).get('base_url')
         test_cfg = {
