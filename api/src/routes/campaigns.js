@@ -991,7 +991,7 @@ module.exports = async (fastify) => {
         } else if (key === 'group_target_mode') {
           finalMeta.group_target_mode = req.body.group_target_mode
           metaUpdated = true
-        } else if (key !== 'brand_config' && key !== 'hermes_context' && key !== 'mission' && key !== 'requirement' && key !== 'goal' && key !== 'ad_mode') {
+        } else if (key !== 'brand_config' && key !== 'hermes_context' && key !== 'mission' && key !== 'requirement' && key !== 'goal' && key !== 'ad_mode' && key !== 'is_active' && key !== 'status') {
           updates[key] = req.body[key]
         }
       }
