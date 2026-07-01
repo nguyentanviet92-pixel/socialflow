@@ -140,8 +140,7 @@ module.exports = async (fastify) => {
 
   // GET /agent/download - Return download URL for latest Electron exe
   fastify.get('/download', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const url = process.env.AGENT_DOWNLOAD_URL ||
-      'https://github.com/nguyentanviet92-pixel/socialflow/releases/download/v1.1.0/SocialFlow.Agent.1.1.0.exe'
-    return { url, filename: 'SocialFlow Agent 1.1.0.exe' }
+    const url = process.env.AGENT_DOWNLOAD_URL || '/SocialFlow Agent Setup 1.1.0.exe'
+    return { url, filename: 'SocialFlow Agent Setup 1.1.0.exe' }
   })
 }
