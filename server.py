@@ -2039,8 +2039,10 @@ async def test_config(req: ConfigTestRequest, x_agent_key: str = Header(None), x
             'model': req.model,
             'api_key': api_key,
             'base_url': base_url,
+            'fallback_chain': [{'provider': req.provider, 'model': req.model, 'enabled': True}],
             # Pin model directly so _resolve_model doesn't fall back to TIER_DEFAULTS
             'skill_models': {'generic': req.model},
+            'user_id': x_user_id,
         }
         # Simple ping
         text = llm_call('You are a test bot.', 'Reply with exactly: OK', 10, 0.0, test_cfg)
