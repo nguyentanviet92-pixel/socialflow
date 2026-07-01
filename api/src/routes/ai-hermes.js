@@ -10,15 +10,19 @@ module.exports = async (fastify) => {
   const LONG_TIMEOUT_MS = 360000
   console.log('[HERMES] Using URL:', HERMES_URL, 'secret configured:', !!AGENT_SECRET)
 
-  async function proxyToHermes(path, body, timeout = COMMENT_TIMEOUT_MS) {
+  async function proxyToHermes(path, body, timeout = COMMENT_TIMEOUT_MS, userId = null) {
     try {
       const axios = require('axios')
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-Agent-Key': AGENT_SECRET,
+        'Connection': 'close',
+      }
+      if (userId) {
+        headers['X-User-Id'] = userId
+      }
       const res = await axios.post(`${HERMES_URL}${path}`, body, {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Agent-Key': AGENT_SECRET,
-          'Connection': 'close',
-        },
+        headers: headers,
         timeout: timeout,
         validateStatus: () => true
       })
@@ -42,25 +46,25 @@ module.exports = async (fastify) => {
   // ─── Comment generation ────────────────────────────────
   // Auth: user must be logged in (JWT)
   fastify.post('/comment', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/comment', req.body, COMMENT_TIMEOUT_MS)
+    const { status, json } = await proxyToHermes('/comment', req.body, COMMENT_TIMEOUT_MS, req.user?.id)
     return reply.code(status).send(json)
   })
 
   // ─── Post evaluation ───────────────────────────────────
   fastify.post('/evaluate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/evaluate', req.body, EVALUATE_TIMEOUT_MS)
+    const { status, json } = await proxyToHermes('/evaluate', req.body, EVALUATE_TIMEOUT_MS, req.user?.id)
     return reply.code(status).send(json)
   })
 
   // ─── Quality gate ──────────────────────────────────────
   fastify.post('/quality-gate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/quality-gate', req.body, NORMAL_TIMEOUT_MS)
+    const { status, json } = await proxyToHermes('/quality-gate', req.body, NORMAL_TIMEOUT_MS, req.user?.id)
     return reply.code(status).send(json)
   })
 
   // ─── Generic generate (drop-in for orchestrator) ───────
   fastify.post('/generate', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/generate', req.body, LONG_TIMEOUT_MS)
+    const { status, json } = await proxyToHermes('/generate', req.body, LONG_TIMEOUT_MS, req.user?.id)
     return reply.code(status).send(json)
   })
 
@@ -317,7 +321,10 @@ module.exports = async (fastify) => {
   fastify.get('/config', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const res = await fetch(`${HERMES_URL}/config`, {
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: {
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
         signal: AbortSignal.timeout(SHORT_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
@@ -326,11 +333,15 @@ module.exports = async (fastify) => {
     }
   })
 
-  fastify.put('/config', { preHandler: fastify.requireAdmin }, async (req, reply) => {
+  fastify.put('/config', { preHandler: fastify.authenticate }, async (req, reply) => {
     try {
       const res = await fetch(`${HERMES_URL}/config`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-Agent-Key': AGENT_SECRET },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
         body: JSON.stringify(req.body || {}),
         signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
@@ -340,8 +351,8 @@ module.exports = async (fastify) => {
     }
   })
 
-  fastify.post('/config/test', { preHandler: fastify.requireAdmin }, async (req, reply) => {
-    const { status, json } = await proxyToHermes('/config/test', req.body, NORMAL_TIMEOUT_MS)
+  fastify.post('/config/test', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { status, json } = await proxyToHermes('/config/test', req.body, NORMAL_TIMEOUT_MS, req.user.id)
     return reply.code(status).send(json)
   })
 
