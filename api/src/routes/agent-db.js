@@ -18,7 +18,7 @@ const ALLOWED_TABLES = new Set([
   'notifications', 'nurture_profiles', 'publish_history',
   'shared_posts', 'target_queue', 'agent_heartbeats',
   'account_health_signals', 'ai_pilot_memory', 'hermes_calls',
-  'nick_daily_job_quota', 'nick_slots',
+  'nick_daily_job_quota', 'nick_slots', 'scout_targets',
 ])
 const ALLOWED_RPCS = new Set([
   'append_campaign_to_group', 'increment_budget',
