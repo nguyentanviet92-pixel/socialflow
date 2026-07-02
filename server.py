@@ -1100,6 +1100,8 @@ def call_with_fallback(
     for i, provider_cfg in enumerate(active_chain):
         provider = provider_cfg["provider"]
         model    = provider_cfg["model"]
+        if provider == "nvidia" and model == "moonshotai/kimi-k2":
+            model = "moonshotai/kimi-k2.6"
         pconfig  = PROVIDER_CONFIG.get(provider)
         if not pconfig:
             logger.warning(f"[Fallback] Skip {provider}: unknown provider config")
