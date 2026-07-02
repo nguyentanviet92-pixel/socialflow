@@ -3209,9 +3209,28 @@ async def wp_audit_post(
         except Exception as e:
             logger.warning(f"[WP Audit] Failed to read from cache: {e}")
 
-    # Assign default model if not specified
+    # Default model and Kimi-on-Nvidia auto-routing logic
+    nvidia_key = (config.get("fallback_keys") or {}).get("NVIDIA_API_KEY")
+    if not nvidia_key and config.get("provider") == "nvidia":
+        nvidia_key = config.get("api_key")
+    if not nvidia_key:
+        nvidia_key = os.getenv("NVIDIA_API_KEY")
+
+    kimi_key = (config.get("fallback_keys") or {}).get("KIMI_API_KEY")
+    if not kimi_key and config.get("provider") == "kimi":
+        kimi_key = config.get("api_key")
+    if not kimi_key:
+        kimi_key = os.getenv("KIMI_API_KEY")
+
     if not model:
-        model = "kimi:kimi-k2-thinking"
+        if nvidia_key:
+            model = "nvidia:moonshotai/kimi-k2.6"
+        else:
+            model = "kimi:kimi-k2-thinking"
+    else:
+        # Route to Kimi-on-Nvidia if Kimi was selected but only Nvidia key is available
+        if (model == "kimi:kimi-k2-thinking" or model == "kimi:kimi-k2-thinking-turbo") and nvidia_key and not kimi_key:
+            model = "nvidia:moonshotai/kimi-k2.6"
 
     # Fetch bài viết if not cached or forced
     post = await client.get_post(post_id)
