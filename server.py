@@ -401,6 +401,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title='SocialFlow Hermes API', version='2.0.0', lifespan=lifespan)
 
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.exception("Unhandled Exception in Hermes API")
+    if isinstance(exc, StarletteHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail}
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Lỗi hệ thống: {str(exc)}"}
+    )
+
 # ── Auth ──────────────────────────────────────────────────
 def verify_key(x_agent_key: str = Header(None)):
     if not AGENT_SECRET:
@@ -3211,27 +3227,31 @@ async def wp_audit_post(
         except Exception as e:
             logger.warning(f"[WP Audit] Failed to read from cache: {e}")
 
-    # Default model and Kimi-on-Nvidia auto-routing logic
-    nvidia_key = (config.get("fallback_keys") or {}).get("NVIDIA_API_KEY")
-    if not nvidia_key and config.get("provider") == "nvidia":
-        nvidia_key = config.get("api_key")
-    if not nvidia_key:
-        nvidia_key = os.getenv("NVIDIA_API_KEY")
+    # Default model and Kimi-on-Nvidia auto-routing logic based strictly on USER keys
+    user_nvidia_key = (config.get("fallback_keys") or {}).get("NVIDIA_API_KEY")
+    if not user_nvidia_key and config.get("provider") == "nvidia":
+        user_nvidia_key = config.get("api_key")
+    user_nvidia_key = (user_nvidia_key or "").strip()
 
-    kimi_key = (config.get("fallback_keys") or {}).get("KIMI_API_KEY")
-    if not kimi_key and config.get("provider") == "kimi":
-        kimi_key = config.get("api_key")
-    if not kimi_key:
-        kimi_key = os.getenv("KIMI_API_KEY")
+    user_kimi_key = (config.get("fallback_keys") or {}).get("KIMI_API_KEY")
+    if not user_kimi_key and config.get("provider") == "kimi":
+        user_kimi_key = config.get("api_key")
+    user_kimi_key = (user_kimi_key or "").strip()
+
+    # Determine fallback availability of system keys if user has no keys
+    nvidia_key = user_nvidia_key or os.getenv("NVIDIA_API_KEY")
+    kimi_key = user_kimi_key or os.getenv("KIMI_API_KEY")
 
     if not model:
-        if nvidia_key:
+        if user_nvidia_key and not user_kimi_key:
+            model = "nvidia:moonshotai/kimi-k2.6"
+        elif nvidia_key:
             model = "nvidia:moonshotai/kimi-k2.6"
         else:
             model = "kimi:kimi-k2-thinking"
     else:
-        # Route to Kimi-on-Nvidia if Kimi was selected but only Nvidia key is available
-        if (model == "kimi:kimi-k2-thinking" or model == "kimi:kimi-k2-thinking-turbo") and nvidia_key and not kimi_key:
+        # Route to Kimi-on-Nvidia if Kimi was selected but user only has an NVIDIA token
+        if (model == "kimi:kimi-k2-thinking" or model == "kimi:kimi-k2-thinking-turbo") and user_nvidia_key and not user_kimi_key:
             model = "nvidia:moonshotai/kimi-k2.6"
 
     # Fetch bài viết if not cached or forced
