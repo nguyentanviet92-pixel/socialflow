@@ -1026,7 +1026,7 @@ def _call_provider(
         client_kwargs = {}
         if base_url:
             client_kwargs['base_url'] = base_url
-        client = Anthropic(api_key=api_key, **client_kwargs)
+        client = Anthropic(api_key=api_key, timeout=300.0, **client_kwargs)
         
         resp = client.messages.create(
             model=model,
@@ -1038,7 +1038,7 @@ def _call_provider(
         return resp.content[0].text.strip()
     else:
         from openai import OpenAI
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
         
         model_lower = (model or '').lower()
         fixed_temp_patterns = ('o1-', 'o3-', 'o4-', 'gpt-5', '-thinking', 'reasoner')
