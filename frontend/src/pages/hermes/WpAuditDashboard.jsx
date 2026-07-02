@@ -14,10 +14,20 @@ import {
 } from 'recharts'
 
 const AUDIT_MODELS = [
-  { id: 'kimi:kimi-k2-thinking', name: 'Kimi K2 Thinking' },
-  { id: 'deepseek:deepseek-r1', name: 'DeepSeek R1' },
-  { id: 'gemini:gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
-  { id: 'openai:gpt-4o', name: 'GPT-4o' }
+  { id: 'nvidia:meta/llama-3.3-70b-instruct', name: 'NVIDIA Llama 3.3 70B (Khuyên dùng)', badge: 'NVIDIA' },
+  { id: 'nvidia:nvidia/llama-3.1-nemotron-70b-instruct', name: 'NVIDIA Nemotron 70B (Đánh giá tốt)', badge: 'NVIDIA' },
+  { id: 'nvidia:meta/llama-3.1-405b-instruct', name: 'NVIDIA Llama 3.1 405B (Chất lượng cao)', badge: 'NVIDIA' },
+  { id: 'kimi:kimi-k2.6', name: 'Kimi K2.6 (Khuyên dùng - Cực mạnh tiếng Việt)', badge: 'Kimi' },
+  { id: 'kimi:kimi-k2-thinking', name: 'Kimi K2 Thinking (Suy luận sâu)', badge: 'Kimi' },
+  { id: 'kimi:kimi-k2-thinking-turbo', name: 'Kimi K2 Thinking Turbo (Nhanh)', badge: 'Kimi' },
+  { id: 'groq:llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B (Tốc độ nhanh)', badge: 'Groq' },
+  { id: 'groq:qwen/qwen3-32b', name: 'Groq Qwen 3 32B', badge: 'Groq' },
+  { id: 'nvidia:deepseek-ai/deepseek-r1', name: 'DeepSeek R1 via NVIDIA (Suy luận)', badge: 'Reasoning' },
+  { id: 'deepseek:deepseek-reasoner', name: 'DeepSeek R1 Direct', badge: 'Reasoning' },
+  { id: 'deepseek:deepseek-chat', name: 'DeepSeek V3', badge: 'DeepSeek' },
+  { id: 'openrouter:anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', badge: 'Claude' },
+  { id: 'openai:gpt-4o', name: 'GPT-4o (Đa dụng)', badge: 'OpenAI' },
+  { id: 'gemini:gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro', badge: 'Gemini' }
 ]
 
 export default function WpAuditDashboard() {
@@ -65,7 +75,7 @@ export default function WpAuditDashboard() {
   const { data: overview, isLoading: isOverviewLoading, isRefetching: isOverviewRefetching, refetch: refetchOverview } = useQuery({
     queryKey: ['hermes', 'dashboard', 'overview', sortBy],
     queryFn: async () => {
-      const res = await api.get(`/ai-hermes/hermes/dashboard/overview?sort_by=${sortBy}&limit=1000&page=1`)
+      const res = await api.get(`/ai-hermes/dashboard/overview?sort_by=${sortBy}&limit=1000&page=1`)
       return res.data
     },
     enabled: isGoogleConfigured && activeTab === 'analytics',
@@ -78,11 +88,11 @@ export default function WpAuditDashboard() {
     setSyncing(true)
     setSyncProgress('Bắt đầu đồng bộ...')
     try {
-      const res = await api.post('/ai-hermes/hermes/dashboard/sync')
+      const res = await api.post('/ai-hermes/dashboard/sync')
       const jId = res.data.job_id
       const timer = setInterval(async () => {
         try {
-          const statusRes = await api.get(`/ai-hermes/hermes/dashboard/sync/status/${jId}`)
+          const statusRes = await api.get(`/ai-hermes/dashboard/sync/status/${jId}`)
           const status = statusRes.data
           if (status.status === 'completed') {
             clearInterval(timer)
@@ -132,7 +142,7 @@ export default function WpAuditDashboard() {
   const { data: pageDetails, isLoading: isLoadingDetails } = useQuery({
     queryKey: ['hermes', 'dashboard', 'page', activeUrl],
     queryFn: async () => {
-      const res = await api.get(`/ai-hermes/hermes/dashboard/page?url=${encodeURIComponent(activeUrl)}`)
+      const res = await api.get(`/ai-hermes/dashboard/page?url=${encodeURIComponent(activeUrl)}`)
       return res.data
     },
     enabled: !!activeUrl && showDetailPanel,
@@ -142,7 +152,7 @@ export default function WpAuditDashboard() {
   const { data: compareData, isLoading: isLoadingCompare } = useQuery({
     queryKey: ['hermes', 'dashboard', 'compare', selectedUrls],
     queryFn: async () => {
-      const res = await api.post('/ai-hermes/hermes/dashboard/compare', { urls: selectedUrls })
+      const res = await api.post('/ai-hermes/dashboard/compare', { urls: selectedUrls })
       return res.data
     },
     enabled: selectedUrls.length > 0 && showCompareModal,
@@ -208,7 +218,7 @@ export default function WpAuditDashboard() {
   const categories = catData?.categories || []
   const [selectedCategory, setSelectedCategory] = useState('')
 
-  // Sync sites list from config schema
+  // Sync sites list & default model from config schema
   useEffect(() => {
     if (cfg && !isCfgLoading) {
       const existingSites = cfg.wp_sites || []
@@ -217,8 +227,14 @@ export default function WpAuditDashboard() {
       } else {
         setSites(existingSites.length > 0 ? existingSites : [{ name: '', url: '', token: '' }])
       }
+      if (cfg.provider && cfg.model) {
+        const configModelId = `${cfg.provider}:${cfg.model}`
+        if (!localStorage.getItem('wp_audit_selected_model')) {
+          setSelectedModel(configModelId)
+        }
+      }
     }
-  }, [cfgData, isCfgLoading])
+  }, [cfg, isCfgLoading])
 
   const loadPosts = async (resetPage = false) => {
     if (insideSiteIdx === null) return
@@ -792,18 +808,27 @@ export default function WpAuditDashboard() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h4 className="text-app-primary font-bold text-xs uppercase tracking-wider">🔍 Duyệt bài viết từ WordPress</h4>
                   <div className="flex flex-wrap gap-2 items-center">
-                    <select
-                      value={selectedModel}
-                      onChange={(e) => {
-                        setSelectedModel(e.target.value)
-                        localStorage.setItem('wp_audit_selected_model', e.target.value)
-                      }}
-                      className="px-2 py-1.5 bg-app-base border border-border text-app-primary rounded-lg text-xs"
-                    >
-                      {AUDIT_MODELS.map(m => (
-                        <option key={m.id} value={m.id}>🤖 {m.name}</option>
-                      ))}
-                    </select>
+                    {(() => {
+                      const configModelId = cfg.provider && cfg.model ? `${cfg.provider}:${cfg.model}` : null
+                      const modelOptions = [...AUDIT_MODELS]
+                      if (configModelId && !modelOptions.some(m => m.id === configModelId)) {
+                        modelOptions.unshift({ id: configModelId, name: `Cấu hình mặc định (${cfg.provider}/${cfg.model})` })
+                      }
+                      return (
+                        <select
+                          value={selectedModel}
+                          onChange={(e) => {
+                            setSelectedModel(e.target.value)
+                            localStorage.setItem('wp_audit_selected_model', e.target.value)
+                          }}
+                          className="px-2 py-1.5 bg-app-base border border-border text-app-primary rounded-lg text-xs"
+                        >
+                          {modelOptions.map(m => (
+                            <option key={m.id} value={m.id}>🤖 {m.name}</option>
+                          ))}
+                        </select>
+                      )
+                    })()}
 
                     <select
                       value={selectedCategory}

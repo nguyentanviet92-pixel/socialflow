@@ -2141,7 +2141,7 @@ function WpAuditSection() {
     setSyncing(true)
     setSyncStatus('Khởi chạy đồng bộ…')
     try {
-      const res = await api.post('/ai-hermes/hermes/dashboard/sync')
+      const res = await api.post('/ai-hermes/dashboard/sync')
       const jId = res.data.job_id
       setJobId(jId)
       pollSyncStatus(jId)
@@ -2154,7 +2154,7 @@ function WpAuditSection() {
   const pollSyncStatus = (jId) => {
     const timer = setInterval(async () => {
       try {
-        const res = await api.get(`/ai-hermes/hermes/dashboard/sync/status/${jId}`)
+        const res = await api.get(`/ai-hermes/dashboard/sync/status/${jId}`)
         const data = res.data
         if (data.status === 'completed') {
           clearInterval(timer)

@@ -744,7 +744,10 @@ module.exports = async (fastify) => {
       url.searchParams.append('site_idx', site_idx)
 
       const res = await fetch(url.toString(), {
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
         signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
@@ -766,7 +769,10 @@ module.exports = async (fastify) => {
 
       const res = await fetch(url.toString(), {
         method: 'POST',
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
         signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
@@ -787,6 +793,7 @@ module.exports = async (fastify) => {
         headers: {
           'Content-Type': 'application/json',
           'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
         },
         body: JSON.stringify(req.body || {}),
         signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
@@ -804,7 +811,10 @@ module.exports = async (fastify) => {
       url.searchParams.append('site_idx', site_idx)
 
       const res = await fetch(url.toString(), {
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
         signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())
@@ -822,7 +832,120 @@ module.exports = async (fastify) => {
       url.searchParams.append('site_idx', site_idx)
 
       const res = await fetch(url.toString(), {
-        headers: { 'X-Agent-Key': AGENT_SECRET },
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  // ─── Dashboard Integration ──────────────────────────────
+  fastify.get('/dashboard/overview', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const { sort_by = 'priority', limit = 100, page = 1 } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/dashboard/overview`)
+      url.searchParams.append('sort_by', sort_by)
+      url.searchParams.append('limit', limit)
+      url.searchParams.append('page', page)
+
+      const res = await fetch(url.toString(), {
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.get('/dashboard/page', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const { url: pageUrl } = req.query
+      const url = new URL(`${HERMES_URL}/hermes/dashboard/page`)
+      if (pageUrl) url.searchParams.append('url', pageUrl)
+
+      const res = await fetch(url.toString(), {
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.post('/dashboard/compare', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const url = new URL(`${HERMES_URL}/hermes/dashboard/compare`)
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
+        body: JSON.stringify(req.body || {}),
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.get('/dashboard/opportunities', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const url = new URL(`${HERMES_URL}/hermes/dashboard/opportunities`)
+      const res = await fetch(url.toString(), {
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.post('/dashboard/sync', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const url = new URL(`${HERMES_URL}/hermes/dashboard/sync`)
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
+        signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
+      })
+      return reply.code(res.status).send(await res.json())
+    } catch (err) {
+      return reply.code(503).send({ error: err.message })
+    }
+  })
+
+  fastify.get('/dashboard/sync/status/:job_id', { preHandler: fastify.authenticate }, async (req, reply) => {
+    try {
+      const jobId = req.params.job_id
+      const url = new URL(`${HERMES_URL}/hermes/dashboard/sync/status/${jobId}`)
+      const res = await fetch(url.toString(), {
+        headers: { 
+          'X-Agent-Key': AGENT_SECRET,
+          'X-User-Id': req.user.id
+        },
         signal: AbortSignal.timeout(NORMAL_TIMEOUT_MS),
       })
       return reply.code(res.status).send(await res.json())

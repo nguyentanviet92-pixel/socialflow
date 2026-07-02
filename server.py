@@ -306,16 +306,18 @@ async def lifespan(app: FastAPI):
     try:
         await pool.execute("""
             CREATE TABLE IF NOT EXISTS wp_audit_results (
+                user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
                 site_idx INTEGER NOT NULL,
                 post_id INTEGER NOT NULL,
                 audit_data JSONB NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (site_idx, post_id)
+                PRIMARY KEY (user_id, site_idx, post_id)
             );
 
             CREATE TABLE IF NOT EXISTS page_analytics_cache (
-                url TEXT PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+                url TEXT NOT NULL,
                 post_id INTEGER,
                 page_title TEXT,
                 gsc_clicks INTEGER DEFAULT 0,
@@ -328,11 +330,13 @@ async def lifespan(app: FastAPI):
                 ga4_bounce_rate FLOAT DEFAULT 0,
                 ga4_pageviews INTEGER DEFAULT 0,
                 fetched_at TIMESTAMP DEFAULT NOW(),
-                date_range_days INTEGER DEFAULT 28
+                date_range_days INTEGER DEFAULT 28,
+                PRIMARY KEY (user_id, url)
             );
 
             CREATE TABLE IF NOT EXISTS audit_score_history (
                 id SERIAL PRIMARY KEY,
+                user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
                 url TEXT NOT NULL,
                 post_id INTEGER,
                 audit_score INTEGER,
@@ -344,12 +348,52 @@ async def lifespan(app: FastAPI):
                 audited_at TIMESTAMP DEFAULT NOW()
             );
 
-            CREATE INDEX IF NOT EXISTS idx_audit_history_url ON audit_score_history(url);
-            CREATE INDEX IF NOT EXISTS idx_audit_history_date ON audit_score_history(audited_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_history_url ON audit_score_history(user_id, url);
+            CREATE INDEX IF NOT EXISTS idx_audit_history_date ON audit_score_history(user_id, audited_at DESC);
         """)
-        logger.info('wp_audit_results, page_analytics_cache, and audit_score_history tables verified')
+
+        # Dynamic migration to add user_id column and re-create PK constraints for existing DB installations
+        await pool.execute("""
+            DO $$
+            BEGIN
+                -- 1. wp_audit_results migration
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name='wp_audit_results' AND column_name='user_id'
+                ) THEN
+                    DELETE FROM wp_audit_results;
+                    ALTER TABLE wp_audit_results ADD COLUMN user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE;
+                    ALTER TABLE wp_audit_results DROP CONSTRAINT IF EXISTS wp_audit_results_pkey;
+                    ALTER TABLE wp_audit_results ADD PRIMARY KEY (user_id, site_idx, post_id);
+                END IF;
+
+                -- 2. page_analytics_cache migration
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name='page_analytics_cache' AND column_name='user_id'
+                ) THEN
+                    DELETE FROM page_analytics_cache;
+                    ALTER TABLE page_analytics_cache ADD COLUMN user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE;
+                    ALTER TABLE page_analytics_cache DROP CONSTRAINT IF EXISTS page_analytics_cache_pkey;
+                    ALTER TABLE page_analytics_cache ADD PRIMARY KEY (user_id, url);
+                END IF;
+
+                -- 3. audit_score_history migration
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name='audit_score_history' AND column_name='user_id'
+                ) THEN
+                    ALTER TABLE audit_score_history ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+                    DROP INDEX IF EXISTS idx_audit_history_url;
+                    DROP INDEX IF EXISTS idx_audit_history_date;
+                    CREATE INDEX IF NOT EXISTS idx_audit_history_url ON audit_score_history(user_id, url);
+                    CREATE INDEX IF NOT EXISTS idx_audit_history_date ON audit_score_history(user_id, audited_at DESC);
+                END IF;
+            END $$;
+        """)
+        logger.info('wp_audit_results, page_analytics_cache, and audit_score_history tables verified & migrated')
     except Exception as e:
-        logger.error('Failed to create DB tables: %s', e)
+        logger.error('Failed to create/migrate DB tables: %s', e)
     yield
     if _db_pool:
         await _db_pool.close()
@@ -1067,8 +1111,7 @@ def call_with_fallback(
             if config.get("provider") == provider:
                 api_key = config.get("api_key")
         if not api_key:
-            if config.get("user_id") is None:
-                api_key = os.getenv(api_key_env)
+            api_key = os.getenv(api_key_env)
 
         api_key = (api_key or "").strip()
         if not api_key:
@@ -3076,10 +3119,11 @@ async def wp_resolve_post(
     url: str = "",
     slug: str = "",
     site_idx: int = 0,
-    x_agent_key: str = Header(None)
+    x_agent_key: str = Header(None),
+    x_user_id: Optional[str] = Header(None)
 ):
     verify_key(x_agent_key)
-    config = await load_config()
+    config = await load_config(user_id=x_user_id)
     client = get_wp_client(config, site_idx)
     
     resolved_slug = slug
@@ -3112,10 +3156,11 @@ async def wp_list_posts(
     search: str = "",
     category_id: Optional[int] = None,
     site_idx: int = 0,
-    x_agent_key: str = Header(None)
+    x_agent_key: str = Header(None),
+    x_user_id: Optional[str] = Header(None)
 ):
     verify_key(x_agent_key)
-    config = await load_config()
+    config = await load_config(user_id=x_user_id)
     client = get_wp_client(config, site_idx)
     posts = await client.list_posts(
         per_page=per_page,
@@ -3126,9 +3171,16 @@ async def wp_list_posts(
     return {"posts": posts, "page": page, "per_page": per_page}
 
 @app.post("/hermes/wp/audit/{post_id}")
-async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, model: str = None, x_agent_key: str = Header(None)):
+async def wp_audit_post(
+    post_id: int,
+    site_idx: int = 0,
+    force: bool = False,
+    model: str = None,
+    x_agent_key: str = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
     verify_key(x_agent_key)
-    config = await load_config()
+    config = await load_config(user_id=x_user_id)
     client = get_wp_client(config, site_idx)
 
     # 1. Check cache first if not forced and no model override is requested
@@ -3136,8 +3188,8 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
         try:
             pool = await get_pool()
             cached = await pool.fetchrow(
-                "SELECT audit_data FROM wp_audit_results WHERE site_idx = $1 AND post_id = $2",
-                site_idx, post_id
+                "SELECT audit_data FROM wp_audit_results WHERE user_id = $1 AND site_idx = $2 AND post_id = $3",
+                x_user_id, site_idx, post_id
             )
             if cached:
                 audit_data = cached["audit_data"]
@@ -3276,12 +3328,12 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
         pool = await get_pool()
         await pool.execute(
             """
-            INSERT INTO wp_audit_results (site_idx, post_id, audit_data, updated_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            ON CONFLICT (site_idx, post_id)
+            INSERT INTO wp_audit_results (user_id, site_idx, post_id, audit_data, updated_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, site_idx, post_id)
             DO UPDATE SET audit_data = EXCLUDED.audit_data, updated_at = CURRENT_TIMESTAMP
             """,
-            site_idx, post_id, audit_result
+            x_user_id, site_idx, post_id, audit_result
         )
         logger.info(f"[WP Audit] Saved audit result for site={site_idx} post={post_id} to DB")
         
@@ -3291,10 +3343,10 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
             sb = audit_result.get("score_breakdown") or {}
             await pool.execute(
                 """
-                INSERT INTO audit_score_history (url, post_id, audit_score, score_seo, score_geo, score_pillar, score_semantic, audit_data)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                INSERT INTO audit_score_history (user_id, url, post_id, audit_score, score_seo, score_geo, score_pillar, score_semantic, audit_data)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """,
-                url, post_id, audit_score, sb.get("seo"), sb.get("geo"), sb.get("pillar_cluster") or sb.get("pillar"), sb.get("semantic"), json.dumps(audit_result)
+                x_user_id, url, post_id, audit_score, sb.get("seo"), sb.get("geo"), sb.get("pillar_cluster") or sb.get("pillar"), sb.get("semantic"), json.dumps(audit_result)
             )
             logger.info(f"[WP Audit] Recorded score history for post={post_id} score={audit_score}")
         except Exception as e_hist:
@@ -3313,17 +3365,17 @@ async def wp_audit_post(post_id: int, site_idx: int = 0, force: bool = False, mo
 
 
 @app.put("/hermes/wp/apply/{post_id}")
-async def wp_apply_suggestions(post_id: int, site_idx: int = 0, req_data: dict = Body(...), x_agent_key: str = Header(None)):
+async def wp_apply_suggestions(post_id: int, site_idx: int = 0, req_data: dict = Body(...), x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
-    config = await load_config()
+    config = await load_config(user_id=x_user_id)
     client = get_wp_client(config, site_idx)
     res = await client.update_post(post_id, req_data)
     return {"ok": True, "result": res}
 
 @app.get("/hermes/wp/categories")
-async def wp_list_categories(site_idx: int = 0, x_agent_key: str = Header(None)):
+async def wp_list_categories(site_idx: int = 0, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
-    config = await load_config()
+    config = await load_config(user_id=x_user_id)
     client = get_wp_client(config, site_idx)
     categories = await client.get_categories()
     return {"categories": categories}
@@ -3461,17 +3513,17 @@ def normalize_path(path: str) -> str:
         p = p[:-1]
     return p
 
-async def find_post_id_by_url_or_slug(pool, url: str, slug: str):
+async def find_post_id_by_url_or_slug(pool, url: str, slug: str, user_id: str):
     try:
         row = await pool.fetchrow(
-            "SELECT post_id FROM wp_audit_results WHERE audit_data->>'url' = $1 OR audit_data->'post'->>'link' = $1",
-            url
+            "SELECT post_id FROM wp_audit_results WHERE user_id = $1 AND (audit_data->>'url' = $2 OR audit_data->'post'->>'link' = $2)",
+            user_id, url
         )
         if row:
             return row["post_id"]
         row = await pool.fetchrow(
-            "SELECT post_id FROM wp_audit_results WHERE audit_data->'post'->>'slug' = $1",
-            slug
+            "SELECT post_id FROM wp_audit_results WHERE user_id = $1 AND audit_data->'post'->>'slug' = $2",
+            user_id, slug
         )
         if row:
             return row["post_id"]
@@ -3479,7 +3531,7 @@ async def find_post_id_by_url_or_slug(pool, url: str, slug: str):
         logger.warning(f"Error resolving post_id for {url}: {e}")
     return None
 
-async def run_sync_background_job(job_id: str, config: dict):
+async def run_sync_background_job(job_id: str, config: dict, user_id: str):
     _sync_jobs[job_id] = {"status": "running", "progress": 10, "error": None}
     try:
         pool = await get_pool()
@@ -3510,16 +3562,16 @@ async def run_sync_background_job(job_id: str, config: dict):
             ga4 = ga4_map.get(path, {})
 
             slug = url.rstrip("/").split("/")[-1]
-            post_id = await find_post_id_by_url_or_slug(pool, url, slug)
+            post_id = await find_post_id_by_url_or_slug(pool, url, slug, user_id)
             page_title = slug.replace("-", " ").title()
 
             await pool.execute(
                 """
                 INSERT INTO page_analytics_cache (
-                    url, post_id, page_title, gsc_clicks, gsc_impressions, gsc_ctr, gsc_position,
+                    user_id, url, post_id, page_title, gsc_clicks, gsc_impressions, gsc_ctr, gsc_position,
                     ga4_sessions, ga4_avg_time_sec, ga4_bounce_rate, ga4_pageviews, fetched_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
-                ON CONFLICT (url) DO UPDATE SET
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, url) DO UPDATE SET
                     post_id = EXCLUDED.post_id,
                     gsc_clicks = EXCLUDED.gsc_clicks,
                     gsc_impressions = EXCLUDED.gsc_impressions,
@@ -3531,7 +3583,7 @@ async def run_sync_background_job(job_id: str, config: dict):
                     ga4_pageviews = EXCLUDED.ga4_pageviews,
                     fetched_at = CURRENT_TIMESTAMP
                 """,
-                url, post_id, page_title,
+                user_id, url, post_id, page_title,
                 row.get("clicks", 0), row.get("impressions", 0), row.get("ctr", 0.0), row.get("position", 0.0),
                 ga4.get("sessions", 0), int(ga4.get("averageSessionDuration", 0.0)), ga4.get("bounceRate", 0.0), ga4.get("screenPageViews", 0)
             )
@@ -3570,11 +3622,13 @@ def classify_page_opportunity(impr: int, ctr: float, pos: float, audit_score: Op
     return "ok"
 
 @app.post("/hermes/dashboard/sync")
-async def trigger_analytics_sync(background_tasks: BackgroundTasks, x_agent_key: str = Header(None)):
+async def trigger_analytics_sync(background_tasks: BackgroundTasks, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
-    config = await load_config()
+    if not x_user_id:
+        raise HTTPException(401, "User ID required")
+    config = await load_config(user_id=x_user_id)
     job_id = str(uuid.uuid4())
-    background_tasks.add_task(run_sync_background_job, job_id, config)
+    background_tasks.add_task(run_sync_background_job, job_id, config, x_user_id)
     return {"job_id": job_id, "status": "running"}
 
 @app.get("/hermes/dashboard/sync/status/{job_id}")
@@ -3586,8 +3640,16 @@ async def get_sync_status(job_id: str, x_agent_key: str = Header(None)):
     return job
 
 @app.get("/hermes/dashboard/overview")
-async def get_dashboard_overview(sort_by: str = "priority", limit: int = 100, page: int = 1, x_agent_key: str = Header(None)):
+async def get_dashboard_overview(
+    sort_by: str = "priority",
+    limit: int = 100,
+    page: int = 1,
+    x_agent_key: str = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
     verify_key(x_agent_key)
+    if not x_user_id:
+        raise HTTPException(401, "User ID required")
     pool = await get_pool()
     
     rows = await pool.fetch("""
@@ -3608,10 +3670,13 @@ async def get_dashboard_overview(sort_by: str = "priority", limit: int = 100, pa
             r.audit_data as last_audit_data
         FROM page_analytics_cache c
         LEFT JOIN wp_audit_results r ON 
-            (c.post_id IS NOT NULL AND c.post_id = r.post_id)
-            OR (c.url = r.audit_data->>'url')
-            OR (c.url = r.audit_data->'post'->>'link')
-    """)
+            r.user_id = c.user_id AND (
+                (c.post_id IS NOT NULL AND c.post_id = r.post_id)
+                OR (c.url = r.audit_data->>'url')
+                OR (c.url = r.audit_data->'post'->>'link')
+            )
+        WHERE c.user_id = $1
+    """, x_user_id)
     
     results = []
     for row in rows:
@@ -3678,11 +3743,13 @@ async def get_dashboard_overview(sort_by: str = "priority", limit: int = 100, pa
     }
 
 @app.get("/hermes/dashboard/page")
-async def get_dashboard_page(url: str, x_agent_key: str = Header(None)):
+async def get_dashboard_page(url: str, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
+    if not x_user_id:
+        raise HTTPException(401, "User ID required")
     pool = await get_pool()
     
-    row = await pool.fetchrow("SELECT * FROM page_analytics_cache WHERE url = $1", url)
+    row = await pool.fetchrow("SELECT * FROM page_analytics_cache WHERE user_id = $1 AND url = $2", x_user_id, url)
     if not row:
         raise HTTPException(404, "Page not found in cache")
         
@@ -3695,7 +3762,7 @@ async def get_dashboard_page(url: str, x_agent_key: str = Header(None)):
         except:
             top_queries = None
             
-    config = await load_config()
+    config = await load_config(user_id=x_user_id)
     creds_json = config.get("gsc_credentials_json")
     site_url = config.get("gsc_site_url")
     
@@ -3703,8 +3770,8 @@ async def get_dashboard_page(url: str, x_agent_key: str = Header(None)):
         try:
             top_queries = await fetch_gsc_queries_for_page(url, site_url, creds_json)
             await pool.execute(
-                "UPDATE page_analytics_cache SET gsc_top_queries = $1 WHERE url = $2",
-                json.dumps(top_queries), url
+                "UPDATE page_analytics_cache SET gsc_top_queries = $1 WHERE user_id = $2 AND url = $3",
+                json.dumps(top_queries), x_user_id, url
             )
             page_data["gsc_top_queries"] = top_queries
         except Exception as e:
@@ -3712,14 +3779,14 @@ async def get_dashboard_page(url: str, x_agent_key: str = Header(None)):
             page_data["gsc_top_queries"] = []
             
     history_rows = await pool.fetch(
-        "SELECT audit_score, audited_at FROM audit_score_history WHERE url = $1 ORDER BY audited_at ASC",
-        url
+        "SELECT audit_score, audited_at FROM audit_score_history WHERE user_id = $1 AND url = $2 ORDER BY audited_at ASC",
+        x_user_id, url
     )
     history = [{"score": r["audit_score"], "date": r["audited_at"].strftime("%Y-%m-%d")} for r in history_rows]
     
     row_audit = await pool.fetchrow(
-        "SELECT audit_data FROM wp_audit_results WHERE audit_data->>'url' = $1 OR audit_data->'post'->>'link' = $1",
-        url
+        "SELECT audit_data FROM wp_audit_results WHERE user_id = $1 AND (audit_data->>'url' = $2 OR audit_data->'post'->>'link' = $2)",
+        x_user_id, url
     )
     suggestions = {}
     audit_score = None
@@ -3739,16 +3806,18 @@ class CompareRequest(BaseModel):
     urls: List[str]
 
 @app.post("/hermes/dashboard/compare")
-async def compare_pages(req: CompareRequest, x_agent_key: str = Header(None)):
+async def compare_pages(req: CompareRequest, x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
+    if not x_user_id:
+        raise HTTPException(401, "User ID required")
     pool = await get_pool()
     
     results = []
     for url in req.urls:
-        row_cache = await pool.fetchrow("SELECT * FROM page_analytics_cache WHERE url = $1", url)
+        row_cache = await pool.fetchrow("SELECT * FROM page_analytics_cache WHERE user_id = $1 AND url = $2", x_user_id, url)
         row_audit = await pool.fetchrow(
-            "SELECT audit_data FROM wp_audit_results WHERE audit_data->>'url' = $1 OR audit_data->'post'->>'link' = $1",
-            url
+            "SELECT audit_data FROM wp_audit_results WHERE user_id = $1 AND (audit_data->>'url' = $2 OR audit_data->'post'->>'link' = $2)",
+            x_user_id, url
         )
         
         cache_data = dict(row_cache) if row_cache else {"url": url}
@@ -3766,8 +3835,10 @@ async def compare_pages(req: CompareRequest, x_agent_key: str = Header(None)):
     return results
 
 @app.get("/hermes/dashboard/opportunities")
-async def get_dashboard_opportunities(x_agent_key: str = Header(None)):
+async def get_dashboard_opportunities(x_agent_key: str = Header(None), x_user_id: Optional[str] = Header(None)):
     verify_key(x_agent_key)
+    if not x_user_id:
+        raise HTTPException(401, "User ID required")
     pool = await get_pool()
     
     rows = await pool.fetch("""
@@ -3786,10 +3857,13 @@ async def get_dashboard_opportunities(x_agent_key: str = Header(None)):
             r.audit_data as last_audit_data
         FROM page_analytics_cache c
         LEFT JOIN wp_audit_results r ON 
-            (c.post_id IS NOT NULL AND c.post_id = r.post_id)
-            OR (c.url = r.audit_data->>'url')
-            OR (c.url = r.audit_data->'post'->>'link')
-    """)
+            r.user_id = c.user_id AND (
+                (c.post_id IS NOT NULL AND c.post_id = r.post_id)
+                OR (c.url = r.audit_data->>'url')
+                OR (c.url = r.audit_data->'post'->>'link')
+            )
+        WHERE c.user_id = $1
+    """, x_user_id)
     
     results = []
     for row in rows:
