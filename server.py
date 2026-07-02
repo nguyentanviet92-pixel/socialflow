@@ -2966,9 +2966,10 @@ async def run_audit_llm(
         config=config,
         fallback_keys=fallback_keys,
         temperature=0.2,
-        max_tokens=3000,
+        max_tokens=8000,
         model_override=model_override,
     )
+    logger.info(f"[WP Audit] LLM call completed for model_override={model_override}, response length={len(response_text)}")
 
     # Clean and parse JSON
     raw_text = response_text.strip()
@@ -2987,7 +2988,38 @@ async def run_audit_llm(
     except Exception as log_err:
         logger.warning(f"[WP Audit] Failed to save raw response log: {log_err}")
 
-    result = json.loads(raw_text.strip())
+    try:
+        result = json.loads(raw_text.strip())
+    except json.JSONDecodeError as e:
+        logger.warning(f"[WP Audit] JSON parse failed ({e}), attempting to repair truncated JSON...")
+        # Attempt to repair truncated JSON by closing open strings/objects/arrays
+        repaired = raw_text.strip()
+        # Remove trailing incomplete key-value or comma
+        repaired = repaired.rstrip(',')
+        # Count open braces/brackets and close them
+        open_braces = repaired.count('{') - repaired.count('}')
+        open_brackets = repaired.count('[') - repaired.count(']')
+        # Check if we're inside an unterminated string
+        in_string = False
+        escaped = False
+        for ch in repaired:
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+        if in_string:
+            repaired += '"'
+        repaired += ']' * max(0, open_brackets)
+        repaired += '}' * max(0, open_braces)
+        try:
+            result = json.loads(repaired)
+            logger.info("[WP Audit] Successfully repaired truncated JSON")
+        except json.JSONDecodeError:
+            raise RuntimeError(f"LLM trả về JSON không hợp lệ (bị cắt ngắn). Vui lòng thử lại. Chi tiết: {str(e)}")
 
     # Calculate scores based on the checklist
     chk = result.get("checklist", {})
