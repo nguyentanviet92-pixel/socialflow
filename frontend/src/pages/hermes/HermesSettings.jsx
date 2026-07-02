@@ -62,7 +62,7 @@ export const PROVIDER_MODELS = {
     { id: 'deepseek-ai/deepseek-r1',                label: 'DeepSeek R1 (reasoning)' },
     { id: 'deepseek-ai/deepseek-v3',                label: 'DeepSeek V3 (chat)' },
     { id: 'deepseek-ai/deepseek-v4-flash',          label: 'DeepSeek V4 Flash (1M ctx)' },
-    { id: 'moonshotai/kimi-k2',                     label: 'Kimi K2 (200K ctx)' },
+    { id: 'moonshotai/kimi-k2.6',                   label: 'Kimi K2.6 (256K ctx) ⭐' },
     { id: 'nvidia/nemotron-3-super-120b',           label: 'Nemotron 3 Super 120B' },
     { id: 'minimaxai/minimax-m2.7',                 label: 'MiniMax M2.7' },
     { id: 'zhipuai/glm-5.1',                        label: 'GLM-5.1 (multilingual)' },
