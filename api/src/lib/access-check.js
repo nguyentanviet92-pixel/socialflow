@@ -3,9 +3,12 @@
  * ALL users (including admin) only access own + granted resources.
  */
 async function canAccess(supabase, userId, resourceType, resourceId) {
-  // Check if owner (for accounts)
+  // Check if owner (for accounts and websites)
   if (resourceType === 'account') {
     const { data } = await supabase.from('accounts').select('id').eq('id', resourceId).eq('owner_id', userId).single()
+    if (data) return true
+  } else if (resourceType === 'website') {
+    const { data } = await supabase.from('websites').select('id').eq('id', resourceId).eq('owner_id', userId).single()
     if (data) return true
   }
 
@@ -43,6 +46,9 @@ async function getAccessibleIds(supabase, userId, resourceType) {
       .from('fb_groups')
       .select('id, accounts!inner(owner_id)')
       .eq('accounts.owner_id', userId)
+    ownedIds = (data || []).map(r => r.id)
+  } else if (resourceType === 'website') {
+    const { data } = await supabase.from('websites').select('id').eq('owner_id', userId)
     ownedIds = (data || []).map(r => r.id)
   }
 

@@ -27,29 +27,49 @@ function buildOAuthClient(site) {
 }
 
 module.exports = async (fastify) => {
-  const { supabase } = fastify
+  const { getAccessibleIds, canAccess } = require('../lib/access-check')
+
+  // Helper: check access to a website resource
+  async function verifyWebsiteAccess(req, reply, websiteId) {
+    if (req.user.role === 'admin') return true
+    const ok = await canAccess(supabase, req.user.id, 'website', websiteId)
+    if (!ok) {
+      reply.code(403).send({ error: 'Forbidden: Bạn không có quyền truy cập website này' })
+      return false
+    }
+    return true
+  }
 
   // ─── List & Delete ────────────────────────────────────────────────────────────
 
   // GET /websites — list connected websites (only finalized ones)
   fastify.get('/', { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from('websites')
       .select('id, name, url, google_email, ga_property_id, ga_property_name, gsc_site_url, created_at')
-      .eq('owner_id', req.user.id)
       .neq('url', 'pending')           // hide temp records
       .order('created_at', { ascending: false })
+
+    if (req.user.role !== 'admin') {
+      const accessibleIds = await getAccessibleIds(supabase, req.user.id, 'website')
+      if (accessibleIds.length === 0) return []
+      query = query.in('id', accessibleIds)
+    }
+
+    const { data, error } = await query
     if (error) return reply.code(500).send({ error: error.message })
     return data
   })
 
   // DELETE /websites/:id
   fastify.delete('/:id', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const hasAccess = await verifyWebsiteAccess(req, reply, req.params.id)
+    if (!hasAccess) return
+
     const { error } = await supabase
       .from('websites')
       .delete()
       .eq('id', req.params.id)
-      .eq('owner_id', req.user.id)
     if (error) return reply.code(500).send({ error: error.message })
     return { ok: true }
   })
@@ -176,11 +196,13 @@ module.exports = async (fastify) => {
 
   // GET /websites/:id/gsc-sites — list Search Console sites for connected account
   fastify.get('/:id/gsc-sites', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const hasAccess = await verifyWebsiteAccess(req, reply, req.params.id)
+    if (!hasAccess) return
+
     const { data: site, error } = await supabase
       .from('websites')
       .select('google_access_token, google_refresh_token, google_token_expiry')
       .eq('id', req.params.id)
-      .eq('owner_id', req.user.id)
       .single()
     if (error || !site) return reply.code(404).send({ error: 'Không tìm thấy' })
     if (!site.google_access_token) return reply.code(400).send({ error: 'Chưa kết nối Google' })
@@ -201,11 +223,13 @@ module.exports = async (fastify) => {
 
   // GET /websites/:id/ga-properties — list GA4 properties
   fastify.get('/:id/ga-properties', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const hasAccess = await verifyWebsiteAccess(req, reply, req.params.id)
+    if (!hasAccess) return
+
     const { data: site, error } = await supabase
       .from('websites')
       .select('google_access_token, google_refresh_token, google_token_expiry')
       .eq('id', req.params.id)
-      .eq('owner_id', req.user.id)
       .single()
     if (error || !site) return reply.code(404).send({ error: 'Không tìm thấy' })
     if (!site.google_access_token) return reply.code(400).send({ error: 'Chưa kết nối Google' })
@@ -243,12 +267,14 @@ module.exports = async (fastify) => {
     const { sites } = req.body
     if (!sites?.length) return reply.code(400).send({ error: 'sites array required' })
 
+    const hasAccess = await verifyWebsiteAccess(req, reply, req.params.id)
+    if (!hasAccess) return
+
     // Fetch temp record for token cloning
     const { data: tmpSite, error: fetchErr } = await supabase
       .from('websites')
       .select('google_email, google_access_token, google_refresh_token, google_token_expiry')
       .eq('id', req.params.id)
-      .eq('owner_id', req.user.id)
       .single()
     if (fetchErr || !tmpSite) return reply.code(404).send({ error: 'Temp record not found' })
 
@@ -268,7 +294,7 @@ module.exports = async (fastify) => {
         // Update the existing temp record
         const { data, error } = await supabase
           .from('websites').update(fields)
-          .eq('id', req.params.id).eq('owner_id', req.user.id)
+          .eq('id', req.params.id)
           .select().single()
         if (error) return reply.code(500).send({ error: error.message })
         results.push(data)
@@ -295,11 +321,13 @@ module.exports = async (fastify) => {
 
   // Helper: get site + oauth client
   async function getSiteWithAuth(req, reply) {
+    const hasAccess = await verifyWebsiteAccess(req, reply, req.params.id)
+    if (!hasAccess) return null
+
     const { data: site, error } = await supabase
       .from('websites')
       .select('gsc_site_url, ga_property_id, google_access_token, google_refresh_token, google_token_expiry')
       .eq('id', req.params.id)
-      .eq('owner_id', req.user.id)
       .single()
     if (error || !site) { reply.code(404).send({ error: 'Không tìm thấy' }); return null }
     if (!site.google_access_token) { reply.code(400).send({ error: 'Chưa kết nối Google' }); return null }
@@ -565,6 +593,9 @@ Viết ngắn gọn, thực tế, dễ hiểu. Không dùng JSON.`
 
   // POST /websites/:id/disconnect-google
   fastify.post('/:id/disconnect-google', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const hasAccess = await verifyWebsiteAccess(req, reply, req.params.id)
+    if (!hasAccess) return
+
     const { error } = await supabase
       .from('websites')
       .update({
@@ -574,7 +605,6 @@ Viết ngắn gọn, thực tế, dễ hiểu. Không dùng JSON.`
         updated_at: new Date().toISOString(),
       })
       .eq('id', req.params.id)
-      .eq('owner_id', req.user.id)
     if (error) return reply.code(500).send({ error: error.message })
     invalidate(`overview:${req.params.id}:`)
     return { ok: true }

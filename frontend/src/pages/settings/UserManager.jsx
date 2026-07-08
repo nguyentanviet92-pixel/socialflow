@@ -330,7 +330,7 @@ export default function UserManager() {
 }
 
 function PermissionsModal({ userId, userName, onClose }) {
-  const [selected, setSelected] = useState({ account: [], fanpage: [], group: [] })
+  const [selected, setSelected] = useState({ account: [], fanpage: [], group: [], website: [] })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -343,7 +343,7 @@ function PermissionsModal({ userId, userName, onClose }) {
   useEffect(() => {
     api.get(`/permissions/${userId}`).then(res => {
       const perms = res.data || []
-      const grouped = { account: [], fanpage: [], group: [] }
+      const grouped = { account: [], fanpage: [], group: [], website: [] }
       perms.forEach(p => {
         if (grouped[p.resource_type]) {
           grouped[p.resource_type].push(p.resource_id)
@@ -377,6 +377,7 @@ function PermissionsModal({ userId, userName, onClose }) {
         ...selected.account.map(id => ({ resource_type: 'account', resource_id: id })),
         ...selected.fanpage.map(id => ({ resource_type: 'fanpage', resource_id: id })),
         ...selected.group.map(id => ({ resource_type: 'group', resource_id: id })),
+        ...selected.website.map(id => ({ resource_type: 'website', resource_id: id })),
       ]
       await api.put(`/permissions/${userId}`, { permissions })
       toast.success('Đã lưu phân quyền')
@@ -391,6 +392,7 @@ function PermissionsModal({ userId, userName, onClose }) {
   const accounts = resources?.accounts || []
   const fanpages = resources?.fanpages || []
   const groups = resources?.groups || []
+  const websites = resources?.websites || []
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
@@ -448,7 +450,7 @@ function PermissionsModal({ userId, userName, onClose }) {
                   {selected.group.length === groups.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto">
                 {groups.map(g => (
                   <label key={g.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer text-sm ${selected.group.includes(g.id) ? 'border-orange-400 bg-orange-50' : 'border-app-border hover:bg-app-base'}`}>
                     <input type="checkbox" checked={selected.group.includes(g.id)} onChange={() => toggle('group', g.id)} className="w-3.5 h-3.5 rounded" />
@@ -458,12 +460,31 @@ function PermissionsModal({ userId, userName, onClose }) {
                 {groups.length === 0 && <p className="text-xs text-app-dim col-span-2">Chưa có nhóm nào</p>}
               </div>
             </div>
+
+            {/* Websites */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-app-primary">Website ({selected.website.length}/{websites.length})</h3>
+                <button onClick={() => selectAll('website', websites.map(w => w.id))} className="text-xs text-info hover:underline">
+                  {selected.website.length === websites.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto">
+                {websites.map(w => (
+                  <label key={w.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer text-sm ${selected.website.includes(w.id) ? 'border-purple-400 bg-purple-50' : 'border-app-border hover:bg-app-base'}`}>
+                    <input type="checkbox" checked={selected.website.includes(w.id)} onChange={() => toggle('website', w.id)} className="w-3.5 h-3.5 rounded" />
+                    <span className="truncate">{w.name || w.url}</span>
+                  </label>
+                ))}
+                {websites.length === 0 && <p className="text-xs text-app-dim col-span-2">Chưa có website nào</p>}
+              </div>
+            </div>
           </div>
         )}
 
         <div className="flex justify-between items-center mt-6 pt-4 border-t">
           <p className="text-xs text-app-dim">
-            Tổng: {selected.account.length + selected.fanpage.length + selected.group.length} quyền
+            Tổng: {selected.account.length + selected.fanpage.length + selected.group.length + selected.website.length} quyền
           </p>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 border rounded-lg hover:bg-app-base">Hủy</button>

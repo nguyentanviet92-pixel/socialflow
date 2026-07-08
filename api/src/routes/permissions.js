@@ -79,16 +79,18 @@ module.exports = async (fastify) => {
 
   // GET /permissions/resources/all - Get all available resources for assignment (admin only)
   fastify.get('/resources/all', { preHandler: fastify.requireAdmin }, async (req, reply) => {
-    const [accounts, fanpages, groups] = await Promise.all([
+    const [accounts, fanpages, groups, websites] = await Promise.all([
       supabase.from('accounts').select('id, username, fb_user_id, owner_id').order('username'),
       supabase.from('fanpages').select('id, name, fb_page_id, account_id').order('name'),
       supabase.from('fb_groups').select('id, name, fb_group_id, account_id').order('name'),
+      supabase.from('websites').select('id, name, url, owner_id').neq('url', 'pending').order('name'),
     ])
 
     return {
       accounts: accounts.data || [],
       fanpages: fanpages.data || [],
       groups: groups.data || [],
+      websites: websites.data || [],
     }
   })
 }
