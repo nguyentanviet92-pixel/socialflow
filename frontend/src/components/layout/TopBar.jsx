@@ -31,20 +31,27 @@ export default function TopBar({ onMenuToggle }) {
         <NotificationBell />
         {/* User info */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
             <User className="w-4 h-4 text-slate-600" />
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-app-primary">
-              {profile?.username || 'User'}
-            </span>
-            {profile?.role && (
-              <span
-                className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  roleBadgeColors[profile.role] || roleBadgeColors.user
-                }`}
-              >
-                {profile.role}
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-app-primary leading-tight">
+                {profile?.username || profile?.email?.split('@')[0] || 'User'}
+              </span>
+              {profile?.role && (
+                <span
+                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                    roleBadgeColors[profile.role] || roleBadgeColors.user
+                  }`}
+                >
+                  {profile.role}
+                </span>
+              )}
+            </div>
+            {profile?.email && (
+              <span className="text-[10px] text-app-muted leading-tight mt-0.5">
+                {profile.email}
               </span>
             )}
           </div>
