@@ -12,7 +12,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, GripVertical, AlertTriangle, Check, Loader, ArrowLeft, ChevronRight, Globe, Settings2, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, GripVertical, AlertTriangle, CheckCircle, Check, Loader, ArrowLeft, ChevronRight, Globe, Settings2, RefreshCw } from 'lucide-react'
 import api, { API_BASE } from '../../lib/api'
 import SkillsEditor from './SkillsEditor'
 
