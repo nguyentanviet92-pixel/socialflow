@@ -2046,6 +2046,8 @@ async def update_config(req: ConfigUpdateRequest, x_agent_key: str = Header(None
                 fb_keys = merged.get('fallback_keys') or {}
                 if env_var in fb_keys and fb_keys[env_var]:
                     merged['api_key'] = fb_keys[env_var]
+                else:
+                    merged['api_key'] = ""
 
         if x_user_id:
             if row:

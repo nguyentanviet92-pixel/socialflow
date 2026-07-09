@@ -177,7 +177,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
       const initialKeys = {}
       Object.keys(PROVIDER_KEY_MAP).forEach(prov => {
         const envKey = PROVIDER_KEY_MAP[prov]
-        initialKeys[envKey] = cfg.fallback_keys?.[envKey] || ''
+        initialKeys[envKey] = cfg.fallback_keys?.[envKey] || (prov === activeProvider && cfg.api_key ? cfg.api_key : '')
       })
       setKeysForm(initialKeys)
 
@@ -204,23 +204,37 @@ function ModelSection({ defaultSubTab = 'active' }) {
     return true
   }
 
-  // Tab 1 actions
-  const saveActive = useMutation({
-    mutationFn: async () => {
+  const [savingModel, setSavingModel] = useState(false)
+  const saveModelConfig = async () => {
+    setSavingModel(true)
+    try {
       const selectedModel = customModelMode ? customModelInput.trim() : form.model
       if (!selectedModel) {
         throw new Error('Vui lòng chọn hoặc điền Model ID')
       }
-
-      const payload = {
-        provider: form.provider,
+      await api.put('/ai-hermes/config', {
         model: selectedModel,
-        base_url: form.base_url,
         max_tokens: parseInt(form.max_tokens),
         temperature: parseFloat(form.temperature),
-      }
+      })
+      toast.success('Đã lưu model & tham số mặc định')
+      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+    } catch (err) {
+      toast.error(`Lỗi: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setSavingModel(false)
+    }
+  }
 
-      if (form.api_key && form.api_key.trim().length > 0) {
+  const [savingConnection, setSavingConnection] = useState(false)
+  const saveConnectionConfig = async () => {
+    setSavingConnection(true)
+    try {
+      const payload = {
+        provider: form.provider,
+        base_url: form.base_url,
+      }
+      if (form.api_key && form.api_key.trim().length > 0 && !form.api_key.includes('...')) {
         if (!looksLikeApiKey(form.api_key)) {
           throw new Error('API key không hợp lệ — chứa ký tự lạ hoặc trông giống error message.')
         }
@@ -235,16 +249,16 @@ function ModelSection({ defaultSubTab = 'active' }) {
           }
         }
       }
-
       await api.put('/ai-hermes/config', payload)
-    },
-    onSuccess: () => {
-      toast.success('Đã lưu cài đặt model mặc định')
+      toast.success('Đã lưu kết nối & API Key')
       setForm(f => ({ ...f, api_key: '' }))
       qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
-    },
-    onError: (err) => toast.error(`Lỗi: ${err.response?.data?.error || err.message}`),
-  })
+    } catch (err) {
+      toast.error(`Lỗi: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setSavingConnection(false)
+    }
+  }
 
   const testActiveConnection = async () => {
     const selectedModel = customModelMode ? customModelInput.trim() : form.model
@@ -460,157 +474,201 @@ function ModelSection({ defaultSubTab = 'active' }) {
             </div>
           </div>
 
-          {/* Provider dropdown */}
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Provider chính</label>
-            <select
-              value={form.provider}
-              onChange={(e) => {
-                const newProv = e.target.value
-                const defaultModel = PROVIDER_MODELS[newProv]?.[0]?.id || ''
-                const defaultUrl = PROVIDER_BASE_URLS[newProv] || ''
-                setForm(f => ({
-                  ...f,
-                  provider: newProv,
-                  model: defaultModel,
-                  base_url: defaultUrl,
-                  api_key: '',
-                }))
-                setCustomModelMode(false)
-              }}
-              className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
-              style={{ border: '1px solid var(--border-bright)' }}
-            >
-              {Object.keys(PROVIDER_LABELS).map(p => (
-                <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
-              ))}
-            </select>
+          {/* Quick Switch Card */}
+          <div className="bg-app-surface rounded p-4 border border-app-border" style={{ border: '1px solid var(--border)' }}>
+            <h3 className="text-xs font-semibold uppercase text-app-primary mb-3">⚡ Đổi nhanh Provider & Model mặc định</h3>
+            <div className="flex flex-wrap gap-2">
+              {QUICK_PRESETS.map((p, idx) => {
+                const active = form.provider === p.p && form.model === p.m
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => quickSwitch(p.p, p.m)}
+                    className={`text-xs px-3 py-1.5 bg-app-elevated hover:bg-app-base ${p.color}`}
+                    style={{
+                      background: active ? 'var(--hermes-dim)' : 'var(--bg-base)',
+                      border: '1px solid ' + (active ? 'var(--hermes-fade)' : 'var(--border-bright)'),
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                )
+              })}
+            </div>
           </div>
 
-          {/* Model selection */}
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Model mặc định</label>
-            <div className="flex gap-2 mb-2">
-              <button
-                type="button"
-                onClick={() => setCustomModelMode(false)}
-                className={`text-[10px] px-3 py-1 ${!customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
-                style={{ border: '1px solid var(--border-bright)' }}
-              >
-                Chọn từ Preset
-              </button>
-              <button
-                type="button"
-                onClick={() => setCustomModelMode(true)}
-                className={`text-[10px] px-3 py-1 ${customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
-                style={{ border: '1px solid var(--border-bright)' }}
-              >
-                Nhập Model ID tự do
-              </button>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* CARD 1: Model & Parameters */}
+            <div className="bg-app-surface rounded p-4 border border-app-border space-y-4" style={{ border: '1px solid var(--border)' }}>
+              <h3 className="text-xs font-bold uppercase text-app-primary border-b border-border pb-2">🤖 Cấu hình Model & Tham số</h3>
 
-            {!customModelMode ? (
-              <select
-                value={form.model}
-                onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))}
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
-                style={{ border: '1px solid var(--border-bright)' }}
-              >
-                {activeModels.map(m => (
-                  <option key={m.id} value={m.id}>{m.label} ({m.id})</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                value={customModelInput}
-                onChange={(e) => setCustomModelInput(e.target.value)}
-                placeholder="Ví dụ: deepseek-ai/deepseek-r1"
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
-            )}
-          </div>
+              {/* Model selection */}
+              <div>
+                <label className="block text-[10px] uppercase text-app-muted mb-1">Model mặc định</label>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setCustomModelMode(false)}
+                    className={`text-[10px] px-3 py-1 ${!customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
+                    style={{ border: '1px solid var(--border-bright)' }}
+                  >
+                    Chọn từ Preset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomModelMode(true)}
+                    className={`text-[10px] px-3 py-1 ${customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
+                    style={{ border: '1px solid var(--border-bright)' }}
+                  >
+                    Nhập Model ID tự do
+                  </button>
+                </div>
 
-          {/* API Key */}
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">
-              API Key <span className="text-app-dim">(nếu không điền sẽ lấy key trong Tab 2)</span>
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={form.api_key}
-                onChange={(e) => setForm(f => ({ ...f, api_key: e.target.value }))}
-                placeholder={keysForm[PROVIDER_KEY_MAP[form.provider]] ? `Cấu hình sẵn: ${keysForm[PROVIDER_KEY_MAP[form.provider]]}` : 'Chưa cấu hình API Key'}
-                className="flex-1 px-3 py-2 bg-app-elevated text-app-primary text-sm"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
-              <button
-                type="button"
-                onClick={testActiveConnection}
-                disabled={testingActive === 'pending'}
-                className="btn-ghost whitespace-nowrap"
-              >
-                {testingActive === 'pending' ? <Loader size={12} className="animate-spin" /> : '🔌 Test kết nối'}
-              </button>
-            </div>
-            {testingActive && testingActive !== 'pending' && (
-              <div className={`mt-2 text-xs ${testingActive.ok ? 'text-hermes' : 'text-danger'}`}>
-                {testingActive.ok
-                  ? `✓ Kết nối thành công (${testingActive.latency_ms}ms) · Phản hồi: "${testingActive.response_preview}"`
-                  : `✗ Lỗi kết nối: ${testingActive.error}`}
+                {!customModelMode ? (
+                  <select
+                    value={form.model}
+                    onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))}
+                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
+                    style={{ border: '1px solid var(--border-bright)' }}
+                  >
+                    {activeModels.map(m => (
+                      <option key={m.id} value={m.id}>{m.label} ({m.id})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={customModelInput}
+                    onChange={(e) => setCustomModelInput(e.target.value)}
+                    placeholder="Ví dụ: deepseek-ai/deepseek-r1"
+                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
+                    style={{ border: '1px solid var(--border-bright)' }}
+                  />
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Base URL */}
-          <div>
-            <label className="block text-[10px] uppercase text-app-muted mb-1">Base URL</label>
-            <input
-              type="text"
-              value={form.base_url}
-              onChange={(e) => setForm(f => ({ ...f, base_url: e.target.value }))}
-              className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
-              style={{ border: '1px solid var(--border-bright)' }}
-            />
-          </div>
+              {/* Max tokens + Temperature */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase text-app-muted mb-1">Max tokens</label>
+                  <input
+                    type="number"
+                    min={50}
+                    max={8000}
+                    value={form.max_tokens}
+                    onChange={(e) => setForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 500 }))}
+                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                    style={{ border: '1px solid var(--border-bright)' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase text-app-muted mb-1">
+                    Temp: <span className="text-hermes">{form.temperature.toFixed(2)}</span>
+                  </label>
+                  <input
+                    type="range" min={0} max={2} step={0.05}
+                    value={form.temperature}
+                    onChange={(e) => setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
+                </div>
+              </div>
 
-          {/* Max tokens + Temperature */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[10px] uppercase text-app-muted mb-1">Max tokens</label>
-              <input
-                type="number"
-                min={50}
-                max={8000}
-                value={form.max_tokens}
-                onChange={(e) => setForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 500 }))}
-                className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
-                style={{ border: '1px solid var(--border-bright)' }}
-              />
+              <button
+                type="button"
+                onClick={saveModelConfig}
+                disabled={savingModel}
+                className="w-full btn-hermes text-xs py-2 mt-2"
+              >
+                {savingModel ? 'Đang lưu…' : '💾 Lưu Model & Tham số'}
+              </button>
             </div>
-            <div>
-              <label className="block text-[10px] uppercase text-app-muted mb-1">
-                Temperature: <span className="text-hermes">{form.temperature.toFixed(2)}</span>
-              </label>
-              <input
-                type="range" min={0} max={2} step={0.05}
-                value={form.temperature}
-                onChange={(e) => setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
-                className="w-full"
-              />
+
+            {/* CARD 2: Connection & Key */}
+            <div className="bg-app-surface rounded p-4 border border-app-border space-y-4" style={{ border: '1px solid var(--border)' }}>
+              <h3 className="text-xs font-bold uppercase text-app-primary border-b border-border pb-2">🔌 Cấu hình Kết nối & API Key</h3>
+
+              {/* Provider selection */}
+              <div>
+                <label className="block text-[10px] uppercase text-app-muted mb-1">Provider chính</label>
+                <select
+                  value={form.provider}
+                  onChange={(e) => {
+                    const newProv = e.target.value
+                    const defaultModel = PROVIDER_MODELS[newProv]?.[0]?.id || ''
+                    const defaultUrl = PROVIDER_BASE_URLS[newProv] || ''
+                    setForm(f => ({
+                      ...f,
+                      provider: newProv,
+                      model: defaultModel,
+                      base_url: defaultUrl,
+                      api_key: '',
+                    }))
+                    setCustomModelMode(false)
+                  }}
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                  style={{ border: '1px solid var(--border-bright)' }}
+                >
+                  {Object.keys(PROVIDER_LABELS).map(p => (
+                    <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* API Key */}
+              <div>
+                <label className="block text-[10px] uppercase text-app-muted mb-1">
+                  API Key <span className="text-app-dim">(nếu trống sẽ dùng Tab 2)</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={form.api_key}
+                    onChange={(e) => setForm(f => ({ ...f, api_key: e.target.value }))}
+                    placeholder={keysForm[PROVIDER_KEY_MAP[form.provider]] ? `Cấu hình sẵn: ${keysForm[PROVIDER_KEY_MAP[form.provider]]}` : 'Chưa cấu hình API Key'}
+                    className="flex-1 px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                    style={{ border: '1px solid var(--border-bright)' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={testActiveConnection}
+                    disabled={testingActive === 'pending'}
+                    className="btn-ghost whitespace-nowrap text-xs px-2"
+                  >
+                    {testingActive === 'pending' ? <Loader size={12} className="animate-spin" /> : '🔌 Test'}
+                  </button>
+                </div>
+                {testingActive && testingActive !== 'pending' && (
+                  <div className={`mt-2 text-xs ${testingActive.ok ? 'text-hermes' : 'text-danger'}`}>
+                    {testingActive.ok
+                      ? `✓ Kết nối OK (${testingActive.latency_ms}ms)`
+                      : `✗ Lỗi: ${testingActive.error}`}
+                  </div>
+                )}
+              </div>
+
+              {/* Base URL */}
+              <div>
+                <label className="block text-[10px] uppercase text-app-muted mb-1">Base URL</label>
+                <input
+                  type="text"
+                  value={form.base_url}
+                  onChange={(e) => setForm(f => ({ ...f, base_url: e.target.value }))}
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                  style={{ border: '1px solid var(--border-bright)' }}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={saveConnectionConfig}
+                disabled={savingConnection}
+                className="w-full btn-hermes text-xs py-2 mt-2 bg-cyan-600 hover:bg-cyan-700"
+              >
+                {savingConnection ? 'Đang lưu…' : '💾 Lưu kết nối & API Key'}
+              </button>
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={() => saveActive.mutate()}
-            disabled={saveActive.isPending}
-            className="btn-hermes"
-          >
-            {saveActive.isPending ? 'Đang lưu…' : '💾 Lưu cấu hình'}
-          </button>
         </div>
       )}
 
