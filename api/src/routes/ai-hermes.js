@@ -1,8 +1,35 @@
 // Hermes AI routes — proxy to the Hermes FastAPI service on localhost:8100
 // Exposes /ai-hermes/comment, /ai-hermes/evaluate, /ai-hermes/quality-gate, /ai-hermes/generate
 module.exports = async (fastify) => {
-  const HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8100'
-  const AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY
+  let HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8100'
+  let AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY
+
+  // Dynamic reload from supabase system_settings
+  async function reloadHermesConfig() {
+    try {
+      const { data } = await fastify.supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'hermes')
+        .single()
+      if (data?.value?.url) {
+        HERMES_URL = data.value.url.trim()
+      }
+      if (data?.value?.agent_secret) {
+        AGENT_SECRET = data.value.agent_secret.trim()
+      }
+    } catch (e) {
+      // Fallback to env
+      HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8100'
+      AGENT_SECRET = process.env.AGENT_SECRET || process.env.AGENT_SECRET_KEY
+    }
+  }
+
+  // Reload on every incoming request
+  fastify.addHook('onRequest', async (req, reply) => {
+    await reloadHermesConfig()
+  })
+
   const SHORT_TIMEOUT_MS = 5000
   const NORMAL_TIMEOUT_MS = 30000
   const COMMENT_TIMEOUT_MS = 60000

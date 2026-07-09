@@ -17,6 +17,7 @@ const tabs = [
   { key: 'proxies', label: 'Proxy' },
   { key: 'users', label: 'Người dùng' },
   { key: 'agent', label: 'Agent' },
+  { key: 'hermes', label: 'Cấu hình Hermes' },
 ]
 
 function StorageTab() {
@@ -463,9 +464,99 @@ function AgentTab() {
   )
 }
 
+function HermesTab() {
+  const queryClient = useQueryClient()
+  const [form, setForm] = useState({
+    url: '',
+    agent_secret: ''
+  })
+  const [showSecret, setShowSecret] = useState(false)
+
+  const { data: settingData, isLoading } = useQuery({
+    queryKey: ['system-settings', 'hermes'],
+    queryFn: () => api.get('/system-settings/hermes').then(r => r.data),
+  })
+
+  useEffect(() => {
+    if (settingData?.value && Object.keys(settingData.value).length > 0) {
+      setForm({
+        url: settingData.value.url || '',
+        agent_secret: settingData.value.agent_secret || ''
+      })
+    }
+  }, [settingData])
+
+  const saveMutation = useMutation({
+    mutationFn: (value) => api.put('/system-settings/hermes', { value }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['system-settings', 'hermes'] })
+      toast.success('Đã lưu cấu hình Hermes')
+    },
+    onError: () => toast.error('Lưu cấu hình thất bại')
+  })
+
+  if (isLoading) {
+    return <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-info" /></div>
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h2 className="text-lg font-semibold text-app-primary">Cổng kết nối Hermes AI</h2>
+          <p className="text-sm text-app-muted mt-1">Cấu hình endpoint API và khoá bí mật kết nối tới Hermes Agent</p>
+        </div>
+        <button
+          onClick={() => saveMutation.mutate(form)}
+          disabled={saveMutation.isPending}
+          className="flex items-center gap-2 bg-info text-white px-4 py-2 rounded-lg hover:opacity-90"
+        >
+          {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save size={18} />}
+          Lưu cấu hình
+        </button>
+      </div>
+
+      <div className="bg-app-surface rounded shadow p-6 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-app-primary mb-1">Hermes Agent API Endpoint (URL)</label>
+          <input
+            type="text"
+            value={form.url}
+            onChange={(e) => setForm({ ...form, url: e.target.value })}
+            placeholder="Ví dụ: http://127.0.0.1:8100 hoặc domain https"
+            className="w-full border rounded-lg px-3 py-2 bg-app-base text-app-primary text-sm font-mono"
+          />
+          <p className="text-xs text-app-muted mt-1">Để trống = dùng giá trị mặc định của hệ thống (http://127.0.0.1:8100)</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-app-primary mb-1">Hermes Agent Secret Key</label>
+          <div className="relative">
+            <input
+              type={showSecret ? 'text' : 'password'}
+              value={form.agent_secret}
+              onChange={(e) => setForm({ ...form, agent_secret: e.target.value })}
+              placeholder={settingData?.value?.agent_secret ? '••••••••' : 'Chưa cấu hình API Key'}
+              className="w-full border rounded-lg px-3 py-2 pr-10 bg-app-base text-app-primary text-sm font-mono"
+            />
+            <button
+              type="button"
+              onClick={() => setShowSecret(!showSecret)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-app-dim hover:text-app-muted"
+            >
+              {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          <p className="text-xs text-app-muted mt-1">Khoá bảo mật giao tiếp giữa API chính và Hermes FastAPI service.</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminSettings() {
   const isAdmin = useAuthStore((s) => s.profile?.role === 'admin')
-  const [activeTab, setActiveTab] = useState('ai')
+  const [activeTab, setActiveTab] = useState('facebook')
 
   if (!isAdmin) return <Navigate to="/dashboard" />
 
@@ -497,6 +588,7 @@ export default function AdminSettings() {
       {activeTab === 'proxies' && <ProxyManager />}
       {activeTab === 'users' && <UserManager />}
       {activeTab === 'agent' && <AgentTab />}
+      {activeTab === 'hermes' && <HermesTab />}
     </div>
   )
 }

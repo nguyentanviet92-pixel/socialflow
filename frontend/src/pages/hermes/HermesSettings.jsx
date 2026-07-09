@@ -33,6 +33,7 @@ export const DEFAULT_FALLBACK_CHAIN = [
   { provider: 'gemini',    model: 'gemini-2.5-flash',             enabled: false },
   { provider: 'kimi',      model: 'moonshot-v1-128k',             enabled: false },
   { provider: 'anthropic', model: 'claude-sonnet-4-6',            enabled: false },
+  { provider: 'xai',       model: 'grok-2-latest',                enabled: false },
 ];
 
 export const PROVIDER_KEY_MAP = {
@@ -43,6 +44,7 @@ export const PROVIDER_KEY_MAP = {
   openai:    'OPENAI_API_KEY',
   gemini:    'GEMINI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
+  xai:       'XAI_API_KEY',
 };
 
 export const PROVIDER_BASE_URLS = {
@@ -53,6 +55,7 @@ export const PROVIDER_BASE_URLS = {
   openai:    'https://api.openai.com/v1',
   gemini:    'https://generativelanguage.googleapis.com/v1beta/openai/',
   anthropic: 'https://api.anthropic.com/v1',
+  xai:       'https://api.x.ai/v1',
 };
 
 export const PROVIDER_MODELS = {
@@ -103,6 +106,11 @@ export const PROVIDER_MODELS = {
     { id: 'claude-opus-4-6',          label: 'Claude Opus 4.6' },
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (fast)' },
   ],
+  xai: [
+    { id: 'grok-3-beta',      label: 'Grok 3 Beta' },
+    { id: 'grok-3-mini-beta', label: 'Grok 3 Mini Beta' },
+    { id: 'grok-2-latest',    label: 'Grok 2 Latest ⭐' },
+  ],
 };
 
 const PROVIDER_LABELS = {
@@ -113,6 +121,7 @@ const PROVIDER_LABELS = {
   gemini: 'Google Gemini',
   kimi: 'Kimi (Moonshot)',
   anthropic: 'Anthropic',
+  xai: 'xAI Grok',
 };
 
 function ModelSection({ defaultSubTab = 'active' }) {
@@ -376,10 +385,10 @@ function ModelSection({ defaultSubTab = 'active' }) {
     { p: 'nvidia',   m: 'deepseek-ai/deepseek-v4-pro', label: 'NVIDIA DeepSeek V4 Pro', color: 'text-amber-500 font-bold' },
     { p: 'nvidia',   m: 'deepseek-ai/deepseek-v4-flash', label: 'NVIDIA DeepSeek V4 Flash', color: 'text-amber-500' },
     { p: 'deepseek', m: 'deepseek-chat',           label: 'DeepSeek V3',         color: 'text-info' },
+    { p: 'xai',      m: 'grok-2-latest',           label: 'xAI Grok 2',          color: 'text-white font-bold' },
     { p: 'kimi',     m: 'kimi-k2-0711-preview',    label: 'Kimi K2',             color: 'text-cyan-500' },
     { p: 'openai',   m: 'gpt-4o-mini',             label: 'GPT-4o-mini',         color: 'text-emerald-600' },
     { p: 'gemini',   m: 'gemini-2.5-flash',        label: 'Gemini 2.5 Flash',    color: 'text-purple-500' },
-    { p: 'groq',     m: 'llama-3.3-70b-versatile', label: 'Groq Llama 3.3',      color: 'text-red-500' },
   ]
 
   const quickSwitch = async (provider, model) => {

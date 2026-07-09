@@ -18,6 +18,12 @@ module.exports = async (fastify) => {
     if (error) return reply.code(500).send({ error: error.message })
 
     // Mask sensitive fields
+    if (req.params.key === 'hermes' && data.value?.agent_secret) {
+      data.value = {
+        ...data.value,
+        agent_secret: data.value.agent_secret.substring(0, 8) + '...'
+      }
+    }
     if (req.params.key === 'r2_storage' && data.value?.secret_access_key) {
       data.value = {
         ...data.value,
@@ -47,13 +53,26 @@ module.exports = async (fastify) => {
 
   // PUT /system-settings/:key
   fastify.put('/:key', { preHandler: fastify.requireAdmin }, async (req, reply) => {
-    const allowedKeys = ['r2_storage', 'facebook_api', 'apify']
+    const allowedKeys = ['r2_storage', 'facebook_api', 'apify', 'hermes']
     if (!allowedKeys.includes(req.params.key)) {
       return reply.code(400).send({ error: 'Invalid setting key' })
     }
 
-    // For r2_storage, merge with existing to preserve masked fields
+    // For hermes, merge with existing to preserve masked fields
     let finalValue = req.body.value
+    if (req.params.key === 'hermes' && finalValue?.agent_secret?.endsWith('...')) {
+      const { data: existing } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'hermes')
+        .single()
+
+      if (existing?.value?.agent_secret) {
+        finalValue = { ...finalValue, agent_secret: existing.value.agent_secret }
+      }
+    }
+
+    // For r2_storage, merge with existing to preserve masked fields
     if (req.params.key === 'r2_storage' && finalValue?.secret_access_key?.endsWith('...')) {
       const { data: existing } = await supabase
         .from('system_settings')

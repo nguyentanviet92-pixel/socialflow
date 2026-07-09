@@ -985,6 +985,11 @@ PROVIDER_CONFIG = {
         "api_key_env": "ANTHROPIC_API_KEY",
         "compat": "anthropic",
     },
+    "xai": {
+        "base_url": "https://api.x.ai/v1",
+        "api_key_env": "XAI_API_KEY",
+        "compat": "openai",
+    },
 }
 
 DEFAULT_FALLBACK_CHAIN = [
@@ -995,6 +1000,7 @@ DEFAULT_FALLBACK_CHAIN = [
     {"provider": "gemini",    "model": "gemini-2.5-flash",             "enabled": False},
     {"provider": "kimi",      "model": "moonshot-v1-128k",             "enabled": False},
     {"provider": "anthropic", "model": "claude-sonnet-4-6",            "enabled": False},
+    {"provider": "xai",       "model": "grok-2-latest",                "enabled": False},
 ]
 
 def mask_api_key(key: str) -> str:
