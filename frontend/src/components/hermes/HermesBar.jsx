@@ -4,6 +4,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import api from '../../lib/api'
+import useAuthStore from '../../store/auth.store'
 
 function StatDot({ status }) {
   if (status === 'ONLINE') {
@@ -16,6 +17,7 @@ function StatDot({ status }) {
 }
 
 export default function HermesBar() {
+  const { user } = useAuthStore()
   const { data, error } = useQuery({
     queryKey: ['hermes', 'status'],
     queryFn: async () => {
@@ -99,6 +101,21 @@ export default function HermesBar() {
       )}
 
       <div className="flex-1" />
+
+      {/* User Info */}
+      {user && (
+        <div className="flex items-center gap-2 text-app-dim border-r border-border-bright pr-4 mr-2" style={{ borderRight: '1px solid var(--border-bright)' }}>
+          <span className="text-[10px] text-app-muted">user:</span>
+          <span className="text-app-primary font-semibold lowercase">
+            {user.username || user.email || 'unknown'}
+          </span>
+          {user.role && (
+            <span className="bg-app-elevated text-app-dim px-1.5 py-0.5 rounded text-[9px] font-bold border border-border-bright font-mono uppercase">
+              {user.role}
+            </span>
+          )}
+        </div>
+      )}
 
       <span className="text-app-dim">{new Date().toTimeString().slice(0, 8)}</span>
     </div>
