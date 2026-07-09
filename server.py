@@ -196,6 +196,8 @@ PROVIDERS = {
             'z-ai/glm4.7',
             'z-ai/glm-4.5',
             # DeepSeek family (NVIDIA-hosted, no per-account quota)
+            'deepseek-ai/deepseek-v4-pro',
+            'deepseek-ai/deepseek-v4-flash',
             'deepseek-ai/deepseek-r1',
             'deepseek-ai/deepseek-v3-0324',
             # Meta Llama
@@ -1116,8 +1118,8 @@ def call_with_fallback(
     for i, provider_cfg in enumerate(active_chain):
         provider = provider_cfg["provider"]
         model    = provider_cfg["model"]
-        if provider == "nvidia" and model == "moonshotai/kimi-k2":
-            model = "moonshotai/kimi-k2.6"
+        if provider == "nvidia" and model in ("moonshotai/kimi-k2", "moonshotai/kimi-k2.6"):
+            model = "deepseek-ai/deepseek-v4-pro"
         pconfig  = PROVIDER_CONFIG.get(provider)
         if not pconfig:
             logger.warning(f"[Fallback] Skip {provider}: unknown provider config")
@@ -3276,15 +3278,15 @@ async def wp_audit_post(
 
     if not model:
         if user_nvidia_key and not user_kimi_key:
-            model = "nvidia:moonshotai/kimi-k2.6"
+            model = "nvidia:deepseek-ai/deepseek-v4-pro"
         elif nvidia_key:
-            model = "nvidia:moonshotai/kimi-k2.6"
+            model = "nvidia:deepseek-ai/deepseek-v4-pro"
         else:
             model = "kimi:kimi-k2-thinking"
     else:
         # Route to Kimi-on-Nvidia if Kimi was selected but user only has an NVIDIA token
         if (model == "kimi:kimi-k2-thinking" or model == "kimi:kimi-k2-thinking-turbo") and user_nvidia_key and not user_kimi_key:
-            model = "nvidia:moonshotai/kimi-k2.6"
+            model = "nvidia:deepseek-ai/deepseek-v4-pro"
 
     # Fetch bài viết if not cached or forced
     post = await client.get_post(post_id)
