@@ -15,6 +15,7 @@ import toast from 'react-hot-toast'
 import { Plus, Trash2, GripVertical, AlertTriangle, CheckCircle, Check, Loader, ArrowLeft, ChevronRight, Globe, Settings2, RefreshCw } from 'lucide-react'
 import api, { API_BASE } from '../../lib/api'
 import SkillsEditor from './SkillsEditor'
+import useAuthStore from '../../store/auth.store'
 
 const asArray = (d) => Array.isArray(d) ? d
   : Array.isArray(d?.items) ? d.items
@@ -116,6 +117,7 @@ const PROVIDER_LABELS = {
 
 function ModelSection({ defaultSubTab = 'active' }) {
   const qc = useQueryClient()
+  const { user } = useAuthStore()
   const { data: cfgData, isLoading } = useQuery({
     queryKey: ['hermes', 'config'],
     queryFn: async () => (await api.get('/ai-hermes/config')).data,
@@ -473,20 +475,35 @@ function ModelSection({ defaultSubTab = 'active' }) {
         <div className="space-y-6 max-w-3xl">
           {/* Active Model Indicator Card */}
           {cfg && (
-            <div className="bg-app-surface rounded p-4 border border-app-border flex items-center justify-between" style={{ border: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
-              <div>
-                <div className="text-[10px] uppercase text-app-muted font-bold tracking-wider">Cấu hình đang kích hoạt</div>
-                <div className="text-sm font-semibold text-app-primary mt-1 flex flex-wrap items-center gap-2">
-                  <span className="bg-hermes/20 text-hermes px-2.5 py-1 rounded text-xs font-mono font-bold">
-                    {PROVIDER_LABELS[cfg.provider] || cfg.provider}
-                  </span>
-                  <span className="text-app-muted">/</span>
-                  <span className="font-mono text-xs text-white bg-app-base px-2.5 py-1 rounded border border-border">
-                    {cfg.model}
-                  </span>
+            <div className="bg-app-surface rounded p-4 border border-app-border flex flex-col md:flex-row md:items-center justify-between gap-4" style={{ border: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+              <div className="space-y-3">
+                <div>
+                  <div className="text-[10px] uppercase text-app-muted font-bold tracking-wider">Cấu hình đang kích hoạt</div>
+                  <div className="text-sm font-semibold text-app-primary mt-1 flex flex-wrap items-center gap-2">
+                    <span className="bg-hermes/20 text-hermes px-2.5 py-1 rounded text-xs font-mono font-bold">
+                      {PROVIDER_LABELS[cfg.provider] || cfg.provider}
+                    </span>
+                    <span className="text-app-muted">/</span>
+                    <span className="font-mono text-xs text-white bg-app-base px-2.5 py-1 rounded border border-border">
+                      {cfg.model}
+                    </span>
+                  </div>
                 </div>
+                {user && (
+                  <div>
+                    <div className="text-[10px] uppercase text-app-muted font-bold tracking-wider">Tài khoản đang đăng nhập</div>
+                    <div className="text-xs font-semibold text-app-primary mt-1 flex items-center gap-2">
+                      <span className="bg-cyan-500/10 text-cyan-400 px-2 py-0.5 rounded font-mono border border-cyan-500/20 text-xs">
+                        {user.username || user.email}
+                      </span>
+                      <span className="text-[10px] bg-app-base text-app-muted px-2 py-0.5 rounded border border-border uppercase font-mono font-bold">
+                        {user.role}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-hermes bg-hermes-dim/10 px-3 py-1.5 rounded-full border border-hermes/20">
+              <div className="flex items-center gap-1.5 text-xs text-hermes bg-hermes-dim/10 px-3 py-1.5 rounded-full border border-hermes/20 self-start md:self-center">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-hermes opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-hermes"></span>
