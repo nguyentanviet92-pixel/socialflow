@@ -371,8 +371,8 @@ function ModelSection({ defaultSubTab = 'active' }) {
 
   const QUICK_PRESETS = [
     { p: 'chatgpt-oauth', m: 'custom-gpt',         label: '🤖 ChatGPT (OAuth)',  color: 'text-cyan-400 font-bold' },
-    { p: 'nvidia',   m: 'meta/llama-3.3-70b-instruct', label: 'NVIDIA Llama 3.3',    color: 'text-amber-500' },
-    { p: 'nvidia',   m: 'deepseek-ai/deepseek-r1',     label: 'NVIDIA DeepSeek R1',  color: 'text-amber-500 font-bold' },
+    { p: 'nvidia',   m: 'deepseek-ai/deepseek-v4-pro', label: 'NVIDIA DeepSeek V4 Pro', color: 'text-amber-500 font-bold' },
+    { p: 'nvidia',   m: 'deepseek-ai/deepseek-v4-flash', label: 'NVIDIA DeepSeek V4 Flash', color: 'text-amber-500' },
     { p: 'deepseek', m: 'deepseek-chat',           label: 'DeepSeek V3',         color: 'text-info' },
     { p: 'kimi',     m: 'kimi-k2-0711-preview',    label: 'Kimi K2',             color: 'text-cyan-500' },
     { p: 'openai',   m: 'gpt-4o-mini',             label: 'GPT-4o-mini',         color: 'text-emerald-600' },
@@ -380,7 +380,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
     { p: 'groq',     m: 'llama-3.3-70b-versatile', label: 'Groq Llama 3.3',      color: 'text-red-500' },
   ]
 
-  const quickSwitch = (provider, model) => {
+  const quickSwitch = async (provider, model) => {
     if (provider === 'chatgpt-oauth') {
       const targetUrl = cfgData?.config?.gpt_link || 'https://chatgpt.com'
       window.open(targetUrl, '_blank')
@@ -392,13 +392,33 @@ function ModelSection({ defaultSubTab = 'active' }) {
         api_key: '',
       }))
       setCustomModelMode(false)
+      try {
+        await api.put('/ai-hermes/config', {
+          provider: 'openai',
+          model: 'chatgpt-action',
+          base_url: 'https://api.openai.com/v1',
+        })
+        qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+      } catch (e) {}
       toast.success('Đã chọn ChatGPT OAuth và mở tab mới để ủy quyền kết nối! 🚀')
       return
     }
+
     const baseUrl = PROVIDER_BASE_URLS[provider] || ''
     setForm(f => ({ ...f, provider, model, base_url: baseUrl, api_key: '' }))
     setCustomModelMode(false)
-    toast.success(`Đã đổi sang ${provider} / ${model} — Lưu cấu hình để kích hoạt`)
+
+    try {
+      await api.put('/ai-hermes/config', {
+        provider,
+        model,
+        base_url: baseUrl,
+      })
+      qc.invalidateQueries({ queryKey: ['hermes', 'config'] })
+      toast.success(`🚀 Đã kích hoạt nhanh model ${PROVIDER_LABELS[provider]} / ${model}!`)
+    } catch (err) {
+      toast.error(`Lỗi chuyển model: ${err.response?.data?.error || err.message}`)
+    }
   }
 
   const activeModels = PROVIDER_MODELS[form.provider] || []
@@ -450,33 +470,35 @@ function ModelSection({ defaultSubTab = 'active' }) {
 
       {/* SUBTAB 1: Active Model */}
       {subTab === 'active' && (
-        <div className="space-y-4 max-w-2xl">
-          {/* Quick-presets */}
-          <div className="p-3" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
-            <div className="text-[10px] uppercase text-app-muted mb-2">Đổi nhanh provider/model</div>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_PRESETS.map(({ p, m, label, color }) => {
-                const active = form.provider === p && form.model === m
-                return (
-                  <button
-                    key={`${p}/${m}`}
-                    onClick={() => quickSwitch(p, m)}
-                    className={`text-xs px-3 py-1.5 ${active ? 'text-hermes' : color + ' hover:opacity-80'}`}
-                    style={{
-                      background: active ? 'var(--hermes-dim)' : 'var(--bg-base)',
-                      border: '1px solid ' + (active ? 'var(--hermes-fade)' : 'var(--border)'),
-                    }}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
+        <div className="space-y-6 max-w-3xl">
+          {/* Active Model Indicator Card */}
+          {cfg && (
+            <div className="bg-app-surface rounded p-4 border border-app-border flex items-center justify-between" style={{ border: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+              <div>
+                <div className="text-[10px] uppercase text-app-muted font-bold tracking-wider">Cấu hình đang kích hoạt</div>
+                <div className="text-sm font-semibold text-app-primary mt-1 flex flex-wrap items-center gap-2">
+                  <span className="bg-hermes/20 text-hermes px-2.5 py-1 rounded text-xs font-mono font-bold">
+                    {PROVIDER_LABELS[cfg.provider] || cfg.provider}
+                  </span>
+                  <span className="text-app-muted">/</span>
+                  <span className="font-mono text-xs text-white bg-app-base px-2.5 py-1 rounded border border-border">
+                    {cfg.model}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-hermes bg-hermes-dim/10 px-3 py-1.5 rounded-full border border-hermes/20">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-hermes opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-hermes"></span>
+                </span>
+                Đang hoạt động
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Quick Switch Card */}
           <div className="bg-app-surface rounded p-4 border border-app-border" style={{ border: '1px solid var(--border)' }}>
-            <h3 className="text-xs font-semibold uppercase text-app-primary mb-3">⚡ Đổi nhanh Provider & Model mặc định</h3>
+            <h3 className="text-xs font-semibold uppercase text-app-primary mb-3">⚡ Đổi nhanh Provider & Model mặc định (Nhấp là chuyển ngay)</h3>
             <div className="flex flex-wrap gap-2">
               {QUICK_PRESETS.map((p, idx) => {
                 const active = form.provider === p.p && form.model === p.m
@@ -484,7 +506,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                   <button
                     key={idx}
                     onClick={() => quickSwitch(p.p, p.m)}
-                    className={`text-xs px-3 py-1.5 bg-app-elevated hover:bg-app-base ${p.color}`}
+                    className={`text-xs px-3 py-1.5 bg-app-elevated hover:bg-app-base transition-all rounded ${p.color}`}
                     style={{
                       background: active ? 'var(--hermes-dim)' : 'var(--bg-base)',
                       border: '1px solid ' + (active ? 'var(--hermes-fade)' : 'var(--border-bright)'),
@@ -509,7 +531,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                   <button
                     type="button"
                     onClick={() => setCustomModelMode(false)}
-                    className={`text-[10px] px-3 py-1 ${!customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
+                    className={`text-[10px] px-3 py-1 rounded ${!customModelMode ? 'bg-hermes text-white font-semibold' : 'bg-app-elevated text-app-muted'}`}
                     style={{ border: '1px solid var(--border-bright)' }}
                   >
                     Chọn từ Preset
@@ -517,7 +539,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                   <button
                     type="button"
                     onClick={() => setCustomModelMode(true)}
-                    className={`text-[10px] px-3 py-1 ${customModelMode ? 'bg-hermes text-white' : 'bg-app-elevated text-app-muted'}`}
+                    className={`text-[10px] px-3 py-1 rounded ${customModelMode ? 'bg-hermes text-white font-semibold' : 'bg-app-elevated text-app-muted'}`}
                     style={{ border: '1px solid var(--border-bright)' }}
                   >
                     Nhập Model ID tự do
@@ -528,7 +550,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                   <select
                     value={form.model}
                     onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))}
-                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
+                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui rounded"
                     style={{ border: '1px solid var(--border-bright)' }}
                   >
                     {activeModels.map(m => (
@@ -541,7 +563,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                     value={customModelInput}
                     onChange={(e) => setCustomModelInput(e.target.value)}
                     placeholder="Ví dụ: deepseek-ai/deepseek-r1"
-                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui"
+                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm font-mono-ui rounded"
                     style={{ border: '1px solid var(--border-bright)' }}
                   />
                 )}
@@ -557,19 +579,19 @@ function ModelSection({ defaultSubTab = 'active' }) {
                     max={8000}
                     value={form.max_tokens}
                     onChange={(e) => setForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 500 }))}
-                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                    className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm rounded"
                     style={{ border: '1px solid var(--border-bright)' }}
                   />
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase text-app-muted mb-1">
-                    Temp: <span className="text-hermes">{form.temperature.toFixed(2)}</span>
+                    Temp: <span className="text-hermes font-bold">{form.temperature.toFixed(2)}</span>
                   </label>
                   <input
                     type="range" min={0} max={2} step={0.05}
                     value={form.temperature}
                     onChange={(e) => setForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
-                    className="w-full"
+                    className="w-full mt-1.5"
                   />
                 </div>
               </div>
@@ -578,7 +600,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                 type="button"
                 onClick={saveModelConfig}
                 disabled={savingModel}
-                className="w-full btn-hermes text-xs py-2 mt-2"
+                className="w-full btn-hermes text-xs py-2 mt-2 rounded font-semibold"
               >
                 {savingModel ? 'Đang lưu…' : '💾 Lưu Model & Tham số'}
               </button>
@@ -606,7 +628,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                     }))
                     setCustomModelMode(false)
                   }}
-                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm rounded"
                   style={{ border: '1px solid var(--border-bright)' }}
                 >
                   {Object.keys(PROVIDER_LABELS).map(p => (
@@ -626,23 +648,43 @@ function ModelSection({ defaultSubTab = 'active' }) {
                     value={form.api_key}
                     onChange={(e) => setForm(f => ({ ...f, api_key: e.target.value }))}
                     placeholder={keysForm[PROVIDER_KEY_MAP[form.provider]] ? `Cấu hình sẵn: ${keysForm[PROVIDER_KEY_MAP[form.provider]]}` : 'Chưa cấu hình API Key'}
-                    className="flex-1 px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                    className="flex-1 px-3 py-2 bg-app-elevated text-app-primary text-sm rounded"
                     style={{ border: '1px solid var(--border-bright)' }}
                   />
                   <button
                     type="button"
                     onClick={testActiveConnection}
                     disabled={testingActive === 'pending'}
-                    className="btn-ghost whitespace-nowrap text-xs px-2"
+                    className="btn-ghost whitespace-nowrap text-xs px-2.5 py-1.5 rounded border border-border"
                   >
                     {testingActive === 'pending' ? <Loader size={12} className="animate-spin" /> : '🔌 Test'}
                   </button>
                 </div>
+                {keysForm[PROVIDER_KEY_MAP[form.provider]] ? (
+                  <div className="flex items-center gap-1.5 text-[10px] text-hermes font-medium mt-1.5 bg-green-950/20 border border-green-800/40 p-1.5 rounded">
+                    <CheckCircle size={10} className="shrink-0 text-hermes" />
+                    <span>Đã có sẵn API Key cấu hình ở <strong>Tab 2: Quản lý API Keys</strong></span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-[10px] text-app-dim font-medium mt-1.5 bg-yellow-950/20 border border-yellow-800/40 p-1.5 rounded">
+                    <AlertTriangle size={10} className="shrink-0 text-yellow-500" />
+                    <span>Chưa cấu hình API Key. Hệ thống sẽ dùng mặc định hệ thống.</span>
+                  </div>
+                )}
                 {testingActive && testingActive !== 'pending' && (
-                  <div className={`mt-2 text-xs ${testingActive.ok ? 'text-hermes' : 'text-danger'}`}>
-                    {testingActive.ok
-                      ? `✓ Kết nối OK (${testingActive.latency_ms}ms)`
-                      : `✗ Lỗi: ${testingActive.error}`}
+                  <div className={`mt-2.5 p-2.5 rounded text-xs border transition-all ${testingActive.ok ? 'bg-green-950/20 border-green-800 text-hermes' : 'bg-red-950/20 border-red-800 text-danger'}`}>
+                    {testingActive.ok ? (
+                      <div>
+                        <strong>✓ Thành công:</strong> Kết nối tốt ({testingActive.latency_ms}ms)
+                        <div className="mt-1 text-app-muted overflow-hidden text-ellipsis whitespace-nowrap max-w-full font-mono text-[10px]">
+                          Phản hồi: "{testingActive.response_preview}"
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <strong>✗ Thất bại:</strong> {testingActive.error}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -654,7 +696,7 @@ function ModelSection({ defaultSubTab = 'active' }) {
                   type="text"
                   value={form.base_url}
                   onChange={(e) => setForm(f => ({ ...f, base_url: e.target.value }))}
-                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm"
+                  className="w-full px-3 py-2 bg-app-elevated text-app-primary text-sm rounded"
                   style={{ border: '1px solid var(--border-bright)' }}
                 />
               </div>
