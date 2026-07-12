@@ -181,11 +181,11 @@ function normalizeCookieInput(input) {
     parsed[name] = value
   }
 
-  if (!parsed.c_user || !/^\d+$/.test(parsed.c_user)) {
-    return { ok: false, reason: 'missing_c_user' }
+  if (parsed.c_user && !/^\d+$/.test(parsed.c_user)) {
+    return { ok: false, reason: 'invalid_c_user' }
   }
-  if (!parsed.xs || parsed.xs.length < 10) {
-    return { ok: false, reason: 'missing_xs' }
+  if (parsed.xs && parsed.xs.length < 10) {
+    return { ok: false, reason: 'invalid_xs' }
   }
 
   // Preserve the common FB cookie ordering so downstream looks familiar.
@@ -197,7 +197,7 @@ function normalizeCookieInput(input) {
   return {
     ok: true,
     cookieString: ordered.join('; '),
-    fbUserId: parsed.c_user,
+    fbUserId: parsed.c_user || null,
   }
 }
 

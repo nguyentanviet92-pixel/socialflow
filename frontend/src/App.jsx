@@ -40,6 +40,7 @@ import DataCenter from './pages/data-center/DataCenter'
 import NickNurture from './pages/nick-nurture/NickNurture'
 import GroupMonitor from './pages/groups/GroupMonitor'
 import WpAuditResult from './pages/hermes/WpAuditResult'
+import ScoutDashboard from './pages/scout/ScoutDashboard'
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -108,6 +109,9 @@ export default function App() {
                 <Route path="/monitor" element={<SignalWall />} />
                 <Route path="/group-monitor" element={<SignalWall />} />
                 <Route path="/health" element={<SignalWall />} />
+
+                {/* ── Hub Do Thám (Group Intelligence Scanner) ── */}
+                <Route path="/scout" element={<ScoutDashboard />} />
 
                 {/* ── Hub 5: Phân tích & Xu hướng (Consolidated) ── */}
                 <Route path="/analytics" element={<Analytics />} />

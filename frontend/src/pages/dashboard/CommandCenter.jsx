@@ -225,7 +225,7 @@ export default function CommandCenter() {
           <div className="font-mono-ui text-[10px] uppercase text-app-muted">Command Center</div>
           <div className="text-app-primary text-lg mt-1">Hôm nay</div>
         </div>
-        <div className="flex-1 flex items-center justify-end pr-4">
+        <div className="flex-1 flex items-center justify-end pr-4 gap-2">
           <a
             href="/SocialFlow Agent Setup 1.1.0.exe"
             download
@@ -250,7 +250,33 @@ export default function CommandCenter() {
             }}
           >
             <span>📥</span>
-            <span>Tải SocialFlow Agent (.exe)</span>
+            <span>Tải Setup (.exe)</span>
+          </a>
+          <a
+            href="/socialflow-agent.zip"
+            download
+            className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition-all duration-200"
+            style={{
+              background: 'rgba(139, 92, 246, 0.12)',
+              border: '1px solid #8b5cf6',
+              color: '#a78bfa',
+              cursor: 'pointer',
+              textDecoration: 'none',
+              boxShadow: '0 0 10px rgba(139, 92, 246, 0.2)'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#8b5cf6';
+              e.currentTarget.style.color = '#ffffff';
+              e.currentTarget.style.boxShadow = '0 0 15px rgba(139, 92, 246, 0.5)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.12)';
+              e.currentTarget.style.color = '#a78bfa';
+              e.currentTarget.style.boxShadow = '0 0 10px rgba(139, 92, 246, 0.2)';
+            }}
+          >
+            <span>📦</span>
+            <span>Tải Bản Zip</span>
           </a>
         </div>
         <DenseStat

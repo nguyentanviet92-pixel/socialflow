@@ -19,6 +19,7 @@ const ALLOWED_TABLES = new Set([
   'shared_posts', 'target_queue', 'agent_heartbeats',
   'account_health_signals', 'ai_pilot_memory', 'hermes_calls',
   'nick_daily_job_quota', 'nick_slots', 'scout_targets',
+  'scout_posts', 'scout_comments', 'scout_job_logs'
 ])
 const ALLOWED_RPCS = new Set([
   'append_campaign_to_group', 'increment_budget',
@@ -104,8 +105,16 @@ module.exports = async (fastify) => {
 
   const agentAuth = async (req, reply) => {
     const key = req.headers['x-agent-key']
-    if (!AGENT_SECRET || key !== AGENT_SECRET) {
-      return reply.code(401).send({ error: 'Invalid agent key' })
+    if (key && AGENT_SECRET && key === AGENT_SECRET) {
+      return
+    }
+    const token = req.headers.authorization?.replace('Bearer ', '')
+    if (token) {
+      await fastify.authenticate(req, reply)
+      if (req.user) return
+    }
+    if (!reply.sent) {
+      return reply.code(401).send({ error: 'Unauthorized: invalid agent key or user token' })
     }
   }
 

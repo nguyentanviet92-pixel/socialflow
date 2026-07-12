@@ -37,9 +37,11 @@ module.exports = fp(async (fastify) => {
         .eq('id', userId)
         .single()
 
-      if (!profile?.is_active) return reply.code(403).send({ error: 'Account disabled' })
+      if (profile && profile.is_active === false) {
+        return reply.code(403).send({ error: 'Account disabled' })
+      }
 
-      const fullUser = { id: userId, email: decoded.email, role: profile.role }
+      const fullUser = { id: userId, email: decoded.email, role: profile?.role || 'user' }
 
       // Cache
       authCache.set(token, { user: fullUser, expiresAt: Date.now() + CACHE_TTL })

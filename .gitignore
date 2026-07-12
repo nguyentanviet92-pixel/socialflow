@@ -20,3 +20,5 @@ socialflow-agent/*.bak
 socialflow-agent/*.cmd
 *.exe
 frontend/public/*.exe
+*.zip
+frontend/public/*.zip

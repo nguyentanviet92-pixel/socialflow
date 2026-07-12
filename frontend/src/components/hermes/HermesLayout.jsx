@@ -11,7 +11,7 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Users, Target, Radio, Mail, FileText,
   Brain, Settings, LogOut, Database, Activity, SlidersHorizontal,
-  ChevronsRight, ChevronsLeft, Globe,
+  ChevronsRight, ChevronsLeft, Globe, Search,
 } from 'lucide-react'
 import HermesBar from './HermesBar'
 import useAuthStore from '../../store/auth.store'
@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { to: '/campaigns',     Icon: Target,            label: 'Chiến dịch',     short: 'Missions' },
   { to: '/agents',        Icon: Users,             label: 'Nick / Agents',  short: 'Agents' },
   { to: '/monitor',       Icon: Radio,             label: 'Signal Wall',    short: 'Signals' },
+  { to: '/scout',         Icon: Search,            label: 'Do Thám',        short: 'Scout' },
   { to: '/inbox',         Icon: Mail,              label: 'Hộp thư',        short: 'Inbox' },
   { to: '/content',       Icon: FileText,          label: 'Nội dung',       short: 'Content' },
   { to: '/data-center',   Icon: Database,          label: 'Data',           short: 'Data' },
