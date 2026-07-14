@@ -2468,7 +2468,11 @@ export default function CampaignHub() {
 
   const toggleStatus = useMutation({
     mutationFn: async (newStatus) => {
-      await api.put(`/campaigns/${id}`, { status: newStatus })
+      if (newStatus === 'running') {
+        await api.post(`/campaigns/${id}/start`)
+      } else {
+        await api.post(`/campaigns/${id}/stop`)
+      }
     },
     onSuccess: (_, newStatus) => {
       toast.success(`Campaign ${newStatus === 'running' ? 'started' : 'paused'}`)
