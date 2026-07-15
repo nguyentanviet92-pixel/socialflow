@@ -114,6 +114,7 @@ async function rebalanceKPI(supabase, campaignId) {
       target_friend_requests: Math.max(1, Math.round(kpi.daily_friend_requests * share)),
       target_group_joins: Math.max(1, Math.round(kpi.daily_group_joins * share)),
       target_opportunity_comments: oppTarget > 0 ? Math.max(1, Math.round(oppTarget * share)) : 0,
+      kpi_met: false,
     }
   })
 
