@@ -2,14 +2,18 @@
  * Browser Session Pool
  * Giữ browser mở giữa các job để tránh checkpoint từ việc đóng/mở liên tục
  */
-const { launchBrowser } = require('./launcher')
+const { launchBrowser, parseCookieString } = require('./launcher')
 const path = require('path')
 const os = require('os')
+const fs = require('fs')
 
 const PROFILES_DIR = path.join(os.homedir(), '.socialflow', 'profiles')
-const IDLE_TIMEOUT_MS = 15 * 60 * 1000 // 15 phút (tăng lên vì fetch có thể lâu)
+const IDLE_TIMEOUT_MS = 20 * 60 * 1000 // 20 phút — giữ session sống lâu hơn giữa jobs
+const MAX_SESSIONS = parseInt(process.env.MAX_CONCURRENT) || 3 // Tăng từ 1 lên 3 làm mặc định vì RAM máy 36GB dư sức chạy song song!
+const MAX_JOBS_PER_SESSION = 20    // Recycle sau 20 jobs (tăng từ 12 — tránh recycle liên tục)
+const MAX_SESSION_AGE_MS = 2 * 60 * 60 * 1000 // Recycle sau 2 GIỜ (tăng từ 30 phút — browser stable)
 
-// Map account_id -> { browser, context, storageFile, lastUsed, closing }
+// Map account_id -> { browser, context, storageFile, lastUsed, closing, busy, createdAt }
 const sessions = new Map()
 
 let cleanupInterval = null
@@ -24,29 +28,62 @@ async function getSession(account, opts = {}) {
 
   const existing = sessions.get(id)
   if (existing && !existing.closing) {
-    // Check browser còn sống không
-    try {
-      const contexts = existing.browser.contexts()
-      if (contexts.length > 0) {
+    const age = Date.now() - existing.createdAt
+    const needsRecycle = existing.jobCount >= MAX_JOBS_PER_SESSION || age >= MAX_SESSION_AGE_MS
+
+    if (needsRecycle && !existing.busy) {
+      // Session served too many jobs or too old — recycle to prevent memory leaks
+      console.log(`[SESSION-POOL] ♻️ Recycling ${account.username || id} (jobs: ${existing.jobCount}/${MAX_JOBS_PER_SESSION}, age: ${Math.round(age / 60000)}min)`)
+      await closeSession(id)
+      // Fall through to create new session below
+    } else {
+      // Check context còn sống không
+      try {
+        const pages = existing.context.pages()
         existing.lastUsed = Date.now()
-        console.log(`[SESSION-POOL] Reusing session for ${account.username || id}`)
+        existing.jobCount++
+        console.log(`[SESSION-POOL] Reusing session for ${account.username || id} (${pages.length} tabs, job #${existing.jobCount})`)
         return existing
+      } catch {
+        // Browser/context đã chết, xóa và tạo mới
+        console.log(`[SESSION-POOL] Session dead for ${account.username || id}, recreating...`)
+        sessions.delete(id)
       }
-    } catch {
-      // Browser đã chết, xóa và tạo mới
-      sessions.delete(id)
     }
   }
 
-  // Strict 1-browser-at-a-time: trước khi mở nick mới, đóng mọi session
-  // của nick KHÁC (giữ lại session cùng id nếu có — đã handle ở block trên).
-  // Cookies + IndexedDB persist trong userDataDir + storageFile nên reopen
-  // không gián đoạn login. FB cluster detection ghét nhiều session cùng máy.
-  await closeOtherSessions(id)
+  // Evict TRƯỚC khi tạo session mới (tránh vượt MAX_SESSIONS)
+  if (sessions.size >= MAX_SESSIONS) {
+    // Cross-check NickPool for sessions that have a running job — never evict those.
+    // This prevents the bug where a 2nd job evicts the 1st mid-execution.
+    const nickPool = (typeof globalThis !== 'undefined') ? globalThis.__socialflowNickPool : null
+    let oldestId = null, oldestTime = Infinity
+    for (const [sid, s] of sessions) {
+      if (s.busy || s.closing) continue
+      if (nickPool && nickPool.hasRunningJob(sid)) continue // poller still has a job using this nick
+      if (s.lastUsed < oldestTime) {
+        oldestTime = s.lastUsed
+        oldestId = sid
+      }
+    }
+    if (oldestId) {
+      console.log(`[SESSION-POOL] At max ${MAX_SESSIONS} sessions, evicting idle ${oldestId.slice(0, 8)} BEFORE creating new`)
+      await closeSession(oldestId)
+      // Đợi process thực sự thoát
+      await new Promise(r => setTimeout(r, 2000))
+    } else {
+      // No evictable session — caller must back off and retry later.
+      // Returning null is safer than creating a 2nd browser (breaks MAX_SESSIONS contract).
+      console.warn(`[SESSION-POOL] ⚠️ All ${MAX_SESSIONS} session(s) busy — cannot create new for ${account.username || id}, will retry`)
+      const err = new Error('SESSION_POOL_BUSY')
+      err.code = 'SESSION_POOL_BUSY'
+      throw err
+    }
+  }
 
   // Tạo session mới
   const headlessLabel = opts.headless ? ' (headless)' : ''
-  console.log(`[SESSION-POOL] Creating new session for ${account.username || id}${headlessLabel}`)
+  console.log(`[SESSION-POOL] Creating new session for ${account.username || id}${headlessLabel} (${sessions.size}/${MAX_SESSIONS} active)`)
   const session = await launchBrowser({ ...account, proxy: account.proxies ? {
     type: account.proxies.type || 'http',
     host: account.proxies.host,
@@ -60,205 +97,311 @@ async function getSession(account, opts = {}) {
     context: session.context,
     storageFile: session.storageFile,
     profileDir: session.profileDir,
+    isPersistent: true, // launchPersistentContext — browser data tách riêng mỗi nick
     lastUsed: Date.now(),
+    createdAt: Date.now(),
     closing: false,
+    busy: false,
+    jobCount: 0, // Track jobs served — recycle after MAX_JOBS_PER_SESSION
   }
-
-  // 2026-05-04: kill popup tabs as soon as the context spawns them.
-  // Cause: FB click handlers for profile previews / group cards / share
-  // dialogs frequently use window.open() or target="_blank", which creates
-  // a fresh blank tab. Our handlers never click "Close" on these, so they
-  // pile up as `about:blank` tabs (user reported 12+ stuck tabs in one
-  // session). getPage()/releaseSession() trim extras only between jobs;
-  // this listener catches them mid-job too.
-  //
-  // CRITICAL: don't touch the initial blank tab Camoufox creates during
-  // launchPersistentContext — closing it makes the context emit
-  // "Target page, context or browser has been closed" on the very next
-  // call, killing the whole session. Only close *additional* about:blank
-  // tabs that appear *after* the session has a working main tab.
-  session.context.on('page', async (popup) => {
-    try { await popup.waitForLoadState('domcontentloaded', { timeout: 3000 }) } catch {}
-    try {
-      // If this is one of the first 1-2 pages on the context, it's the
-      // initial blank tab from launch — keep it.
-      const pageCount = session.context.pages().length
-      if (pageCount <= 1) return
-
-      const url = popup.url()
-      if (!url || url === 'about:blank' || url.startsWith('about:')) {
-        await popup.close()
-        console.log(`[SESSION-POOL] Auto-closed popup tab for ${account.username || id} (had ${pageCount} pages)`)
-      }
-    } catch {}
-  })
-
-  entry._saveInterval = setInterval(async () => {
-    try {
-      await entry.context.storageState({ path: entry.storageFile })
-      console.log(`[SESSION-POOL] 💾 Periodic save for ${account.username || id}`)
-    } catch {}
-  }, 5 * 60 * 1000)
 
   sessions.set(id, entry)
   startCleanup()
   return entry
 }
 
-/**
- * Check xem profile dir đã có FB cookies hợp lệ chưa.
- * Hợp lệ = có c_user (uid) VÀ xs (session secret) và đều non-empty.
- */
-async function hasValidFbCookies(context) {
-  try {
-    const cookies = await context.cookies('https://www.facebook.com')
-    const cUser = cookies.find(c => c.name === 'c_user' && c.value && c.value.length > 0)
-    const xs = cookies.find(c => c.name === 'xs' && c.value && c.value.length > 0)
-    return !!(cUser && xs)
-  } catch {
-    return false
-  }
-}
+// Per-account lock to prevent concurrent getPage for same nick
+const sessionLocks = new Map()
 
 /**
- * Inject cookies từ account.cookie_string (DB) vào context.
- * Chỉ gọi khi profile dir KHÔNG có cookies hợp lệ.
- */
-async function injectDbCookies(context, account) {
-  if (!account.cookie_string) return false
-  const cookies = account.cookie_string.split(';').map(c => {
-    const [name, ...rest] = c.trim().split('=')
-    return name ? {
-      name: name.trim(),
-      value: rest.join('=').trim(),
-      domain: '.facebook.com',
-      path: '/',
-      secure: true,
-    } : null
-  }).filter(Boolean)
-  if (!cookies.length) return false
-  await context.addCookies(cookies)
-  return true
-}
-
-/**
- * Tạo page mới với cookies từ account.
- *
- * Cookie priority (Fix checkpoint spam):
- *   1. Profile dir cookies (persistent storage.json) — fresh, do playwright giữ live
- *   2. DB cookies (account.cookie_string) — fallback khi profile trống/invalid
- *
- * DB cookies thường stale (user paste 1 lần rồi thôi) → nếu inject đè lên profile
- * sẽ ghi đè session đang hoạt động → FB detect inconsistency → checkpoint.
- *
- * Exception: forceDbCookies=true (set by check-health when triggered_by='cookie_update')
- * → user JUST pasted fresh cookies, profile has OLD dead cookies → inject DB cookies.
- *
+ * Tạo page mới với cookies từ account
  * @param {object} account - account record từ DB
- * @param {object} opts - { headless: boolean, forceDbCookies: boolean }
+ * @param {object} opts - { headless: boolean } - override headless mode
  */
 async function getPage(account, opts = {}) {
   const id = account.id || account.account_id
-  const username = account.username || id
 
-  let session = await getSession(account, opts)
-  let page
+  // Wait for any pending getPage for this account (prevent concurrent access)
+  while (sessionLocks.has(id)) {
+    await sessionLocks.get(id)
+  }
+  let lockResolve
+  sessionLocks.set(id, new Promise(r => { lockResolve = r }))
 
-  // Reuse an existing tab instead of opening a new one — handlers navigate
-  // via page.goto() so a single tab can handle the whole job. None of the
-  // campaign-* handlers call page.close() in their finally blocks, so
-  // without reuse we leak one tab per job run → browser accumulates 10+
-  // tabs for the same nick and memory blows up.
-  //
-  // Policy:
-  //   - ≥1 page exists → keep the FIRST, close all others (extras from
-  //     parallel scroll/open handlers or previous runs)
-  //   - 0 pages → create one (shouldn't happen with persistent context
-  //     since launch creates an initial blank tab, but handle defensively)
   try {
-    const existing = session.context.pages()
-    if (existing.length > 0) {
-      page = existing[0]
-      for (let i = 1; i < existing.length; i++) {
-        try { await existing[i].close() } catch {}
-      }
-      if (existing.length > 1) {
-        console.log(`[SESSION-POOL] Reused tab for ${username}, closed ${existing.length - 1} extra tab(s)`)
-      }
-    } else {
-      page = await session.context.newPage()
+  return await _getPageInternal(account, opts)
+  } finally {
+    sessionLocks.delete(id)
+    lockResolve()
+  }
+}
+
+async function _getPageInternal(account, opts = {}) {
+  let session = await getSession(account, opts)
+  const id = account.id || account.account_id
+  session.busy = true
+
+  // ── SINGLE TAB REUSE — KHÔNG BAO GIỜ đóng/mở tab ──
+  // Đóng/mở tab liên tục = Facebook detect → checkpoint
+  // Luôn tái sử dụng tab đầu tiên, navigate trên đó
+  let page = null
+  try {
+    const pages = session.context.pages()
+    // Lấy tab đầu tiên còn sống — KHÔNG đóng tab nào
+    page = pages.find(p => !p.isClosed()) || null
+    if (page) {
+      console.log(`[SESSION-POOL] ♻️ Reusing tab for ${account.username || id} (url: ${page.url().substring(0, 50)})`)
     }
-  } catch (err) {
-    console.warn(`[SESSION-POOL] getPage failed for ${username}: ${err.message} — recreating session`)
-    try { await closeSession(id) } catch {}
-    session = await getSession(account, opts)
-    page = await session.context.newPage()
+  } catch {}
+
+  // Chỉ tạo tab mới nếu KHÔNG có tab nào (lần đầu launch)
+  if (!page) {
+    try {
+      page = await session.context.newPage()
+      console.log(`[SESSION-POOL] Created first tab for ${account.username || id}`)
+    } catch (err) {
+      console.log(`[SESSION-POOL] newPage failed: ${err.message}, recreating session...`)
+      sessions.delete(id)
+      const fresh = await getSession(account, opts)
+      session = fresh
+      try {
+        const freshPages = fresh.context.pages()
+        page = freshPages.find(p => !p.isClosed()) || null
+      } catch {}
+      if (!page) page = await fresh.context.newPage()
+    }
   }
 
-  // Decide cookie source: profile > DB (unless forceDbCookies is set)
-  if (opts.forceDbCookies) {
-    // Cookie just updated via UI — always inject fresh DB cookies.
-    // Clear existing FB cookies first so they don't conflict.
+  // Intercept popup tabs — redirect URL về tab chính thay vì mở tab mới
+  if (!session._popupBlocked) {
+    session.context.on('page', async (newPage) => {
+      // Popup mở → lấy URL → navigate tab chính tới đó → đóng popup
+      try {
+        const popupUrl = newPage.url()
+        console.log(`[SESSION-POOL] ⛔ Popup intercepted: ${popupUrl.substring(0, 60)} → redirecting main tab`)
+        // Đóng popup NGAY, không để nó load
+        await newPage.close()
+        // Nếu URL là facebook → navigate tab chính tới đó
+        if (popupUrl && popupUrl !== 'about:blank' && popupUrl.includes('facebook.com')) {
+          const mainPage = session.context.pages().find(p => !p.isClosed())
+          if (mainPage) await mainPage.goto(popupUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {})
+        }
+      } catch {}
+    })
+    session._popupBlocked = true
+  }
+
+  // Set cookies — ONLY inject from DB if persistent context has NO Facebook cookies
+  // Persistent context saves cookies in Default/Network/Cookies automatically
+  // If we inject old DB cookies on top → overwrites fresh xs token → session death!
+  if (account.cookie_string && !session._cookiesInjected) {
+    const cookies = parseCookieString(account.cookie_string)
+
+    // Lưu xs ban đầu từ DB để làm mốc so sánh xoay vòng cookie
     try {
-      const oldCookies = await session.context.cookies('https://www.facebook.com')
-      if (oldCookies.length > 0) {
-        await session.context.clearCookies()
-        console.log(`[SESSION-POOL] 🧹 Cleared ${oldCookies.length} stale profile cookies for ${username}`)
+      const dbXs = cookies.find(c => c.name === 'xs')?.value
+      if (dbXs) session._lastSavedXs = dbXs
+    } catch {}
+
+    // Check if persistent context already has valid Facebook cookies
+    let hasExistingCookies = false
+    try {
+      const existing = await session.context.cookies(['https://www.facebook.com'])
+      const hasXs = existing.some(c => c.name === 'xs' && c.value.length > 5)
+      const hasCUser = existing.some(c => c.name === 'c_user' && c.value.length > 3)
+      hasExistingCookies = hasXs && hasCUser
+      if (hasExistingCookies) {
+        console.log(`[SESSION-POOL] ✅ Persistent context has valid FB cookies — NOT injecting from DB (preserving fresh xs)`)
       }
     } catch {}
-    const injected = await injectDbCookies(session.context, account)
-    if (injected) {
-      console.log(`[SESSION-POOL] 💉 Force-injected fresh DB cookies for ${username} (cookie_update)`)
-    } else {
-      console.warn(`[SESSION-POOL] ⚠️  forceDbCookies=true but no DB cookies available for ${username}`)
-    }
-  } else {
-    const profileHasCookies = await hasValidFbCookies(session.context)
-    if (profileHasCookies) {
-      console.log(`[SESSION-POOL] 🍪 Using profile cookies for ${username} (profile dir has valid c_user+xs)`)
-    } else {
-      const injected = await injectDbCookies(session.context, account)
-      if (injected) {
-        console.log(`[SESSION-POOL] 💉 Injecting DB cookies for ${username} (profile dir empty/invalid)`)
-      } else {
-        console.warn(`[SESSION-POOL] ⚠️  No cookies available for ${username} — neither profile nor DB has FB cookies`)
+
+    if (!hasExistingCookies) {
+      // First time or cookies cleared — inject from DB
+      // SAFETY: Verify c_user in cookie matches account's fb_user_id
+      const cUserCookie = cookies.find(c => c.name === 'c_user')
+      if (cUserCookie && account.fb_user_id && account.fb_user_id !== '0') {
+        if (cUserCookie.value !== account.fb_user_id) {
+          console.error(`[SESSION-POOL] ❌ COOKIE MISMATCH: c_user=${cUserCookie.value} but fb_user_id=${account.fb_user_id} for ${account.username || id} — NOT injecting!`)
+          session._cookiesInjected = true // don't try again
+          return { page, session }
+        }
       }
+
+      // Validate: must have both c_user and xs
+      const hasXsCookie = cookies.some(c => c.name === 'xs' && c.value.length > 5)
+      const hasCUserCookie = cookies.some(c => c.name === 'c_user' && c.value.length > 3)
+      if (!hasXsCookie || !hasCUserCookie) {
+        console.warn(`[SESSION-POOL] ⚠️ DB cookies incomplete for ${account.username || id} (c_user: ${hasCUserCookie}, xs: ${hasXsCookie}) — skipping injection`)
+        session._cookiesInjected = true
+        return { page, session }
+      }
+      await session.context.addCookies(cookies)
+      console.log(`[SESSION-POOL] 🍪 Cookies injected from DB for ${account.username || account.id} (${cookies.length} cookies — first time)`)
     }
+    session._cookiesInjected = true
+  }
+
+  // Warmup: navigate FB nếu page đang blank hoặc chưa ở facebook
+  const currentUrl = page.url()
+  const needsWarmup = !currentUrl || currentUrl === 'about:blank' || !currentUrl.includes('facebook.com')
+  if (needsWarmup) {
+    try {
+      console.log(`[SESSION-POOL] Warming up ${account.username || id} (was: ${currentUrl})`)
+      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+      // Random wait 1.5-3s — không fix cứng
+      await page.waitForTimeout(1500 + Math.floor(Math.random() * 1500))
+      const url = page.url()
+      if (url.includes('/login') || url.includes('checkpoint')) {
+        console.warn(`[SESSION-POOL] ⚠️ Not logged in: ${account.username || id} → ${url}`)
+        // Mark session as problematic for error classification
+        session._loginFailed = true
+        // Record early warning signal
+        try {
+          const { checkRedirectWarn } = require('../lib/signal-collector')
+          checkRedirectWarn(id, null, 'https://www.facebook.com/', url)
+        } catch {}
+      }
+    } catch (err) {
+      console.warn(`[SESSION-POOL] Warmup failed for ${account.username || id}: ${err.message}`)
+    }
+  }
+
+  // Dismiss any lingering dialogs from previous job (e.g. open composer)
+  try {
+    const hasDialog = await page.locator('[role="dialog"]').first().isVisible({ timeout: 500 }).catch(() => false)
+    if (hasDialog) {
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(300)
+    }
+  } catch {}
+
+  // Periodic cookie save — protect against crash losing xs rotation
+  // Saves every 15 min while session is active. Cleared on release.
+  if (!session._cookieSaveInterval && session.context) {
+    session._cookieSaveInterval = setInterval(async () => {
+      try {
+        const cookies = await session.context.cookies('https://www.facebook.com')
+        const cUser = cookies.find(c => c.name === 'c_user')
+        const xs = cookies.find(c => c.name === 'xs')
+        if (cUser?.value && xs?.value) {
+          // Bỏ qua nếu xs token không đổi để tiết kiệm cuộc gọi VPS
+          if (session._lastSavedXs === xs.value) return
+
+          const critical = cookies.filter(c => ['c_user', 'xs', 'datr', 'sb', 'fr'].includes(c.name) && c.value.length > 0)
+          const cookieStr = critical.map(c => `${c.name}=${c.value}`).join('; ')
+          const { supabase: sb } = require('../lib/supabase')
+          await sb.from('accounts').update({
+            cookie_string: cookieStr,
+            last_used_at: new Date().toISOString(),
+          }).eq('id', id)
+          
+          session._lastSavedXs = xs.value
+          console.log(`[SESSION-POOL] 🔄 Periodic cookie save for ${account.username || id} (xs rotated, VPS saved)`)
+        }
+      } catch {}
+    }, 15 * 60 * 1000)
   }
 
   return { page, session }
 }
 
 /**
- * Đánh dấu session idle (KHÔNG đóng) + trim tabs xuống 1.
- * Đóng mọi tab phụ (popup, FB ads interstitial) còn sót, giữ 1 tab chính.
- * KHÔNG park về about:blank — nhìn như đang đứng, gây khó chịu thị giác.
- * DOM của trang cũ sẽ tự giải phóng khi job sau gọi page.goto().
+ * Đánh dấu session idle + SAVE cookies để xs token không bị stale
+ * xs cookie refresh mỗi 30-40 phút — nếu không save → lần sau bị đá
  */
-async function releaseSession(accountId) {
+async function releaseSession(accountId, supabase) {
   const session = sessions.get(accountId)
-  if (!session) return
-  session.lastUsed = Date.now()
-  try {
-    const pages = session.context.pages()
-    for (let i = 1; i < pages.length; i++) {
-      try { await pages[i].close() } catch {}
+  if (session) {
+    // Clear periodic cookie save interval
+    if (session._cookieSaveInterval) {
+      clearInterval(session._cookieSaveInterval)
+      session._cookieSaveInterval = null
     }
-  } catch {}
-}
+    session.lastUsed = Date.now()
+    session.busy = false
 
-/**
- * Đóng tất cả session KHÁC accountId hiện tại (giữ lại session cùng id).
- * Gọi trước khi mở nick mới để enforce 1-browser-at-a-time.
- */
-async function closeOtherSessions(keepAccountId) {
-  const others = []
-  for (const [id, entry] of sessions) {
-    if (id !== keepAccountId && !entry.closing) others.push(id)
+    // Save updated cookies back to DB — critical for xs token rotation
+    // SAFETY: only save if c_user AND xs both present and non-empty
+    // If session is on login page → cookies are empty → DO NOT overwrite DB
+    let sb = supabase
+    if (!sb) {
+      try {
+        const { supabase: importedSb } = require('../lib/supabase')
+        sb = importedSb
+      } catch (err) {
+        console.warn(`[SESSION-POOL] Failed to import supabase in releaseSession: ${err.message}`)
+      }
+    }
+
+    if (sb) {
+      try {
+        const cookies = await session.context.cookies(['https://www.facebook.com'])
+        const cUser = cookies.find(c => c.name === 'c_user' && c.value.length > 3)
+        const xs = cookies.find(c => c.name === 'xs' && c.value.length > 5)
+
+        if (cUser && xs) {
+          // Bỏ qua nếu xs token không đổi để tiết kiệm cuộc gọi VPS
+          if (session._lastSavedXs === xs.value) {
+            console.log(`[SESSION-POOL] 🍪 Cookies unchanged for ${accountId.slice(0, 8)} — skipping DB save (saved VPS call)`)
+            return
+          }
+
+          const critical = cookies.filter(c => ['c_user', 'xs', 'datr', 'sb', 'fr'].includes(c.name) && c.value.length > 0)
+          const cookieStr = critical.map(c => `${c.name}=${c.value}`).join('; ')
+          await sb.from('accounts').update({
+            cookie_string: cookieStr,
+            last_used_at: new Date().toISOString(),
+          }).eq('id', accountId)
+          
+          session._lastSavedXs = xs.value
+          console.log(`[SESSION-POOL] 🍪 Cookies saved for ${accountId.slice(0, 8)} (${critical.map(c => c.name).join(', ')})`)
+        } else {
+          // Session is logged out — mark account inactive, notify user, CLOSE browser
+          console.warn(`[SESSION-POOL] ⚠️ No valid c_user/xs for ${accountId.slice(0, 8)} — session expired, disabling nick + closing browser`)
+          await sb.from('accounts').update({
+            status: 'expired',
+            is_active: false,                      // stop scheduling new jobs
+            last_used_at: new Date().toISOString(),
+          }).eq('id', accountId)
+
+          // Close the browser immediately — don't leave login tabs open
+          try { await closeSession(accountId) } catch {}
+
+          // Fetch owner_id + username for notification
+          try {
+            const { data: acct } = await sb.from('accounts')
+              .select('owner_id, username').eq('id', accountId).single()
+            if (acct?.owner_id) {
+              // Dedup: only notify once per account per 24h
+              const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+              const { data: recent } = await sb.from('notifications')
+                .select('id')
+                .eq('user_id', acct.owner_id)
+                .eq('type', 'session_expired')
+                .gte('created_at', since)
+                .like('body', `%${accountId.slice(0, 8)}%`)
+                .limit(1)
+
+              if (!recent?.length) {
+                await sb.from('notifications').insert({
+                  user_id: acct.owner_id,
+                  type: 'session_expired',
+                  title: `Nick "${acct.username || accountId.slice(0, 8)}" cookie hết hạn`,
+                  body: `Nick ${accountId.slice(0, 8)} đã bị đăng xuất khỏi Facebook. Cập nhật cookie mới qua Edit Account để dùng lại.`,
+                  level: 'warning',
+                  data: { account_id: accountId, reason: 'session_expired' },
+                })
+              }
+            }
+          } catch (notifErr) {
+            console.warn(`[SESSION-POOL] Could not create notification: ${notifErr.message}`)
+          }
+        }
+      } catch (err) {
+        console.warn(`[SESSION-POOL] Cookie save failed for ${accountId.slice(0, 8)}: ${err.message}`)
+      }
+    }
   }
-  if (others.length === 0) return
-  console.log(`[SESSION-POOL] Closing ${others.length} other session(s) before opening new nick: ${others.map(s => s.slice(0, 8)).join(', ')}`)
-  await Promise.allSettled(others.map(id => closeSession(id)))
 }
 
 /**
@@ -269,18 +412,45 @@ async function closeSession(accountId) {
   if (!session || session.closing) return
 
   session.closing = true
-  if (session._saveInterval) {
-    clearInterval(session._saveInterval)
-    session._saveInterval = null
+  if (session._cookieSaveInterval) {
+    clearInterval(session._cookieSaveInterval)
+    session._cookieSaveInterval = null
   }
-  console.log(`[SESSION-POOL] Closing session for ${accountId}`)
+  const label = accountId.slice(0, 8)
+  console.log(`[SESSION-POOL] Closing session for ${label} (jobs served: ${session.jobCount})`)
 
   try {
-    await session.context.storageState({ path: session.storageFile })
-  } catch {}
-  try {
-    await session.browser.close()
-  } catch {}
+    // Save cookies BEFORE closing — but ONLY if session is still logged in
+    try {
+      const cookies = await session.context.cookies(['https://www.facebook.com'])
+      const cUser = cookies.find(c => c.name === 'c_user' && c.value.length > 3)
+      const xs = cookies.find(c => c.name === 'xs' && c.value.length > 5)
+      if (cUser && xs) {
+        const critical = cookies.filter(c => ['c_user', 'xs', 'datr', 'sb'].includes(c.name) && c.value.length > 0)
+        const fs = require('fs')
+        const cookieData = JSON.stringify({ cookies: critical })
+        fs.writeFileSync(session.storageFile, cookieData)
+        console.log(`[SESSION-POOL] 🍪 Cookies preserved to disk for ${label} before close`)
+      } else {
+        console.warn(`[SESSION-POOL] ⚠️ Session ${label} has no valid cookies — NOT saving to disk`)
+      }
+    } catch {}
+
+    // Close context trực tiếp — KHÔNG đóng từng page (tránh trigger FB detection)
+    // Persistent context: close context = close browser
+    try {
+      await session.context.close()
+    } catch (closeErr) {
+      console.warn(`[SESSION-POOL] context.close failed for ${label}: ${closeErr.message}`)
+    } finally {
+      // Luôn cố gắng force kill browser process để giải phóng tài nguyên RAM
+      if (session.browser?.process?.()) {
+        try { session.browser.process().kill('SIGKILL') } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn(`[SESSION-POOL] Close error for ${label}: ${err.message}`)
+  }
 
   sessions.delete(accountId)
 }
@@ -304,22 +474,27 @@ async function closeAll() {
 function cleanupIdleSessions() {
   const now = Date.now()
   for (const [id, session] of sessions) {
-    if (now - session.lastUsed > IDLE_TIMEOUT_MS && !session.closing) {
-      // Check xem còn page nào đang mở không (= đang chạy job)
-      try {
-        const pages = session.context.pages()
-        if (pages.length > 0) {
-          // Có page đang mở → job đang chạy, KHÔNG đóng, refresh lastUsed
-          session.lastUsed = Date.now()
-          console.log(`[SESSION-POOL] Session ${id} has ${pages.length} active pages, keeping alive`)
-          continue
-        }
-      } catch {
-        // Context đã chết, đóng luôn
-      }
-      console.log(`[SESSION-POOL] Session ${id} idle for ${Math.round(IDLE_TIMEOUT_MS / 60000)}min, closing...`)
+    if (session.closing) continue
+
+    const idle = now - session.lastUsed > IDLE_TIMEOUT_MS
+    const tooOld = now - session.createdAt > MAX_SESSION_AGE_MS
+    const tooManyJobs = session.jobCount >= MAX_JOBS_PER_SESSION
+
+    if ((idle || tooOld || tooManyJobs) && !session.busy) {
+      const reason = idle ? 'idle' : tooOld ? 'max age' : 'max jobs'
+      console.log(`[SESSION-POOL] ♻️ Cleanup ${id.slice(0, 8)}: ${reason} (jobs: ${session.jobCount}, age: ${Math.round((now - session.createdAt) / 60000)}min)`)
       closeSession(id)
+    } else if (session.busy) {
+      session.lastUsed = now // keep alive while busy
     }
+  }
+
+  // Log memory usage periodically
+  const mem = process.memoryUsage()
+  const heapMB = Math.round(mem.heapUsed / 1024 / 1024)
+  const rssMB = Math.round(mem.rss / 1024 / 1024)
+  if (rssMB > 500) {
+    console.warn(`[SESSION-POOL] ⚠️ High memory: RSS=${rssMB}MB Heap=${heapMB}MB Sessions=${sessions.size}`)
   }
 }
 
@@ -344,13 +519,85 @@ function getSessionCount() {
   return sessions.size
 }
 
+/**
+ * Đọc danh sách group từ tệp JSON cục bộ (Local Cache)
+ * Nếu không có, truy vấn DB rồi ghi cache.
+ */
+async function getLocalGroups(accountId, supabase) {
+  const accountDir = path.join(PROFILES_DIR, accountId)
+  const cacheFile = path.join(accountDir, 'groups_cache.json')
+  
+  // 1. Đọc từ file cục bộ nếu tồn tại
+  try {
+    if (fs.existsSync(cacheFile)) {
+      const data = fs.readFileSync(cacheFile, 'utf8')
+      const parsed = JSON.parse(data)
+      const age = Date.now() - (parsed.cachedAt || 0)
+      
+      // Cache valid trong 24 giờ để tránh stale lâu
+      if (age < 24 * 60 * 60 * 1000 && Array.isArray(parsed.groups)) {
+        console.log(`[LOCAL-CACHE] Đọc ${parsed.groups.length} groups từ cache cục bộ cho nick ${accountId.slice(0, 8)}`)
+        return parsed.groups
+      }
+    }
+  } catch (err) {
+    console.warn(`[LOCAL-CACHE] Đọc cache file gặp lỗi: ${err.message}`)
+  }
+
+  // 2. Nếu không có hoặc hết hạn -> nạp từ DB Supabase (VPS)
+  if (!supabase) return []
+  try {
+    console.log(`[LOCAL-CACHE] Cache trống hoặc hết hạn -> Nạp danh sách group từ VPS cho nick ${accountId.slice(0, 8)}`)
+    const { data: groups } = await supabase
+      .from('fb_groups')
+      .select('id, fb_group_id, name, url, member_count, topic, tags, joined_via_campaign_id, ai_relevance, user_approved, consecutive_skips, last_yield_at, total_yields, language, score_tier, engagement_rate, ai_join_score, is_member, pending_approval')
+      .eq('account_id', accountId)
+      .eq('is_member', true)
+      .eq('pending_approval', false)
+
+    const list = groups || []
+    
+    // Ghi cache cục bộ
+    fs.mkdirSync(accountDir, { recursive: true })
+    fs.writeFileSync(cacheFile, JSON.stringify({
+      groups: list,
+      cachedAt: Date.now()
+    }, null, 2))
+    
+    return list
+  } catch (err) {
+    console.error(`[LOCAL-CACHE] Nạp từ DB gặp lỗi: ${err.message}`)
+    return []
+  }
+}
+
+/**
+ * Ghi đè danh sách group vào tệp JSON cục bộ (sau khi join hoặc check membership thành công)
+ */
+function updateLocalGroupsCache(accountId, groupsList) {
+  try {
+    const accountDir = path.join(PROFILES_DIR, accountId)
+    const cacheFile = path.join(accountDir, 'groups_cache.json')
+    fs.mkdirSync(accountDir, { recursive: true })
+    fs.writeFileSync(cacheFile, JSON.stringify({
+      groups: groupsList,
+      cachedAt: Date.now()
+    }, null, 2))
+    console.log(`[LOCAL-CACHE] Cập nhật ${groupsList.length} groups vào cache cục bộ cho nick ${accountId.slice(0, 8)}`)
+  } catch (err) {
+    console.warn(`[LOCAL-CACHE] Ghi cache file gặp lỗi: ${err.message}`)
+  }
+}
+
 module.exports = {
   getSession,
   getPage,
   releaseSession,
   closeSession,
-  closeOtherSessions,
   closeAll,
   getActiveSessions,
   getSessionCount,
+  getLocalGroups,
+  updateLocalGroupsCache,
+  sessions,
 }

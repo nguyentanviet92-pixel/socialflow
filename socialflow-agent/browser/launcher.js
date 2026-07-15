@@ -11,8 +11,47 @@ const PROFILES_DIR = path.join(os.homedir(), '.socialflow', 'profiles')
  */
 function parseCookieString(str) {
   if (!str || typeof str !== 'string') return []
+  let trimmedStr = str.trim()
+  if (!trimmedStr) return []
+
+  // Strip wrapping quotes if user copy-pasted with outer quotes
+  if (
+    (trimmedStr.startsWith('"') && trimmedStr.endsWith('"')) ||
+    (trimmedStr.startsWith("'") && trimmedStr.endsWith("'"))
+  ) {
+    trimmedStr = trimmedStr.slice(1, -1).trim()
+  }
+  if (!trimmedStr) return []
+
+  // Check if it's a JSON structure
+  if (trimmedStr.startsWith('[') || trimmedStr.startsWith('{')) {
+    try {
+      let parsed = JSON.parse(trimmedStr)
+      // Support {"url": "...", "cookies": [...]} format
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.cookies)) {
+        parsed = parsed.cookies
+      }
+      if (Array.isArray(parsed)) {
+        return parsed.map(c => {
+          if (!c.name || !c.value) return null
+          return {
+            name: String(c.name).trim(),
+            value: String(c.value).trim(),
+            domain: c.domain || '.facebook.com',
+            path: c.path || '/',
+            secure: c.secure !== undefined ? c.secure : true,
+            sameSite: c.sameSite || 'None'
+          }
+        }).filter(Boolean)
+      }
+    } catch (e) {
+      // JSON parse failed, fall back to string parsing
+    }
+  }
+
+  // Handle traditional "name=value; name2=value2; ..." format
   const out = []
-  for (const pair of str.split(';')) {
+  for (const pair of trimmedStr.split(';')) {
     const trimmed = pair.trim()
     if (!trimmed) continue
     const eq = trimmed.indexOf('=')
@@ -20,7 +59,14 @@ function parseCookieString(str) {
     const name = trimmed.slice(0, eq).trim()
     const value = trimmed.slice(eq + 1).trim()
     if (!name || !value) continue
-    out.push({ name, value, domain: '.facebook.com', path: '/' })
+    out.push({
+      name,
+      value,
+      domain: '.facebook.com',
+      path: '/',
+      secure: true,
+      sameSite: 'None'
+    })
   }
   return out
 }
@@ -62,35 +108,6 @@ async function launchBrowser(account, options = {}) {
 
   const storageFile = path.join(profileDir, 'storage.json')
 
-  // 2026-05-04: kill ONLY orphan Playwright Chromium processes for THIS profile dir.
-  //
-  // Two-layer filter to avoid ever touching the user's personal Chrome:
-  //   1. ExecutablePath must contain `ms-playwright\chromium` — the bundled
-  //      Chromium Playwright spawns is always under that path. The user's
-  //      personal Chrome lives under `Program Files\Google\Chrome\` so it
-  //      can never match this filter.
-  //   2. CommandLine must contain `--user-data-dir=<this nick's profile>`.
-  //      Different nicks = different profile dirs = no cross-kill.
-  //
-  // Why we need this: Playwright's parent process exits but a renderer / GPU
-  // child can keep the profile dir's SingletonLock alive. clearProfileLock
-  // removes the file but the orphan still owns the dir; the next launch sees
-  // "Opening in existing browser session" then "Target page, context or
-  // browser has been closed" because the orphan dies under it.
-  if (process.platform === 'win32') {
-    try {
-      const { execSync } = require('child_process')
-      // PowerShell -like uses '*' wildcards, NOT regex — backslashes are
-      // literal. Don't double-escape (the previous version turned every '\'
-      // into '\\\\' which produced patterns no real Windows path could match,
-      // so the kill list was always empty and orphans piled up).
-      // Only escape single-quotes for the inner PS literal.
-      const psPath = userDataDir.replace(/'/g, "''")
-      // Two AND-conditions so we never hit a process the user opened.
-      const cmd = "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='chrome.exe'\\\" | Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -like '*ms-playwright*chromium*') -and $_.CommandLine -and ($_.CommandLine -like '*" + psPath + "*') } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }\""
-      execSync(cmd, { timeout: 6000, stdio: 'ignore' })
-    } catch { /* best-effort, fall through to lock clear + launch */ }
-  }
   // Clear stale lock files from previous crashed session — must run BEFORE launch
   clearProfileLock(userDataDir)
 
@@ -107,7 +124,10 @@ async function launchBrowser(account, options = {}) {
 
   const proxyConfig = account.proxy || null
 
-  const headless = options.headless !== undefined ? options.headless : process.env.HEADLESS === 'true'
+  // Allow headless override (especially on VPS where headed mode fails if RDP session is disconnected)
+  const headless = options.headless !== undefined
+    ? options.headless
+    : (process.env.HEADLESS === 'true')
 
   let browserType = chromium
   if (account.browser_type === 'camoufox') {
@@ -162,6 +182,16 @@ async function launchBrowser(account, options = {}) {
   const context = await browserType.launchPersistentContext(userDataDir, contextOptions)
   const browser = context // persistent context IS the browser
 
+  // Chặn hình ảnh, media (video/audio) và font chữ để tiết kiệm RAM/băng thông và tránh crash
+  await context.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    if (['image', 'media', 'font'].includes(type)) {
+      route.abort();
+    } else {
+      route.continue();
+    }
+  });
+
   // ── Sync cookies from DB into browser context ──
   // Persistent context auto-loads cookies from profile dir. But when user
   // updates `accounts.cookie_string` in DB (Sửa cookie UI), profile dir still
@@ -175,12 +205,21 @@ async function launchBrowser(account, options = {}) {
       const dbCUser = dbCookies.find(c => c.name === 'c_user')?.value
       const dbXs = dbCookies.find(c => c.name === 'xs')?.value
       if (dbCUser && dbXs) {
+        const lastXsFile = path.join(userDataDir, 'last_xs.txt')
+        let lastXs = ''
+        try {
+          if (fs.existsSync(lastXsFile)) {
+            lastXs = fs.readFileSync(lastXsFile, 'utf8').trim()
+          }
+        } catch {}
+
         const profileCookies = await context.cookies(['https://www.facebook.com'])
         const profileCUser = profileCookies.find(c => c.name === 'c_user')?.value
         const profileXs = profileCookies.find(c => c.name === 'xs')?.value
 
         const profileEmpty = !profileCUser || !profileXs
-        const profileMismatch = profileCUser !== dbCUser || profileXs !== dbXs
+        const isManualDbUpdate = dbXs !== lastXs
+        const profileMismatch = profileCUser !== dbCUser || isManualDbUpdate
 
         if (profileEmpty || profileMismatch) {
           // Clear stale profile cookies + inject DB cookies
@@ -193,10 +232,17 @@ async function launchBrowser(account, options = {}) {
             httpOnly: c.name === 'xs' || c.name === 'fr',
             sameSite: 'None',
           })))
-          const reason = profileEmpty ? 'profile empty' : 'cookie_string newer than profile'
+
+          // Save the new xs to last_xs.txt
+          try {
+            fs.mkdirSync(userDataDir, { recursive: true })
+            fs.writeFileSync(lastXsFile, dbXs, 'utf8')
+          } catch {}
+
+          const reason = profileEmpty ? 'profile empty' : 'cookie_string manually updated in DB'
           console.log(`[BROWSER] 🍪 Injected DB cookies for ${account.username || accountId} (${reason}, ${dbCookies.length} cookies)`)
         } else {
-          console.log(`[BROWSER] Profile cookies match DB for ${account.username || accountId}, keeping rotated tokens`)
+          console.log(`[BROWSER] Profile cookies match or DB xs hasn't changed for ${account.username || accountId}, keeping rotated tokens`)
         }
       }
     } catch (err) {
@@ -289,4 +335,4 @@ async function humanType(page, selector, text) {
   }
 }
 
-module.exports = { launchBrowser, saveAndClose, delay, humanType, getCamoufoxPath, clearProfileLock }
+module.exports = { launchBrowser, saveAndClose, delay, humanType, getCamoufoxPath, clearProfileLock, parseCookieString }
