@@ -1052,9 +1052,25 @@ async function processRoleCampaigns() {
 async function executeRoleCampaign(campaign) {
   // Phase 7: scout runs on its own 4-hour cron (processScoutCron) — skip it here
   // so nurture/connect don't get delayed by scout acquiring the browser lock.
-  const roles = (campaign.campaign_roles || [])
+  let roles = (campaign.campaign_roles || [])
     .filter(r => r.is_active && r.role_type !== 'scout')
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+
+  if (roles.length === 0 && Array.isArray(campaign.account_ids) && campaign.account_ids.length > 0) {
+    roles = [{
+      id: `virtual-nurture-role-${campaign.id}`,
+      campaign_id: campaign.id,
+      role_type: 'nurture',
+      name: 'Nurture (Tự động)',
+      is_active: true,
+      account_ids: campaign.account_ids,
+      mission: campaign.description || campaign.mission || `Tương tác nuôi tài khoản theo chủ đề: ${campaign.topic || ''}`,
+      parsed_plan: null,
+      feeds_into: null,
+      read_from: null
+    }]
+    console.log(`[SCHEDULER] Campaign ${campaign.id} has no roles but has direct nicks. Synthesized virtual nurture role.`)
+  }
 
   if (roles.length === 0) {
     console.log(`[SCHEDULER] Campaign ${campaign.id} has no active roles, skipping`)
