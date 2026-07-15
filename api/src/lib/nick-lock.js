@@ -5,6 +5,12 @@
  * A nick is "busy" if it has ANY pending/claimed/running job (regardless of system).
  */
 
+const JANITORIAL_TYPES = new Set([
+  'check_group_membership', 'check_health', 'check_engagement',
+  'fetch_source_cookie', 'nurture_feed', 'warmup_browse',
+  'check_comment_engagement',
+])
+
 function getClient() {
   return require('./supabase').supabase
 }
@@ -61,7 +67,7 @@ async function getBusyNicks(accountIds) {
 
   const { data: jobs, error } = await sb
     .from('jobs')
-    .select('id, payload')
+    .select('id, type, payload')
     .in('status', ['pending', 'claimed', 'running'])
     .or(orConditions)
 
@@ -73,6 +79,7 @@ async function getBusyNicks(accountIds) {
 
   const busySet = new Set()
   for (const j of (jobs || [])) {
+    if (JANITORIAL_TYPES.has(j.type)) continue
     const accId = j.payload?.account_id
     if (accId) busySet.add(accId)
   }
@@ -95,11 +102,12 @@ async function getBusyNicksFallback(accountIds) {
 
     const { data: jobs } = await sb
       .from('jobs')
-      .select('id, payload')
+      .select('id, type, payload')
       .in('status', ['pending', 'claimed', 'running'])
       .or(orConditions)
 
     for (const j of (jobs || [])) {
+      if (JANITORIAL_TYPES.has(j.type)) continue
       const accId = j.payload?.account_id
       if (accId) busySet.add(accId)
     }
@@ -114,10 +122,6 @@ async function getBusyNicksFallback(accountIds) {
 // new campaign_nurture / friend_request → nick stalls for hours.
 // Observed 2026-04-21: Diệu 159 membership pending, 0 nurture created
 // in 9h despite cron firing 8×/day.
-const JANITORIAL_TYPES = new Set([
-  'check_group_membership', 'check_health', 'check_engagement',
-  'fetch_source_cookie', 'nurture_feed', 'warmup_browse',
-])
 
 /**
  * Return a Map<accountId, count> of USER-FACING pending/claimed/running
