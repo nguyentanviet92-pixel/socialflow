@@ -49,7 +49,7 @@ function getJobPriority(jobType) {
   return JOB_PRIORITY[jobType] || 5
 }
 
-let supabase = null
+let supabase = _sbFromLib
 
 const schedulerTracker = {
   enabled: true,
