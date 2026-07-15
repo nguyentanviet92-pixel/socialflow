@@ -48,12 +48,17 @@ async function rebalanceKPI(supabase, campaignId) {
 
   const { data: campaign, error: cErr } = await supabase
     .from('campaigns')
-    .select('id, kpi_config, brand_config, campaign_roles(account_ids)')
+    .select('id, kpi_config, brand_config, campaign_roles(account_ids), account_ids')
     .eq('id', campaignId)
     .single()
   if (cErr || !campaign) return { ok: false, reason: cErr?.message || 'campaign not found' }
 
-  const allNickIds = [...new Set((campaign.campaign_roles || []).flatMap(r => r.account_ids || []))]
+  const allNickIds = [
+    ...new Set([
+      ...((campaign.campaign_roles || []).flatMap(r => r.account_ids || [])),
+      ...(campaign.account_ids || []),
+    ])
+  ]
   if (allNickIds.length === 0) {
     console.log(`[KPI] Campaign ${campaignId.slice(0,8)} has no nicks — nothing to rebalance`)
     return { ok: true, nicks: 0 }
