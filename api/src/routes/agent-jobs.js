@@ -159,7 +159,7 @@ module.exports = async (fastify) => {
   // ─── PATCH /agent-jobs/:id/status ──────────────────────
   // Generic status update (running, done, failed, cancelled, pending)
   fastify.patch('/:id/status', { preHandler: agentAuth }, async (req, reply) => {
-    const { status, result, error_message, attempt, scheduled_at, agent_id } = req.body || {}
+    const { status, result, error_message, attempt, scheduled_at, agent_id, last_heartbeat_at } = req.body || {}
 
     if (!status) return reply.code(400).send({ error: 'status required' })
 
@@ -169,6 +169,7 @@ module.exports = async (fastify) => {
     if (attempt !== undefined) update.attempt = attempt
     if (scheduled_at !== undefined) update.scheduled_at = scheduled_at
     if (agent_id !== undefined) update.agent_id = agent_id
+    if (last_heartbeat_at !== undefined) update.last_heartbeat_at = last_heartbeat_at
     if (status === 'done' || status === 'failed') update.finished_at = new Date().toISOString()
     if (status === 'running') update.started_at = update.started_at || new Date().toISOString()
 

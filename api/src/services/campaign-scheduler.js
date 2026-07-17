@@ -108,6 +108,16 @@ function initScheduler() {
     } catch {}
   })
 
+  // Watchdog reaper cron every 5 minutes
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const { runWatchdog } = require('./job-watchdog')
+      await runWatchdog()
+    } catch (err) {
+      console.error('[SCHEDULER] Watchdog error:', err.message)
+    }
+  })
+
   // ── Phase 7: scout runs on its own 4-hour cadence, independent of the
   // campaign cron (which drives nurture/connect). Scout is short (2-3 min)
   // and should keep the group pool fresh without waiting for browser lock
@@ -1049,6 +1059,75 @@ async function processRoleCampaigns() {
   }
 }
 
+async function getNickKpiCatchUpConfig(supabase, campaignId, accountId) {
+  try {
+    // Get account active hours
+    const { data: acc } = await supabase
+      .from('accounts')
+      .select('active_hours_start, active_hours_end, status')
+      .eq('id', accountId)
+      .maybeSingle()
+      
+    if (!acc) return null;
+
+    // Check account status safety
+    if (acc.status === 'at_risk' || acc.status === 'checkpoint' || acc.status === 'expired') {
+      return null; // Avoid pushing compromised accounts
+    }
+
+    const startH = acc.active_hours_start ?? 7
+    const endH = acc.active_hours_end ?? 23
+    const totalH = Math.max(1, endH - startH)
+
+    const vnNow = new Date(Date.now() + 7 * 3600 * 1000)
+    const vnHour = vnNow.getUTCHours()
+
+    let elapsedH = 0
+    if (vnHour >= startH && vnHour < endH) {
+      elapsedH = vnHour - startH
+    } else if (vnHour >= endH) {
+      elapsedH = totalH
+    }
+
+    const expectedRatio = elapsedH / totalH
+    const todayStr = vnNow.toISOString().split('T')[0]
+
+    const { data: kpi } = await supabase
+      .from('nick_kpi_daily')
+      .select('*')
+      .eq('campaign_id', campaignId)
+      .eq('account_id', accountId)
+      .eq('date', todayStr)
+      .maybeSingle()
+
+    if (!kpi) return null;
+
+    // Check comments/likes target and done values
+    const targetComments = kpi.target_comments || 0
+    const doneComments = kpi.done_comments || 0
+    const expectedComments = targetComments * expectedRatio
+
+    let progressRatio = 1.0
+    if (expectedComments > 0) {
+      progressRatio = doneComments / expectedComments
+    }
+
+    if (progressRatio < 0.7) {
+      const nearEnd = (totalH - elapsedH) <= 3
+      return {
+        isPacingBehind: true,
+        progressRatio,
+        nearEnd,
+        delayReduction: nearEnd ? 0.8 : 0.5,
+        priorityBoost: 1
+      }
+    }
+  } catch (err) {
+    console.warn(`[SCHEDULER-CATCHUP] KPI pacing check failed: ${err.message}`)
+  }
+  return null;
+}
+
 async function executeRoleCampaign(campaign) {
   // Phase 7: scout runs on its own 4-hour cron (processScoutCron) — skip it here
   // so nurture/connect don't get delayed by scout acquiring the browser lock.
@@ -1095,20 +1174,41 @@ async function executeRoleCampaign(campaign) {
   // ── Duplicate prevention: check for existing pending/running jobs for this campaign ──
   const { data: existingJobs } = await supabase
     .from('jobs')
-    .select('id, type, payload->account_id')
+    .select('id, type, status, created_at, started_at, last_heartbeat_at, payload')
     .in('status', ['pending', 'claimed', 'running'])
     .filter('payload->>campaign_id', 'eq', campaign.id)
     .limit(100)
 
+  const activeJobs = (existingJobs || []).filter(j => {
+    const createdAt = new Date(j.created_at).getTime()
+    if (j.status === 'pending') {
+      return (Date.now() - createdAt) <= 2 * 3600 * 1000 // 2 hours
+    }
+    const heartbeat = j.last_heartbeat_at 
+      ? new Date(j.last_heartbeat_at).getTime() 
+      : (j.started_at ? new Date(j.started_at).getTime() : createdAt)
+    return (Date.now() - heartbeat) <= 15 * 60 * 1000 // 15 minutes
+  })
+
   const existingKeys = new Set(
-    (existingJobs || []).map(j => `${j.type}:${j['payload->account_id'] || j.account_id}`)
+    activeJobs.map(j => `${j.type}:${j.payload?.account_id || j.account_id}`)
   )
+
+  // ── Check owner profile active before creating jobs ──
+  const { data: ownerProfile } = await supabase.from('profiles').select('is_active')
+    .eq('id', campaign.owner_id).maybeSingle()
+  if (!ownerProfile || ownerProfile.is_active === false) {
+    console.log(`[SCHEDULER] Campaign owner ${campaign.owner_id} is inactive or expired — disabling campaign ${campaign.id}`)
+    await supabase.from('campaigns').update({ is_active: false }).eq('id', campaign.id)
+    return
+  }
 
   // ── Check agent online before creating jobs ──
   const { data: agents } = await supabase.from('agent_heartbeats').select('agent_id')
+    .eq('owner_id', campaign.owner_id)
     .gte('last_seen', new Date(Date.now() - 120000).toISOString()).limit(1)
   if (!agents?.length) {
-    console.log(`[SCHEDULER] No agent online — deferring campaign ${campaign.id}`)
+    console.log(`[SCHEDULER] No agent online for owner ${campaign.owner_id} — deferring campaign ${campaign.id}`)
     // Push next_run_at 5 minutes forward instead of skipping entirely
     await supabase.from('campaigns').update({
       next_run_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
@@ -1320,6 +1420,14 @@ async function executeRoleCampaign(campaign) {
       //
       // Scout role keeps light stagger; it's utility, no anti-bot need.
       let totalDelaySec
+      let jobPriority = getJobPriority(jobType)
+
+      const catchup = await getNickKpiCatchUpConfig(supabase, campaign.id, accountId)
+      if (catchup && catchup.isPacingBehind) {
+        console.log(`[SCHEDULER-CATCHUP] Nick ${accountId.slice(0, 8)} is behind KPI (progress_ratio: ${catchup.progressRatio.toFixed(2)}). Boosting priority and reducing delay by ${catchup.delayReduction * 100}%.`)
+        jobPriority = catchup.priorityBoost
+      }
+
       if (role.role_type === 'scout') {
         totalDelaySec = roleDelay + i * (campaign.nick_stagger_seconds || 60)
       } else {
@@ -1347,7 +1455,11 @@ async function executeRoleCampaign(campaign) {
           baseOffsetMin = seedNum % 120
         }
         const jitterMin = Math.floor(Math.random() * (jitterRange * 2 + 1)) - jitterRange
-        totalDelaySec = roleDelay + Math.max(0, baseOffsetMin * 60 + jitterMin * 60)
+        let delayVal = roleDelay + Math.max(0, baseOffsetMin * 60 + jitterMin * 60)
+        if (catchup && catchup.isPacingBehind) {
+          delayVal = roleDelay + Math.max(0, (baseOffsetMin * 60 + jitterMin * 60) * (1 - catchup.delayReduction))
+        }
+        totalDelaySec = delayVal
       }
       const scheduledAt = new Date(Date.now() + totalDelaySec * 1000)
 
@@ -1367,7 +1479,7 @@ async function executeRoleCampaign(campaign) {
 
       const { error } = await supabase.from('jobs').insert({
         type: jobType,
-        priority: getJobPriority(jobType),
+        priority: jobPriority,
         payload: {
           campaign_id: campaign.id,
           role_id: role.id,

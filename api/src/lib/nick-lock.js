@@ -29,15 +29,26 @@ async function isNickBusy(accountId) {
 
   const { data: jobs } = await sb
     .from('jobs')
-    .select('id, type, status')
+    .select('id, type, status, created_at, started_at, last_heartbeat_at')
     .in('status', ['pending', 'claimed', 'running'])
     .filter('payload->>account_id', 'eq', accountId)
-    .limit(1)
 
-  if (jobs?.length) {
+  // Filter out stale ones using TTL
+  const activeJobs = (jobs || []).filter(j => {
+    const createdAt = new Date(j.created_at).getTime()
+    if (j.status === 'pending') {
+      return (Date.now() - createdAt) <= 2 * 3600 * 1000 // 2 hours
+    }
+    const heartbeat = j.last_heartbeat_at 
+      ? new Date(j.last_heartbeat_at).getTime() 
+      : (j.started_at ? new Date(j.started_at).getTime() : createdAt)
+    return (Date.now() - heartbeat) <= 15 * 60 * 1000 // 15 minutes
+  })
+
+  if (activeJobs.length) {
     return {
       busy: true,
-      activeJob: { id: jobs[0].id, type: jobs[0].type, status: jobs[0].status }
+      activeJob: { id: activeJobs[0].id, type: activeJobs[0].type, status: activeJobs[0].status }
     }
   }
 
@@ -67,7 +78,7 @@ async function getBusyNicks(accountIds) {
 
   const { data: jobs, error } = await sb
     .from('jobs')
-    .select('id, type, payload')
+    .select('id, type, payload, status, created_at, started_at, last_heartbeat_at')
     .in('status', ['pending', 'claimed', 'running'])
     .or(orConditions)
 
@@ -80,6 +91,18 @@ async function getBusyNicks(accountIds) {
   const busySet = new Set()
   for (const j of (jobs || [])) {
     if (JANITORIAL_TYPES.has(j.type)) continue
+    
+    // Apply TTL filters
+    const createdAt = new Date(j.created_at).getTime()
+    if (j.status === 'pending') {
+      if (Date.now() - createdAt > 2 * 3600 * 1000) continue
+    } else {
+      const heartbeat = j.last_heartbeat_at 
+        ? new Date(j.last_heartbeat_at).getTime() 
+        : (j.started_at ? new Date(j.started_at).getTime() : createdAt)
+      if (Date.now() - heartbeat > 15 * 60 * 1000) continue
+    }
+
     const accId = j.payload?.account_id
     if (accId) busySet.add(accId)
   }
@@ -102,12 +125,24 @@ async function getBusyNicksFallback(accountIds) {
 
     const { data: jobs } = await sb
       .from('jobs')
-      .select('id, type, payload')
+      .select('id, type, payload, status, created_at, started_at, last_heartbeat_at')
       .in('status', ['pending', 'claimed', 'running'])
       .or(orConditions)
 
     for (const j of (jobs || [])) {
       if (JANITORIAL_TYPES.has(j.type)) continue
+      
+      // Apply TTL filters
+      const createdAt = new Date(j.created_at).getTime()
+      if (j.status === 'pending') {
+        if (Date.now() - createdAt > 2 * 3600 * 1000) continue
+      } else {
+        const heartbeat = j.last_heartbeat_at 
+          ? new Date(j.last_heartbeat_at).getTime() 
+          : (j.started_at ? new Date(j.started_at).getTime() : createdAt)
+        if (Date.now() - heartbeat > 15 * 60 * 1000) continue
+      }
+
       const accId = j.payload?.account_id
       if (accId) busySet.add(accId)
     }
@@ -138,13 +173,25 @@ async function getNickPendingCounts(accountIds) {
     const orConditions = chunk.map(id => `payload->>account_id.eq.${id}`).join(',')
     const { data: rows } = await sb
       .from('jobs')
-      .select('type, payload')
+      .select('type, payload, status, created_at, started_at, last_heartbeat_at')
       .in('status', ['pending', 'claimed', 'running'])
       .or(orConditions)
     for (const j of rows || []) {
       const accId = j.payload?.account_id
       if (!accId) continue
       if (JANITORIAL_TYPES.has(j.type)) continue
+
+      // Apply TTL filters
+      const createdAt = new Date(j.created_at).getTime()
+      if (j.status === 'pending') {
+        if (Date.now() - createdAt > 2 * 3600 * 1000) continue
+      } else {
+        const heartbeat = j.last_heartbeat_at 
+          ? new Date(j.last_heartbeat_at).getTime() 
+          : (j.started_at ? new Date(j.started_at).getTime() : createdAt)
+        if (Date.now() - heartbeat > 15 * 60 * 1000) continue
+      }
+
       counts.set(accId, (counts.get(accId) || 0) + 1)
     }
   }
