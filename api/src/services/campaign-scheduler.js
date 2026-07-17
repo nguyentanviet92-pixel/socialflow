@@ -737,6 +737,8 @@ async function processStaleMembershipReverify() {
 }
 
 async function processAutomaticGroupJoins() {
+  console.log('[AUTO-JOIN] Temporarily disabled by safety policy.');
+  return;
   const { data: activeCampaigns } = await supabase
     .from('campaigns')
     .select('id, owner_id')
