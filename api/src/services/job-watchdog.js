@@ -1,17 +1,18 @@
 const { supabase } = require('../lib/supabase');
 const { executeRoleCampaign } = require('./campaign-scheduler');
+const { runAccountAudit } = require('./account-audit');
 
 async function sendTelegramAlert(message) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   
   if (!token || !chatId) {
-    console.log(`[WATCHDOG-TELEGRAM-LOCAL-LOG]: ${message}`);
+    console.log(`[WATCHDOG-TELEGRAM-LOCAL-LOG]:\n${message}`);
     try {
       const fs = require('fs');
       const path = require('path');
       const logPath = path.resolve(__dirname, '../../watchdog_alerts_local.log');
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8');
+      fs.appendFileSync(logPath, `[${new Date().toISOString()}]\n${message}\n\n`, 'utf8');
     } catch {}
     return;
   }
@@ -58,12 +59,6 @@ async function runWatchdog() {
       AND COALESCE(j.last_heartbeat_at, j.started_at, j.scheduled_at, j.created_at) < now() - interval '15 minutes'
   `);
   const staleRunningJobs = staleRunningRes.rows;
-
-  if (stalePendingJobs.length === 0 && staleRunningJobs.length === 0) {
-    return;
-  }
-
-  console.log(`[WATCHDOG] Found ${stalePendingJobs.length} stale pending, ${staleRunningJobs.length} stale running/claimed jobs.`);
 
   // 3. Reap stale pending jobs
   for (const job of stalePendingJobs) {
@@ -133,41 +128,71 @@ async function runWatchdog() {
     }
   }
 
-  // 5. Send Telegram summary
-  let msg = `⚠️ SocialFlow Watchdog Reap Summary\n\n`;
-  if (stalePendingJobs.length > 0) {
-    msg += `Cancelled Pending Jobs (${stalePendingJobs.length}):\n`;
-    stalePendingJobs.forEach(j => {
-      msg += `- [${j.nick_name || 'unknown'}] Job: ${j.type} (${j.id.slice(0, 8)})\n`;
-    });
+  // 5. Run Account Audit
+  let auditLogs = [];
+  let hasAuditWarning = false;
+  try {
+    auditLogs = await runAccountAudit();
+    hasAuditWarning = auditLogs.some(a => a.isWarning);
+  } catch (auditErr) {
+    console.error('[WATCHDOG] Audit check failed:', auditErr.message);
   }
-  if (staleRunningJobs.length > 0) {
-    msg += `\nFailed Running Jobs (${staleRunningJobs.length}):\n`;
-    staleRunningJobs.forEach(j => {
-      msg += `- [${j.nick_name || 'unknown'}] Job: ${j.type} (${j.id.slice(0, 8)})\n`;
-    });
-  }
-  await sendTelegramAlert(msg);
 
-  // 6. Reschedule campaign wave immediately for freed nicks
-  const uniqueCampaignIds = [...new Set([
-    ...stalePendingJobs.map(j => j.payload?.campaign_id).filter(Boolean),
-    ...staleRunningJobs.map(j => j.payload?.campaign_id).filter(Boolean)
-  ])];
+  // 6. Send Telegram alert if any jobs reaped OR if any audit warning exists
+  const hasReaped = stalePendingJobs.length > 0 || staleRunningJobs.length > 0;
+  if (hasReaped || hasAuditWarning) {
+    let msg = `⚠️ SocialFlow Watchdog Reap & Audit Report\n\n`;
 
-  for (const campaignId of uniqueCampaignIds) {
-    try {
-      console.log(`[WATCHDOG] Triggering campaign scheduler immediate execution for campaign: ${campaignId}`);
-      const { data: campaign } = await supabase
-        .from('campaigns')
-        .select('*, campaign_roles(*)')
-        .eq('id', campaignId)
-        .single();
-      if (campaign && ['active', 'running'].includes(campaign.status)) {
-        await executeRoleCampaign(campaign);
+    if (hasReaped) {
+      msg += `<b>[REAPED STALE JOBS]</b>\n`;
+      if (stalePendingJobs.length > 0) {
+        msg += `Cancelled Pending:\n`;
+        stalePendingJobs.forEach(j => {
+          msg += `- [${j.nick_name || 'unknown'}] ${j.type} (${j.id.slice(0, 8)})\n`;
+        });
       }
-    } catch (schedErr) {
-      console.error(`[WATCHDOG] Failed to reschedule campaign ${campaignId}:`, schedErr.message);
+      if (staleRunningJobs.length > 0) {
+        msg += `Failed Running:\n`;
+        staleRunningJobs.forEach(j => {
+          msg += `- [${j.nick_name || 'unknown'}] ${j.type} (${j.id.slice(0, 8)})\n`;
+        });
+      }
+      msg += `\n`;
+    }
+
+    if (auditLogs.length > 0) {
+      msg += `<b>[ACCOUNT AUDIT STATUS]</b>\n`;
+      auditLogs.forEach(a => {
+        const icon = a.isWarning ? '🔴' : '🟢';
+        msg += `${icon} [${a.username}] Status: ${a.status}\n`;
+        if (a.isWarning) msg += `   Detail: ${a.reason}\n`;
+      });
+    }
+
+    await sendTelegramAlert(msg);
+  }
+
+  // 7. Reschedule campaign wave immediately for freed nicks
+  if (hasReaped) {
+    const uniqueCampaignIds = [...new Set([
+      ...stalePendingJobs.map(j => j.payload?.campaign_id).filter(Boolean),
+      ...staleRunningJobs.map(j => j.payload?.campaign_id).filter(Boolean)
+    ])];
+
+    for (const campaignId of uniqueCampaignIds) {
+      try {
+        console.log(`[WATCHDOG] Triggering campaign scheduler immediate execution for campaign: ${campaignId}`);
+        const { data: campaign } = await supabase
+          .from('campaigns')
+          .select('*, campaign_roles(*)')
+          .eq('id', campaignId)
+          .single();
+        if (campaign && ['active', 'running'].includes(campaign.status)) {
+          await executeRoleCampaign(campaign);
+        }
+      } catch (schedErr) {
+        console.error(`[WATCHDOG] Failed to reschedule campaign ${campaignId}:`, schedErr.message);
+      }
     }
   }
 }
