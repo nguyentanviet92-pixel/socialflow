@@ -2,6 +2,9 @@ const axios = require('axios')
 const { getDtsgWithRefresh, FB_HEADERS, buildAxiosProxy } = require('./fb-auth')
 
 async function postToPage(pageId, account, content, supabase) {
+  if (!content.caption || content.caption.trim() === '') {
+    throw new Error('Content (caption) is empty - blocking empty post')
+  }
   const proxy = account.proxy_id ? await getProxy(account.proxy_id, supabase) : null
   const dtsg = await getDtsgWithRefresh(account, supabase, proxy)
 
@@ -35,6 +38,9 @@ async function postToPage(pageId, account, content, supabase) {
 }
 
 async function postToGroup(groupId, account, content, supabase) {
+  if (!content.caption || content.caption.trim() === '') {
+    throw new Error('Content (caption) is empty - blocking empty post')
+  }
   const proxy = account.proxy_id ? await getProxy(account.proxy_id, supabase) : null
   const dtsg = await getDtsgWithRefresh(account, supabase, proxy)
 
@@ -71,6 +77,9 @@ async function postToGroup(groupId, account, content, supabase) {
 }
 
 async function postToProfile(account, content, supabase) {
+  if (!content.caption || content.caption.trim() === '') {
+    throw new Error('Content (caption) is empty - blocking empty post')
+  }
   const proxy = account.proxy_id ? await getProxy(account.proxy_id, supabase) : null
   const dtsg = await getDtsgWithRefresh(account, supabase, proxy)
 
