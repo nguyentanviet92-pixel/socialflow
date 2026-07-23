@@ -1307,6 +1307,9 @@ function ExecutionTab({ campaignId }) {
               <div className="text-danger font-semibold whitespace-pre-wrap"><span className="text-app-primary font-normal">Lỗi:</span> {selectedJob.error_message}</div>
             )}
             <div><span className="text-app-primary">Payload:</span> <pre className="mt-1 p-2 bg-app-base rounded text-[10px] text-app-muted">{JSON.stringify(selectedJob.payload, null, 2)}</pre></div>
+            {selectedJob.result && (
+              <div><span className="text-app-primary">Result:</span> <pre className="mt-1 p-2 bg-app-base rounded text-[10px] text-app-muted">{JSON.stringify(selectedJob.result, null, 2)}</pre></div>
+            )}
           </div>
         </div>
       )}

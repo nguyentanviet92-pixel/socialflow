@@ -48,13 +48,35 @@ function formatDuration(job) {
 function extractResultUrl(job) {
   const r = job.result
   if (!r || typeof r !== 'object') return null
-  return r.post_url || r.group_url || r.profile_url || r.url || null
+  if (r.post_url || r.group_url || r.profile_url || r.url) return r.post_url || r.group_url || r.profile_url || r.url
+  if (Array.isArray(r.post_urls) && r.post_urls.length > 0) return r.post_urls[0]
+  if (Array.isArray(r.details)) {
+    for (const d of r.details) {
+      if (d.post_url) return d.post_url
+      if (Array.isArray(d.commented_posts) && d.commented_posts.length > 0) {
+        if (d.commented_posts[0].post_url) return d.commented_posts[0].post_url
+      }
+      if (d.group_url) return d.group_url
+      if (d.fb_group_id && typeof d.fb_group_id === 'string' && !d.fb_group_id.startsWith('http')) {
+        return `https://www.facebook.com/groups/${d.fb_group_id}`
+      }
+    }
+  }
+  return null
 }
 
 function extractResultPreview(job) {
   const r = job.result
   if (!r || typeof r !== 'object') return null
-  const text = r.comment_text || r.caption || r.reply || r.comment || null
+  let text = r.comment_text || r.caption || r.reply || r.comment || null
+  if (!text && Array.isArray(r.details)) {
+    for (const d of r.details) {
+      if (Array.isArray(d.commented_posts) && d.commented_posts.length > 0) {
+        text = d.commented_posts[0].comment_text || null
+        if (text) break
+      }
+    }
+  }
   if (!text || typeof text !== 'string') return null
   return text.substring(0, 60) + (text.length > 60 ? '...' : '')
 }

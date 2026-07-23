@@ -1109,16 +1109,27 @@ async function getNickKpiCatchUpConfig(supabase, campaignId, accountId) {
     const doneComments = kpi.done_comments || 0
     const expectedComments = targetComments * expectedRatio
 
-    let progressRatio = 1.0
+    const targetLikes = kpi.target_likes || 0
+    const doneLikes = kpi.done_likes || 0
+    const expectedLikes = targetLikes * expectedRatio
+
+    let progressRatioCmt = 1.0
     if (expectedComments > 0) {
-      progressRatio = doneComments / expectedComments
+      progressRatioCmt = doneComments / expectedComments
     }
 
-    if (progressRatio < 0.7) {
+    let progressRatioLike = 1.0
+    if (expectedLikes > 0) {
+      progressRatioLike = doneLikes / expectedLikes
+    }
+
+    const minRatio = Math.min(progressRatioCmt, progressRatioLike)
+
+    if (minRatio < 0.7) {
       const nearEnd = (totalH - elapsedH) <= 3
       return {
         isPacingBehind: true,
-        progressRatio,
+        progressRatio: minRatio,
         nearEnd,
         delayReduction: nearEnd ? 0.8 : 0.5,
         priorityBoost: 1
