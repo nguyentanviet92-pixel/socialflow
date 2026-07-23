@@ -1427,7 +1427,7 @@ function ActivityRow({ row }) {
   const label = ACTION_LABEL[row.action_type] || row.action_type
   const targetName = row.target_name || d.group_name || d.profile_name || ''
   const targetUrl = row.target_url || d.group_url || d.profile_url || null
-  const postUrl = d.post_url || null
+  const postUrl = d.post_url || (Array.isArray(d.post_urls) && d.post_urls[0]) || (row.target_url && (row.target_url.includes('/posts/') || row.target_url.includes('/permalink/')) ? row.target_url : null) || (d.post_fb_id && (d.group_fb_id || row.target_id) ? `https://www.facebook.com/groups/${d.group_fb_id || row.target_id}/posts/${d.post_fb_id}` : null)
   const commentText = d.comment_text || null
   const captionPreview = d.caption ? d.caption.slice(0, 120) : null
   const dim = { color: 'var(--text-muted)' }
