@@ -1421,13 +1421,58 @@ function fmtTime(iso) {
   return `${dd}/${mo} ${hh}:${mm}`
 }
 
+function resolveActivityUrls(row) {
+  const d = row.details || {}
+
+  // 1. Group FB ID
+  let groupFbId = d.group_fb_id || d.fb_group_id || null
+  if (!groupFbId && row.target_url) {
+    const m = row.target_url.match(/groups\/(\d+)/)
+    if (m) groupFbId = m[1]
+  }
+
+  // 2. Post FB ID (must not equal groupFbId)
+  let postFbId = d.post_fb_id || d.post_id || null
+  if (!postFbId && row.target_id && /^\d{10,20}$/.test(row.target_id) && row.target_id !== groupFbId) {
+    postFbId = row.target_id
+  }
+
+  // 3. Constructed Post URL
+  let constructedPostUrl = null
+  if (groupFbId && postFbId && groupFbId !== postFbId) {
+    constructedPostUrl = `https://www.facebook.com/groups/${groupFbId}/posts/${postFbId}`
+  }
+
+  // 4. Final postUrl
+  let postUrl = d.post_url || (Array.isArray(d.post_urls) && d.post_urls[0]) || constructedPostUrl || null
+  if (!postUrl && row.target_url && (row.target_url.includes('/posts/') || row.target_url.includes('/permalink/'))) {
+    postUrl = row.target_url.split('?')[0]
+  }
+  if (postUrl && groupFbId && postUrl === `https://www.facebook.com/groups/${groupFbId}/posts/${groupFbId}`) {
+    postUrl = null
+  }
+
+  // 5. Final group/profile URL
+  let targetUrl = d.group_url || d.profile_url || null
+  if (!targetUrl && groupFbId) {
+    targetUrl = `https://www.facebook.com/groups/${groupFbId}`
+  } else if (!targetUrl && row.target_url) {
+    if (row.target_url.includes('/posts/') || row.target_url.includes('/permalink/')) {
+      if (groupFbId) targetUrl = `https://www.facebook.com/groups/${groupFbId}`
+    } else {
+      targetUrl = row.target_url
+    }
+  }
+
+  return { postUrl, targetUrl }
+}
+
 function ActivityRow({ row }) {
   const d = row.details || {}
   const icon = ACTION_ICON[row.action_type] || '•'
   const label = ACTION_LABEL[row.action_type] || row.action_type
   const targetName = row.target_name || d.group_name || d.profile_name || ''
-  const targetUrl = row.target_url || d.group_url || d.profile_url || null
-  const postUrl = d.post_url || (Array.isArray(d.post_urls) && d.post_urls[0]) || (row.target_url && (row.target_url.includes('/posts/') || row.target_url.includes('/permalink/')) ? row.target_url : null) || (d.post_fb_id && (d.group_fb_id || row.target_id) ? `https://www.facebook.com/groups/${d.group_fb_id || row.target_id}/posts/${d.post_fb_id}` : null)
+  const { postUrl, targetUrl } = resolveActivityUrls(row)
   const commentText = d.comment_text || null
   const captionPreview = d.caption ? d.caption.slice(0, 120) : null
   const dim = { color: 'var(--text-muted)' }
@@ -1482,7 +1527,7 @@ function ActivityRow({ row }) {
             Xem bài ↗
           </a>
         )}
-        {targetUrl && (
+        {targetUrl && targetUrl !== postUrl && (
           <a href={targetUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--hermes)' }}>
             {row.action_type === 'friend_request' ? 'Xem profile ↗' : 'Xem nhóm ↗'}
           </a>
